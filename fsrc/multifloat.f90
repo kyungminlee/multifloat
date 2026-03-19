@@ -14,6 +14,12 @@ module multifloat
     procedure :: div, divf
     procedure, pass(b) :: fdiv
     procedure :: isfinite => isfinite_f
+    procedure :: precision => precision_f
+    procedure :: minexponent => minexponent_f
+    procedure :: maxexponent => maxexponent_f
+    procedure :: tiny => tiny_f
+    procedure :: huge => huge_f
+    procedure :: exponent => exponent_f
   end type
 
   interface operator (+)
@@ -53,6 +59,44 @@ module multifloat
   end interface
 
 contains
+
+  elemental function precision_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    integer :: z
+    z = 31
+  end function
+
+  elemental function minexponent_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    integer :: z
+    z = minexponent(1.0d0)
+  end function
+
+  elemental function maxexponent_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    integer :: z
+    z = maxexponent(1.0d0)
+  end function
+
+  elemental function tiny_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z%limbs(1) = tiny(1.0d0)
+    z%limbs(2) = 0.0d0
+  end function
+
+  elemental function huge_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z%limbs(1) = huge(1.0d0)
+    z%limbs(2) = 0.0d0
+  end function
+
+  elemental function exponent_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    integer :: z
+    z = exponent(x%limbs(1))
+  end function
 
   elemental function neg(x) result(z)
     type(float64x2), intent(in) :: x

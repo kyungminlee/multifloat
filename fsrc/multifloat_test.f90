@@ -16,6 +16,7 @@ program multifloat_test
   call test_nonfinite()
   call test_isfinite()
   call test_renormalize()
+  call test_builtins()
 
   if (num_errors == 0) then
     print *, "-------------------------------"
@@ -290,6 +291,25 @@ contains
     a%limbs(2) = 1.0d0
     call renormalize(a)
     call assert_eq(a, 1.0d0, 1.0d-20, "renormalize(1e-20, 1) -> (1, 1e-20)")
+  end subroutine
+
+  subroutine test_builtins()
+    type(float64x2) :: a, b
+    a = 1.0d0
+    call assert(a%precision() == 31, "precision")
+    call assert(a%minexponent() == minexponent(1.0d0), "minexponent")
+    call assert(a%maxexponent() == maxexponent(1.0d0), "maxexponent")
+    
+    b = a%tiny()
+    call assert_eq(b, tiny(1.0d0), 0.0d0, "tiny")
+    
+    b = a%huge()
+    call assert_eq(b, huge(1.0d0), 0.0d0, "huge")
+    
+    a = 2.0d0
+    call assert(a%exponent() == exponent(2.0d0), "exponent(2.0)")
+    a = 0.5d0
+    call assert(a%exponent() == exponent(0.5d0), "exponent(0.5)")
   end subroutine
 
   ! Internal helpers for ground truth matching module logic
