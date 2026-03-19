@@ -113,15 +113,10 @@ constexpr void mfadd(T const (&x)[1], T const (&y)[1], T const (&z)[1]) {
 
 template <typename T>
 constexpr void mfadd(T const (&x)[2], T const (&y)[2], T const (&z)[2]) {
-  T a, b, c, d;
-  two_sum(x[0], y[0], a, b);
-  two_sum(x[1], y[1], c, d);
-  fast_two_sum(a, c, a, c);
-  b += d;
-  b += c;
-  fast_two_sum(a, b);
-  z[0] = a;
-  z[1] = b;
+  T s, e;
+  two_sum(x[0], y[0], s, e);
+  e += x[1] + y[1];
+  fast_two_sum(s, e, z[0], z[1]);
 }
 
 // TODO implement fma
@@ -129,7 +124,7 @@ constexpr void mfadd(T const (&x)[2], T const (&y)[2], T const (&z)[2]) {
 template <typename T>
 constexpr void two_prod(T const &a, T const &b, T &prod, T &err) {
   T p = a * b;
-  T e = fma(a, b, -prod);
+  T e = fma(a, b, -p);
   prod = p;
   err = e;
 }
@@ -141,13 +136,12 @@ constexpr void mfmul(T const (&x)[1], T const (&y)[1], T const (&z)[1]) {
 
 template <typename T>
 constexpr void mfmul(T const (&x)[2], T const (&y)[2], T const (&z)[2]) {
-  T p00, e00, p01, p10;
-  two_prod(x[0], y[0], p00, e00);
-  p01 = x[0] * y[1];
-  p10 = x[1] * y[0];
-  p01 += p10;
-  p00 += p01;
-  fast_two_sum(p00, e00, z[0], z[1]);
+  T p, e;
+  two_prod(x[0], y[0], p, e);
+  e += x[0] * y[1];
+  e += x[1] * y[0];
+  e += x[1] * y[1];
+  fast_two_sum(p, e, z[0], z[1]);
 }
 
 template <typename T, std::size_t N>

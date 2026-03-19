@@ -1,5 +1,6 @@
 module multifloat
   use iso_c_binding
+  use, intrinsic :: ieee_arithmetic
 
   public :: float64x2
 
@@ -103,13 +104,12 @@ contains
 
   elemental function div(a, b) result(c)
     class(float64x2), intent(in) :: a, b
-    type(float64x2) :: c, r
-    double precision :: q1, q2
+    type(float64x2) :: c
+    double precision :: q1, q2, r
     q1 = a%limbs(1) / b%limbs(1)
-    r%limbs(1) = a%limbs(1) - q1 * b%limbs(1)
-    r%limbs(2) = a%limbs(2) - q1 * b%limbs(2)
-    call fast_two_sum(r%limbs(1), r%limbs(2))
-    q2 = r%limbs(1) / b%limbs(1)
+    r = ieee_fma(-q1, b%limbs(1), a%limbs(1))
+    r = r + a%limbs(2) - q1 * b%limbs(2)
+    q2 = r / b%limbs(1)
     c%limbs(1) = q1
     c%limbs(2) = q2
     call fast_two_sum(c%limbs(1), c%limbs(2))
@@ -121,7 +121,8 @@ contains
     type(float64x2) :: c
     double precision :: q1, q2, r
     q1 = a / b%limbs(1)
-    r = (a - q1 * b%limbs(1)) - q1 * b%limbs(2)
+    r = ieee_fma(-q1, b%limbs(1), a)
+    r = r - q1 * b%limbs(2)
     q2 = r / b%limbs(1)
     c%limbs(1) = q1
     c%limbs(2) = q2
@@ -134,7 +135,8 @@ contains
     type(float64x2) :: c
     double precision :: q1, q2, r
     q1 = a%limbs(1) / b
-    r = (a%limbs(1) - q1 * b) + a%limbs(2)
+    r = ieee_fma(-q1, b, a%limbs(1))
+    r = r + a%limbs(2)
     q2 = r / b
     c%limbs(1) = q1
     c%limbs(2) = q2
@@ -144,21 +146,38 @@ contains
   elemental function mul(a, b) result(c)
     class(float64x2), intent(in) :: a, b
     type(float64x2) :: c
-    c%limbs = a%limbs * b%limbs
+    double precision :: p, e
+    call two_prod(a%limbs(1), b%limbs(1), p, e)
+    e = e + a%limbs(1) * b%limbs(2)
+    e = e + a%limbs(2) * b%limbs(1)
+    e = e + a%limbs(2) * b%limbs(2)
+    c%limbs(1) = p
+    c%limbs(2) = e
+    call fast_two_sum(c%limbs(1), c%limbs(2))
   end function
 
   elemental function fmul(a, b) result(c)
     double precision, intent(in) :: a
     class(float64x2), intent(in) :: b
     type(float64x2) :: c
-    c%limbs = a * b%limbs
+    double precision :: p, e
+    call two_prod(a, b%limbs(1), p, e)
+    e = e + a * b%limbs(2)
+    c%limbs(1) = p
+    c%limbs(2) = e
+    call fast_two_sum(c%limbs(1), c%limbs(2))
   end function
 
   elemental function mulf(a, b) result(c)
     class(float64x2), intent(in) :: a
     double precision, intent(in) :: b
     type(float64x2) :: c
-    c%limbs = a%limbs * b
+    double precision :: p, e
+    call two_prod(a%limbs(1), b, p, e)
+    e = e + a%limbs(2) * b
+    c%limbs(1) = p
+    c%limbs(2) = e
+    call fast_two_sum(c%limbs(1), c%limbs(2))
   end function
 
   pure subroutine fast_two_sum(a, b)
@@ -171,8 +190,23 @@ contains
     b = b_err
   end
 
-  pure subroutine two_sum(a, b)
+  elemental subroutine two_sum(a, b)
     double precision, intent(inout):: a, b
+    double precision :: s, a_prime, b_prime, a_err, b_err
+    s = a + b
+    a_prime = s - b
+    b_prime = s - a_prime
+    a_err = a - a_prime
+    b_err = b - b_prime
+    a = s
+    b = a_err + b_err
+  end subroutine
+
+  elemental subroutine two_prod(a, b, p, e)
+    double precision, intent(in) :: a, b
+    double precision, intent(out) :: p, e
+    p = a * b
+    e = ieee_fma(a, b, -p)
   end subroutine
 
   elemental subroutine renormalize(x)
@@ -180,19 +214,29 @@ contains
     call fast_two_sum(x%limbs(1), x%limbs(2))
   end subroutine
 
-  function add(x, y) result(z)
+  elemental function add(x, y) result(z)
     type(float64x2), intent(in) :: x, y
     type(float64x2) :: z
-    print *, x%limbs
-    print *, y%limbs
-    z%limbs = x%limbs + y%limbs
-    call renormalize(z)
+    double precision :: s, e
+    s = x%limbs(1)
+    e = y%limbs(1)
+    call two_sum(s, e)
+    e = e + x%limbs(2) + y%limbs(2)
+    z%limbs(1) = s
+    z%limbs(2) = e
+    call fast_two_sum(z%limbs(1), z%limbs(2))
   end function
 
   elemental function sub(x, y) result(z)
     type(float64x2), intent(in) :: x, y
     type(float64x2) :: z
-    z%limbs = x%limbs - y%limbs
+    double precision :: s, e
+    s = x%limbs(1)
+    e = -y%limbs(1)
+    call two_sum(s, e)
+    e = e + x%limbs(2) - y%limbs(2)
+    z%limbs(1) = s
+    z%limbs(2) = e
     call fast_two_sum(z%limbs(1), z%limbs(2))
   end function
 
