@@ -21,7 +21,7 @@ module multifloat
   end interface
 
   interface operator (-)
-    module procedure sub, sub_fd, sub_df
+    module procedure sub, sub_fd, sub_df, neg
   end interface
 
   interface operator (.lt.)
@@ -54,6 +54,12 @@ module multifloat
 
 contains
 
+  elemental function neg(x) result(z)
+    type(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z%limbs = -x%limbs
+  end function
+
   elemental function isfinite_f(x) result(z)
     class(float64x2), intent(in) :: x
     logical :: z
@@ -70,12 +76,11 @@ contains
   pure function eq_ff(x, y) result(z)
     type(float64x2), intent(in) :: x, y
     logical :: z
-    type(float64x2) :: x2, y2
-    x2 = x
-    y2 = y
-    call renormalize(x2)
-    call renormalize(y2)
-    z = (x2%limbs(1) .eq. y2%limbs(1)) .and. (x2%limbs(2) .eq. y2%limbs(2))
+    if (.not. ieee_is_finite(x%limbs(1)) .or. .not. ieee_is_finite(y%limbs(1))) then
+      z = (x%limbs(1) .eq. y%limbs(1))
+      return
+    end if
+    z = (x%limbs(1) .eq. y%limbs(1)) .and. (x%limbs(2) .eq. y%limbs(2))
   end function
 
   pure function ne_ff(x, y) result(z)
@@ -88,10 +93,11 @@ contains
     type(float64x2), intent(in) :: x
     double precision, intent(in) :: d
     logical :: z
-    type(float64x2) :: x2
-    x2 = x
-    call renormalize(x2)
-    z = (x2%limbs(1) .eq. d) .and. (x2%limbs(2) .eq. 0.0d0)
+    if (.not. ieee_is_finite(x%limbs(1)) .or. .not. ieee_is_finite(d)) then
+      z = (x%limbs(1) .eq. d)
+      return
+    end if
+    z = (x%limbs(1) .eq. d) .and. (x%limbs(2) .eq. 0.0d0)
   end function
 
   pure function eq_df(d, x) result(z)
@@ -269,6 +275,7 @@ contains
 
   elemental subroutine renormalize(x)
     type(float64x2), intent(inout) :: x
+    if (.not. ieee_is_finite(x%limbs(1))) return
     call two_sum(x%limbs(1), x%limbs(2))
   end subroutine
 
@@ -376,6 +383,10 @@ contains
     type(float64x2), intent(in) :: x, y
     type(float64x2) :: x2, y2
     logical :: z
+    if (.not. ieee_is_finite(x%limbs(1)) .or. .not. ieee_is_finite(y%limbs(1))) then
+      z = (x%limbs(1) .lt. y%limbs(1))
+      return
+    end if
     x2 = x
     y2 = y
     call renormalize(x2)
@@ -390,6 +401,10 @@ contains
     double precision, intent(in) :: d
     logical :: z
     type(float64x2) :: x2
+    if (.not. ieee_is_finite(x%limbs(1)) .or. .not. ieee_is_finite(d)) then
+      z = (x%limbs(1) .lt. d)
+      return
+    end if
     x2 = x
     call renormalize(x2)
     z = (x2%limbs(1) .lt. d) .or. &
@@ -401,6 +416,10 @@ contains
     type(float64x2), intent(in) :: x
     logical :: z
     type(float64x2) :: x2
+    if (.not. ieee_is_finite(d) .or. .not. ieee_is_finite(x%limbs(1))) then
+      z = (d .lt. x%limbs(1))
+      return
+    end if
     x2 = x
     call renormalize(x2)
     z = (d .lt. x2%limbs(1)) .or. &
@@ -430,6 +449,10 @@ contains
   pure function le(x, y) result(z)
     type(float64x2), intent(in) :: x, y
     logical :: z
+    if (.not. ieee_is_finite(x%limbs(1)) .or. .not. ieee_is_finite(y%limbs(1))) then
+      z = (x%limbs(1) .le. y%limbs(1))
+      return
+    end if
     z = .not. lt(y, x)
   end function
 
@@ -437,6 +460,10 @@ contains
     type(float64x2), intent(in) :: x
     double precision, intent(in) :: d
     logical :: z
+    if (.not. ieee_is_finite(x%limbs(1)) .or. .not. ieee_is_finite(d)) then
+      z = (x%limbs(1) .le. d)
+      return
+    end if
     z = .not. lt_df(d, x)
   end function
 
@@ -444,12 +471,20 @@ contains
     double precision, intent(in) :: d
     type(float64x2), intent(in) :: x
     logical :: z
+    if (.not. ieee_is_finite(d) .or. .not. ieee_is_finite(x%limbs(1))) then
+      z = (d .le. x%limbs(1))
+      return
+    end if
     z = .not. lt_fd(x, d)
   end function
 
   pure function ge(x, y) result(z)
     type(float64x2), intent(in) :: x, y
     logical :: z
+    if (.not. ieee_is_finite(x%limbs(1)) .or. .not. ieee_is_finite(y%limbs(1))) then
+      z = (x%limbs(1) .ge. y%limbs(1))
+      return
+    end if
     z = .not. lt(x, y)
   end function
 
@@ -457,6 +492,10 @@ contains
     type(float64x2), intent(in) :: x
     double precision, intent(in) :: d
     logical :: z
+    if (.not. ieee_is_finite(x%limbs(1)) .or. .not. ieee_is_finite(d)) then
+      z = (x%limbs(1) .ge. d)
+      return
+    end if
     z = .not. lt_fd(x, d)
   end function
 
@@ -464,6 +503,10 @@ contains
     double precision, intent(in) :: d
     type(float64x2), intent(in) :: x
     logical :: z
+    if (.not. ieee_is_finite(d) .or. .not. ieee_is_finite(x%limbs(1))) then
+      z = (d .ge. x%limbs(1))
+      return
+    end if
     z = .not. lt_df(d, x)
   end function
 

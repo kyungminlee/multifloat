@@ -226,6 +226,27 @@ contains
     call assert(is_inf(c%limbs(1)), "inf * 2 is inf")
     call assert(c%limbs(2) == 0.0d0, "inf * 2 low limb is 0")
 
+    ! Inf comparison
+    a = inf
+    b = inf
+    call assert(a == b, "inf == inf")
+    call assert(a == inf, "inf == d(inf)")
+    call assert(inf == a, "d(inf) == inf")
+    call assert(a >= b, "inf >= inf")
+    call assert(a <= b, "inf <= inf")
+    call assert(.not. (a < b), "not inf < inf")
+    call assert(.not. (a > b), "not inf > inf")
+    
+    a = inf
+    call assert(a > 0.0d0, "inf > 0")
+    call assert(-a < 0.0d0, "-inf < 0")
+
+    ! NaN comparison
+    a = nan
+    call assert(.not. (a == a), "nan == nan is false")
+    call assert(a /= a, "nan /= nan is true")
+    call assert(.not. (a < 1.0d0), "nan < 1 is false")
+
     ! Inf - Inf
     a = inf
     b = inf
