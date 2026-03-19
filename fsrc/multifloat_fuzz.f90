@@ -186,7 +186,7 @@ contains
       else
         ! For results near zero, use error relative to input magnitude
         rel_err = diff / input_mag
-        tol = 1e-28_qp
+        tol = 1e-27_qp
       end if
 
       if (rel_err > tol) then

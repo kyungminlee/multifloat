@@ -71,11 +71,13 @@ contains
        print *, "ASSERT_APPROX FAILED: ", msg
        print *, "  Expected: ", b_h, b_l
        print *, "  Got:      ", a%limbs
+       print *, "  Diff:     ", a%limbs - (/b_h, b_l/)
        num_errors = num_errors + 1
     else
        print *, "assert_approx succeeded: ", msg
        print *, "  Expected: ", b_h, b_l
        print *, "  Got:      ", a%limbs
+       print *, "  Diff:     ", a%limbs - (/b_h, b_l/)
     end if
   end subroutine
 
@@ -337,6 +339,8 @@ contains
 
   subroutine test_math_intrinsics()
     type(float64x2) :: a, b, c
+    real(16) :: x,y,z
+    real(8) :: u,v,w
     
     ! abs
     a = -1.0d0; a%limbs(2) = -1.0d-20
@@ -346,9 +350,11 @@ contains
     ! sqrt
     a = 2.0d0
     b = sqrt(a)
-    ! Check b*b matches a
-    c = b * b
-    call assert_approx(c, 2.0d0, 0.0d0, "sqrt(2)^2 approx 2")
+    x = 2.0q0
+    y = sqrt(x)
+    u = dble(y)
+    v = dble(y-u)
+    call assert_approx(b, u, v, "sqrt(2.0)")
     
     ! sign
     a = 1.0d0; b = -1.0d0
@@ -385,13 +391,28 @@ contains
     ! exp/log
     a = 1.0d0
     b = exp(a)
-    call assert_approx(b, exp(1.0d0), 0.0d0, "exp(1.0)")
-    c = log(b)
-    call assert_approx(c, 1.0d0, 0.0d0, "log(exp(1.0))")
+
+    x = 1.0q0
+    y = exp(x)
+    u = dble(y)
+    v = dble(y-u)
+    call assert_approx(b, u, v, "exp(1.0)")
+
+    a = 2.0d0
+    c = log(a)
+    x = 2.0q0
+    y = log(x)
+    u = dble(y)
+    v = dble(y-u)
+    call assert_approx(c, u, v, "log(2.0)")
     
-    a = 100.0d0
+    a = 10.0d0
     b = log10(a)
-    call assert_approx(b, 2.0d0, 0.0d0, "log10(100.0)")
+    x = 10.0q0
+    y = log10(x)
+    u = dble(y)
+    v = dble(y-u)
+    call assert_approx(b, u, v, "log10(10.0)")
   end subroutine
 
   ! Internal helpers for ground truth matching module logic
