@@ -3,6 +3,7 @@ module multifloat
   use, intrinsic :: ieee_arithmetic
 
   public :: float64x2
+  public :: abs, sqrt, sign, min, max, floor, ceiling, aint, anint, exp, log, log10
 
   type :: float64x2
     real*8 :: limbs(2)
@@ -20,6 +21,20 @@ module multifloat
     procedure :: tiny => tiny_f
     procedure :: huge => huge_f
     procedure :: exponent => exponent_f
+    procedure :: scale => scale_f
+    procedure :: floor => floor_f
+    procedure :: ceiling => ceiling_f
+    procedure :: aint => aint_f
+    procedure :: anint => anint_f
+    procedure :: abs => abs_f
+    procedure :: sqrt => sqrt_f
+    procedure :: fraction => fraction_f
+    procedure :: set_exponent => set_exponent_f
+    procedure :: spacing => spacing_f
+    procedure :: rrspacing => rrspacing_f
+    procedure :: exp => exp_f
+    procedure :: log => log_f
+    procedure :: log10 => log10_f
   end type
 
   interface operator (+)
@@ -58,7 +73,261 @@ module multifloat
     module procedure ne_ff, ne_fd, ne_df
   end interface
 
+  interface abs
+    module procedure abs_f
+  end interface
+
+  interface sqrt
+    module procedure sqrt_f
+  end interface
+
+  interface sign
+    module procedure sign_f, sign_fd, sign_df
+  end interface
+
+  interface min
+    module procedure min_ff, min_fd, min_df
+  end interface
+
+  interface max
+    module procedure max_ff, max_fd, max_df
+  end interface
+
+  interface aint
+    module procedure aint_f
+  end interface
+
+  interface anint
+    module procedure anint_f
+  end interface
+
+  interface floor
+    module procedure floor_f
+  end interface
+
+  interface ceiling
+    module procedure ceiling_f
+  end interface
+
+  interface exp
+    module procedure exp_f
+  end interface
+
+  interface log
+    module procedure log_f
+  end interface
+
+  interface log10
+    module procedure log10_f
+  end interface
+
 contains
+
+  elemental function exp_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    double precision :: y
+    if (.not. ieee_is_finite(x%limbs(1))) then
+       z%limbs(1) = exp(x%limbs(1))
+       z%limbs(2) = 0.0d0
+       return
+    end if
+    y = exp(x%limbs(1))
+    ! exp(x_h + x_l) = exp(x_h) * exp(x_l) approx exp(x_h) * (1 + x_l)
+    z = y + to_f64x2_d(y) * x%limbs(2)
+  end function
+
+  elemental function log_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    double precision :: y
+    if (.not. ieee_is_finite(x%limbs(1)) .or. x%limbs(1) <= 0.0d0) then
+       z%limbs(1) = log(x%limbs(1))
+       z%limbs(2) = 0.0d0
+       return
+    end if
+    y = log(x%limbs(1))
+    ! One NR step: z = y + (x - exp(y)) / exp(y)
+    z = y + (x - exp_f(to_f64x2_d(y))) / exp(y)
+  end function
+
+  elemental function log10_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z = log_f(x) / log(10.0d0)
+  end function
+
+  elemental function to_f64x2_d(d) result(z)
+    double precision, intent(in) :: d
+    type(float64x2) :: z
+    z%limbs(1) = d
+    z%limbs(2) = 0.0d0
+  end function
+
+  elemental function abs_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    if (x%limbs(1) < 0.0d0) then
+      z = -x
+    else
+      z = x
+    end if
+  end function
+
+  elemental function sqrt_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    double precision :: s, p, e, h
+    if (x%limbs(1) <= 0.0d0) then
+       if (x%limbs(1) < 0.0d0) then
+          z%limbs(1) = ieee_value(0.0d0, ieee_quiet_nan)
+          z%limbs(2) = 0.0d0
+       else
+          z%limbs = 0.0d0
+       end if
+       return
+    end if
+    s = sqrt(x%limbs(1))
+    ! Refinement: z = s + (x - s*s) / (2*s)
+    call two_prod(s, s, p, e)
+    h = (x%limbs(1) - p) + (x%limbs(2) - e)
+    ! Must use double-double addition
+    z%limbs(1) = s
+    z%limbs(2) = h / (2.0d0 * s)
+    call renormalize(z)
+  end function
+
+  elemental function sign_f(a, b) result(z)
+    class(float64x2), intent(in) :: a, b
+    type(float64x2) :: z
+    z = abs(a)
+    if (b%limbs(1) < 0.0d0) z = -z
+  end function
+
+  elemental function sign_fd(a, b) result(z)
+    class(float64x2), intent(in) :: a
+    double precision, intent(in) :: b
+    type(float64x2) :: z
+    z = abs(a)
+    if (b < 0.0d0) z = -z
+  end function
+
+  elemental function sign_df(a, b) result(z)
+    double precision, intent(in) :: a
+    class(float64x2), intent(in) :: b
+    type(float64x2) :: z
+    z%limbs(1) = abs(a)
+    z%limbs(2) = 0.0d0
+    if (b%limbs(1) < 0.0d0) z = -z
+  end function
+
+  elemental function min_ff(a, b) result(z)
+    class(float64x2), intent(in) :: a, b
+    type(float64x2) :: z
+    if (a < b) then
+      z = a
+    else
+      z = b
+    end if
+  end function
+
+  elemental function min_fd(a, b) result(z)
+    class(float64x2), intent(in) :: a
+    double precision, intent(in) :: b
+    type(float64x2) :: z
+    if (a < b) then
+      z = a
+    else
+      z = b
+    end if
+  end function
+
+  elemental function min_df(a, b) result(z)
+    double precision, intent(in) :: a
+    class(float64x2), intent(in) :: b
+    type(float64x2) :: z
+    if (a < b) then
+      z = a
+    else
+      z = b
+    end if
+  end function
+
+  elemental function max_ff(a, b) result(z)
+    class(float64x2), intent(in) :: a, b
+    type(float64x2) :: z
+    if (a > b) then
+      z = a
+    else
+      z = b
+    end if
+  end function
+
+  elemental function max_fd(a, b) result(z)
+    class(float64x2), intent(in) :: a
+    double precision, intent(in) :: b
+    type(float64x2) :: z
+    if (a > b) then
+      z = a
+    else
+      z = b
+    end if
+  end function
+
+  elemental function max_df(a, b) result(z)
+    double precision, intent(in) :: a
+    class(float64x2), intent(in) :: b
+    type(float64x2) :: z
+    if (a > b) then
+      z = a
+    else
+      z = b
+    end if
+  end function
+
+  elemental function aint_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z%limbs(1) = aint(x%limbs(1))
+    if (z%limbs(1) == x%limbs(1)) then
+      z%limbs(2) = aint(x%limbs(2))
+    else
+      z%limbs(2) = 0.0d0
+    end if
+  end function
+
+  elemental function anint_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z%limbs(1) = anint(x%limbs(1))
+    if (z%limbs(1) == x%limbs(1)) then
+      z%limbs(2) = anint(x%limbs(2))
+    else
+      z%limbs(2) = 0.0d0
+    end if
+  end function
+
+  elemental function floor_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z%limbs(1) = floor(x%limbs(1))
+    if (z%limbs(1) == x%limbs(1)) then
+      z%limbs(2) = floor(x%limbs(2))
+    else
+      z%limbs(2) = 0.0d0
+    end if
+  end function
+
+  elemental function ceiling_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z%limbs(1) = ceiling(x%limbs(1))
+    if (z%limbs(1) == x%limbs(1)) then
+      z%limbs(2) = ceiling(x%limbs(2))
+    else
+      z%limbs(2) = 0.0d0
+    end if
+  end function
 
   elemental function precision_f(x) result(z)
     class(float64x2), intent(in) :: x
@@ -96,6 +365,39 @@ contains
     class(float64x2), intent(in) :: x
     integer :: z
     z = exponent(x%limbs(1))
+  end function
+
+  elemental function scale_f(x, i) result(z)
+    class(float64x2), intent(in) :: x
+    integer, intent(in) :: i
+    type(float64x2) :: z
+    z%limbs = scale(x%limbs, i)
+  end function
+
+  elemental function fraction_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z = scale_f(x, -exponent(x%limbs(1)))
+  end function
+
+  elemental function set_exponent_f(x, i) result(z)
+    class(float64x2), intent(in) :: x
+    integer, intent(in) :: i
+    type(float64x2) :: z
+    z = scale_f(fraction_f(x), i)
+  end function
+
+  elemental function spacing_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z%limbs(1) = scale(spacing(x%limbs(1)), -53)
+    z%limbs(2) = 0.0d0
+  end function
+
+  elemental function rrspacing_f(x) result(z)
+    class(float64x2), intent(in) :: x
+    type(float64x2) :: z
+    z = abs(x) / spacing_f(x)
   end function
 
   elemental function neg(x) result(z)

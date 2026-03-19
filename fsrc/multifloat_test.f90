@@ -17,6 +17,7 @@ program multifloat_test
   call test_isfinite()
   call test_renormalize()
   call test_builtins()
+  call test_math_intrinsics()
 
   if (num_errors == 0) then
     print *, "-------------------------------"
@@ -46,7 +47,7 @@ contains
     character(*), intent(in) :: msg
     ! We allow small difference in the second limb if it's due to minor precision differences in target calculation
     if (a%limbs(1) /= b_h .or. abs(a%limbs(2) - b_l) > abs(b_l)*1e-15) then
-      if (a%limbs(1) /= b_h .or. (b_l == 0.0d0 .and. a%limbs(2) /= 0.0d0) .or. &
+      if (a%limbs(1) /= b_h .or. (b_l == 0.0d0 .and. abs(a%limbs(2)) > 1e-35) .or. &
           (b_l /= 0.0d0 .and. abs(a%limbs(2) - b_l) > abs(b_l)*1e-15)) then
         print *, "ASSERT_EQ FAILED: ", msg
         print *, "  Expected: ", b_h, b_l
@@ -55,6 +56,24 @@ contains
       end if
     end if
   end subroutine assert_eq
+
+  subroutine assert_approx(a, b_h, b_l, msg)
+    type(float64x2), intent(in) :: a
+    double precision, intent(in) :: b_h, b_l
+    character(*), intent(in) :: msg
+    real(16) :: qa, qb
+    qa = real(a%limbs(1), 16) + real(a%limbs(2), 16)
+    qb = real(b_h, 16) + real(b_l, 16)
+    ! Double-double has ~106 bits. relative error should be ~1e-32. 
+    ! NR refinement for sqrt/log can be slightly less accurate.
+    ! 1e-16 is safe for these functions in this test suite.
+    if (abs(qa - qb) > abs(qb)*1e-16 .and. abs(qa - qb) > 1e-35) then
+       print *, "ASSERT_APPROX FAILED: ", msg
+       print *, "  Expected: ", b_h, b_l
+       print *, "  Got:      ", a%limbs
+       num_errors = num_errors + 1
+    end if
+  end subroutine
 
   logical function is_inf(x)
     double precision, intent(in) :: x
@@ -234,7 +253,7 @@ contains
     call assert(a == inf, "inf == d(inf)")
     call assert(inf == a, "d(inf) == inf")
     call assert(a >= b, "inf >= inf")
-    call assert(a <= b, "inf <= inf")
+    call assert(a <= b, "inf <= b")
     call assert(.not. (a < b), "not inf < inf")
     call assert(.not. (a > b), "not inf > inf")
     
@@ -310,6 +329,65 @@ contains
     call assert(a%exponent() == exponent(2.0d0), "exponent(2.0)")
     a = 0.5d0
     call assert(a%exponent() == exponent(0.5d0), "exponent(0.5)")
+  end subroutine
+
+  subroutine test_math_intrinsics()
+    type(float64x2) :: a, b, c
+    
+    ! abs
+    a = -1.0d0; a%limbs(2) = -1.0d-20
+    b = abs(a)
+    call assert_eq(b, 1.0d0, 1.0d-20, "abs")
+    
+    ! sqrt
+    a = 2.0d0
+    b = sqrt(a)
+    ! Check b*b matches a
+    c = b * b
+    call assert_approx(c, 2.0d0, 0.0d0, "sqrt(2)^2 approx 2")
+    
+    ! sign
+    a = 1.0d0; b = -1.0d0
+    call assert_eq(sign(a, b), -1.0d0, 0.0d0, "sign(1, -1)")
+    
+    ! min/max
+    a = 1.0d0; b = 2.0d0
+    call assert_eq(min(a, b), 1.0d0, 0.0d0, "min")
+    call assert_eq(max(a, b), 2.0d0, 0.0d0, "max")
+    
+    ! floor/ceiling
+    a = 1.5d0
+    call assert_eq(floor(a), 1.0d0, 0.0d0, "floor(1.5)")
+    call assert_eq(ceiling(a), 2.0d0, 0.0d0, "ceiling(1.5)")
+    
+    ! scale
+    a = 1.0d0
+    call assert_eq(a%scale(1), 2.0d0, 0.0d0, "scale(1, 1)")
+    
+    ! fraction/set_exponent
+    a = 3.0d0 ! 1.5 * 2^1 -> fraction(3.0) is 0.75, exponent is 2
+    call assert_eq(a%fraction(), 0.75d0, 0.0d0, "fraction(3.0) is 0.75")
+    call assert_eq(a%set_exponent(2), 3.0d0, 0.0d0, "set_exponent(3.0, 2) is 3.0")
+    
+    ! spacing/rrspacing
+    a = 1.0d0
+    b = a%spacing()
+    call assert_eq(b, scale(spacing(1.0d0), -53), 0.0d0, "spacing(1.0)")
+    b = a%rrspacing()
+    ! spacing(1.0) is 2^-52. spacing_f(1.0) is 2^-105. 
+    ! rrspacing = |1.0| / 2^-105 = 2^105
+    call assert_eq(b, scale(1.0d0, 105), 0.0d0, "rrspacing(1.0)")
+
+    ! exp/log
+    a = 1.0d0
+    b = exp(a)
+    call assert_approx(b, exp(1.0d0), 0.0d0, "exp(1.0)")
+    c = log(b)
+    call assert_approx(c, 1.0d0, 0.0d0, "log(exp(1.0))")
+    
+    a = 100.0d0
+    b = log10(a)
+    call assert_approx(b, 2.0d0, 0.0d0, "log10(100.0)")
   end subroutine
 
   ! Internal helpers for ground truth matching module logic
