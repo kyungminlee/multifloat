@@ -1,11 +1,19 @@
 program multifloat_test
   use multifloat
   use, intrinsic :: ieee_arithmetic
+  use iso_fortran_env, only: int64
+
   implicit none
 
   integer :: num_errors = 0
 
   print *, "Starting multifloat tests..."
+  ! print *, exp2(float64x2((/1.0d0, 0.0d0/)))
+  print *, (exp2(float64x2((/1.0d0, 0.0d0/))))
+  print *, (exp2(float64x2((/1.1d0, 0.0d0/))))
+  print *, transfer(LOG2_E, (/1_INT64, 1_INT64/))
+  print *, LOG2_E
+  print *, (exp2(LOG2_E))
 
   call test_assignment()
   call test_comparisons()

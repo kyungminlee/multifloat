@@ -168,7 +168,7 @@ contains
     res = exp2_f(x_log2e)
   end function
 
-  elemental function exp2_f(x) result(res)
+  function exp2_f(x) result(res)
     use, intrinsic :: ieee_arithmetic
     implicit none
     class(float64x2), intent(in) :: x
@@ -176,17 +176,21 @@ contains
     type(float64x2)             :: r, p
     real(dp)                  :: n_float
     integer                   :: n_int, half_n
+    ! print *, "Checking ", x%limbs(1)
 
     ! 1. Check Overflow / Underflow limits (based on the hi limb)
     if (x%limbs(1) < EXP2_MIN) then
+      ! print *, x%limbs(1), " Less than min"
       res = float64x2((/0.0_dp, 0.0_dp/))
       return
-    end if
-    if (x%limbs(1) > EXP2_MAX) then
+    else if (x%limbs(1) > EXP2_MAX) then
+      ! print *, x%limbs(1), " Greater than max"
       ! Return Infinity (using standard IEEE positive infinity generation)
       res = float64x2((/ieee_value(1.0d0, ieee_positive_inf), 0.0_dp/))
       ! res = float64x2((/huge(1.0_dp) * 2.0_dp, 0.0_dp/))
       return
+    else
+      ! print *, x%limbs(1), " Is OK"
     end if
 
     ! 2. Range Reduction: Separate into integer and fractional parts
@@ -200,26 +204,38 @@ contains
     r%limbs(1) = r%limbs(1) * 0.125_dp
     r%limbs(2) = r%limbs(2) * 0.125_dp
 
+    ! print *, "A: ", r%limbs
+    !
     ! 3. Polynomial Evaluation
     p = evaluate_exp2_poly(r)
 
+    ! print *, "p: ", p
+    !
     ! 4. Undo the 1/8 scaling by squaring the result 3 times (p^8)
     p = mul(p,p)
     p = mul(p,p)
     p = mul(p,p)
 
+    ! print *, "p2: ", p
+    !
     ! 5. Scale by 2^n (Undo the integer part reduction)
     ! Split n into two halves to prevent intermediate overflow before the end
     n_int = int(n_float)
-    half_n = shiftr(n_int, 1) ! equivalent to n >> 1
+    half_n = shifta(n_int, 1) ! equivalent to n >> 1
 
     ! Fortran's intrinsic `scale(x, i)` is exactly C's `ldexp`, multiplying x by 2^i
     p%limbs(1) = scale(p%limbs(1), half_n)
     p%limbs(2) = scale(p%limbs(2), half_n)
 
+    ! print *, "half_n: ", half_n
+    ! print *, "p3: ", p
+    !
     p%limbs(1) = scale(p%limbs(1), n_int - half_n)
     p%limbs(2) = scale(p%limbs(2), n_int - half_n)
 
+    ! print *, "p4: ", p
+    !
+    !
     res = p
   end function exp2_f
 
@@ -312,149 +328,149 @@ contains
   end function evaluate_exp2_poly
 
 
-  ! =========================================================================
-    ! Base-e Logarithm: log(x)
-    ! =========================================================================
-    function f64x2_log(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2)             :: res
-        
-        ! 1. Check special limits
-        if (x%limbs(1) < 0.0_dp .or. x%limbs(1) /= x%limbs(1)) then
-            res = float64x2([ieee_value(1.0_dp, ieee_quiet_nan), 0.0_dp])
-            return
-        else if (x%limbs(1) == 0.0_dp) then
-            res = float64x2([-huge(1.0_dp) * 2.0_dp, 0.0_dp]) ! -Infinity
-            return
-        else if (x%limbs(1) > huge(1.0_dp)) then
-            res = x ! +Infinity
-            return
-        end if
-
-        ! 2. Compute log2(x) * ln(2)
-        res = mul(f64x2_log2(x), LN_2)
-    end function f64x2_log
-
-
-    ! =========================================================================
-    ! Base-10 Logarithm: log10(x)
-    ! =========================================================================
-    function f64x2_log10(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2)             :: res
-        
-        ! 1. Check special limits
-        if (x%limbs(1) < 0.0_dp .or. x%limbs(1) /= x%limbs(1)) then
-            res = float64x2([ieee_value(1.0_dp, ieee_quiet_nan), 0.0_dp])
-            return
-        else if (x%limbs(1) == 0.0_dp) then
-            res = float64x2([-huge(1.0_dp) * 2.0_dp, 0.0_dp]) ! -Infinity
-            return
-        else if (x%limbs(1) > huge(1.0_dp)) then
-            res = x ! +Infinity
-            return
-        end if
-
-        ! 2. Compute log2(x) * log10(2)
-        res = mul(f64x2_log2(x), LOG10_2)
-    end function f64x2_log10
-
-    ! =========================================================================
-    ! Core Base-2 Logarithm: unsafe_log2(x)
-    ! =========================================================================
-    function f64x2_log2(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2)             :: res
-        type(float64x2)             :: m, t_direct, p_direct, t_table, p_table, t_sqr
-        type(float64x2)             :: center, value
-        real(dp)                    :: e_float, direct_lo, direct_hi
-        integer                     :: e_int, index
-
-        ! Limits for the direct polynomial evaluation (no table lookup needed)
-        direct_lo = 15.0_dp / 16.0_dp
-        direct_hi = 17.0_dp / 16.0_dp
-        
-        ! Standard identity for x
-        type(float64x2), parameter :: ONE = float64x2([1.0_dp, 0.0_dp])
-
-        if (x%limbs(1) > direct_lo .and. x%limbs(1) < direct_hi) then
-            ! --- Fast Path: Near 1.0, use the wide polynomial ---
-            ! t_direct = (x - 1) / (x + 1)
-            t_direct = div(sub(x, ONE), add(x, ONE))
-            t_sqr    = mul(t_direct, t_direct)
-            p_direct = evaluate_log2_wide(t_sqr)
-            
-            res = mul(t_direct, p_direct)
-            return
-        else
-            ! --- Table-Assisted Path ---
-            ! Extract exponent and fractional part. `fraction` instrinsic is 
-            ! equivalent to `m = unsafe_ldexp(x, -e)`
-            ! Note: Fortran's `fraction(x)` maps strictly to [0.5, 1.0)
-            e_int   = exponent(x%limbs(1))
-            e_float = real(e_int, dp)
-            
-            ! Scale down x to get the mantissa
-            m%limbs(1) = scale(x%limbs(1), -e_int)
-            m%limbs(2) = scale(x%limbs(2), -e_int)
-
-            ! Get table index using top 5 bits of mantissa
-            ! (Implementation of `_log2_table_index` omitted for brevity; it requires
-            !  extracting bits 47-51 of the IEEE-754 mantissa to fetch index 1-32).
-            index = get_table_index(m%limbs(1))
-            
-            ! Fetch precomputed log2(center) lookup
-            call get_log2_table_values(index, center, value)
-
-            ! t_table = (m - center) / (m + center)
-            t_table = div(sub(m, center), add(m, center))
-            t_sqr   = mul(t_table, t_table)
-            p_table = evaluate_log2_narrow(t_sqr)
-
-            ! result = e + value + (t_table * p_table)
-            res = add(float64x2([e_float, 0.0_dp]), value)
-            res = add(res, mul(t_table, p_table))
-        end if
-    end function f64x2_log2
-
-    ! =========================================================================
-    ! Polynomial Evaluators (Horner's Method)
-    ! =========================================================================
-    function evaluate_log2_wide(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2)             :: res
-        
-        ! Maps to _log2_kernel_coefficients_wide(Float64, Val{2})
-        ! c8 = (+0x1.5D108CD7E21EBp-0003,)
-        res = float64x2([ 0.17044199464539825_dp, 0.0_dp ])
-        
-        ! c7 = (+0x1.89F2F69137330p-0003,)
-        res = add(mul(res, x), float64x2([ 0.19235779058694038_dp, 0.0_dp ]))
-        
-        ! ... remaining coefficients up to c0 inserted here using `add(mul(res, x), c_n)`...
-        
-        ! c0 = (+0x1.71547652B82FEp+0001, +0x1.777D0FFDA0D24p-0055)
-        res = add(mul(res, x), float64x2([ 2.8853900817779268_dp, 4.0863032542385496e-17_dp ]))
-    end function evaluate_log2_wide
-
-    function evaluate_log2_narrow(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2)             :: res
-        
-        ! Maps to _log2_kernel_coefficients_narrow(Float64, Val{2})
-        ! c6 = (+0x1.C6A48D52BA6C7p-0003,)
-        res = float64x2([ 0.22199347895287959_dp, 0.0_dp ])
-        
-        ! ... remaining coefficients up to c0 inserted here ...
-        
-        ! c0 = (+0x1.71547652B82FEp+0001, +0x1.777D0FFDA0D24p-0055)
-        res = add(mul(res, x), float64x2([ 2.8853900817779268_dp, 4.0863032542385496e-17_dp ]))
-    end function evaluate_log2_narrow
-
-    ! (Stubs for get_table_index and get_log2_table_values go here)
-
-
-
+  ! ! =========================================================================
+  ! ! Base-e Logarithm: log(x)
+  ! ! =========================================================================
+  ! function f64x2_log(x) result(res)
+  !   type(float64x2), intent(in) :: x
+  !   type(float64x2)             :: res
+  !
+  !   ! 1. Check special limits
+  !   if (x%limbs(1) < 0.0_dp .or. x%limbs(1) /= x%limbs(1)) then
+  !     res = float64x2([ieee_value(1.0_dp, ieee_quiet_nan), 0.0_dp])
+  !     return
+  !   else if (x%limbs(1) == 0.0_dp) then
+  !     res = float64x2([-huge(1.0_dp) * 2.0_dp, 0.0_dp]) ! -Infinity
+  !     return
+  !   else if (x%limbs(1) > huge(1.0_dp)) then
+  !     res = x ! +Infinity
+  !     return
+  !   end if
+  !
+  !   ! 2. Compute log2(x) * ln(2)
+  !   res = mul(f64x2_log2(x), LN_2)
+  ! end function f64x2_log
+  !
+  !
+  ! ! =========================================================================
+  ! ! Base-10 Logarithm: log10(x)
+  ! ! =========================================================================
+  ! function f64x2_log10(x) result(res)
+  !   type(float64x2), intent(in) :: x
+  !   type(float64x2)             :: res
+  !
+  !   ! 1. Check special limits
+  !   if (x%limbs(1) < 0.0_dp .or. x%limbs(1) /= x%limbs(1)) then
+  !     res = float64x2([ieee_value(1.0_dp, ieee_quiet_nan), 0.0_dp])
+  !     return
+  !   else if (x%limbs(1) == 0.0_dp) then
+  !     res = float64x2([-huge(1.0_dp) * 2.0_dp, 0.0_dp]) ! -Infinity
+  !     return
+  !   else if (x%limbs(1) > huge(1.0_dp)) then
+  !     res = x ! +Infinity
+  !     return
+  !   end if
+  !
+  !   ! 2. Compute log2(x) * log10(2)
+  !   res = mul(f64x2_log2(x), LOG10_2)
+  ! end function f64x2_log10
+  !
+  ! ! =========================================================================
+  ! ! Core Base-2 Logarithm: unsafe_log2(x)
+  ! ! =========================================================================
+  ! function f64x2_log2(x) result(res)
+  !   type(float64x2), intent(in) :: x
+  !   type(float64x2)             :: res
+  !   type(float64x2)             :: m, t_direct, p_direct, t_table, p_table, t_sqr
+  !   type(float64x2)             :: center, value
+  !   real(dp)                    :: e_float, direct_lo, direct_hi
+  !   integer                     :: e_int, index
+  !
+  !   ! Limits for the direct polynomial evaluation (no table lookup needed)
+  !   direct_lo = 15.0_dp / 16.0_dp
+  !   direct_hi = 17.0_dp / 16.0_dp
+  !
+  !   ! Standard identity for x
+  !   type(float64x2), parameter :: ONE = float64x2([1.0_dp, 0.0_dp])
+  !
+  !   if (x%limbs(1) > direct_lo .and. x%limbs(1) < direct_hi) then
+  !     ! --- Fast Path: Near 1.0, use the wide polynomial ---
+  !     ! t_direct = (x - 1) / (x + 1)
+  !     t_direct = div(sub(x, ONE), add(x, ONE))
+  !     t_sqr    = mul(t_direct, t_direct)
+  !     p_direct = evaluate_log2_wide(t_sqr)
+  !
+  !     res = mul(t_direct, p_direct)
+  !     return
+  !   else
+  !     ! --- Table-Assisted Path ---
+  !     ! Extract exponent and fractional part. `fraction` instrinsic is 
+  !     ! equivalent to `m = unsafe_ldexp(x, -e)`
+  !     ! Note: Fortran's `fraction(x)` maps strictly to [0.5, 1.0)
+  !     e_int   = exponent(x%limbs(1))
+  !     e_float = real(e_int, dp)
+  !
+  !     ! Scale down x to get the mantissa
+  !     m%limbs(1) = scale(x%limbs(1), -e_int)
+  !     m%limbs(2) = scale(x%limbs(2), -e_int)
+  !
+  !     ! Get table index using top 5 bits of mantissa
+  !     ! (Implementation of `_log2_table_index` omitted for brevity; it requires
+  !     !  extracting bits 47-51 of the IEEE-754 mantissa to fetch index 1-32).
+  !     index = get_table_index(m%limbs(1))
+  !
+  !     ! Fetch precomputed log2(center) lookup
+  !     call get_log2_table_values(index, center, value)
+  !
+  !     ! t_table = (m - center) / (m + center)
+  !     t_table = div(sub(m, center), add(m, center))
+  !     t_sqr   = mul(t_table, t_table)
+  !     p_table = evaluate_log2_narrow(t_sqr)
+  !
+  !     ! result = e + value + (t_table * p_table)
+  !     res = add(float64x2([e_float, 0.0_dp]), value)
+  !     res = add(res, mul(t_table, p_table))
+  !   end if
+  ! end function f64x2_log2
+  !
+  ! ! =========================================================================
+  ! ! Polynomial Evaluators (Horner's Method)
+  ! ! =========================================================================
+  ! function evaluate_log2_wide(x) result(res)
+  !   type(float64x2), intent(in) :: x
+  !   type(float64x2)             :: res
+  !
+  !   ! Maps to _log2_kernel_coefficients_wide(Float64, Val{2})
+  !   ! c8 = (+0x1.5D108CD7E21EBp-0003,)
+  !   res = float64x2([ 0.17044199464539825_dp, 0.0_dp ])
+  !
+  !   ! c7 = (+0x1.89F2F69137330p-0003,)
+  !   res = add(mul(res, x), float64x2([ 0.19235779058694038_dp, 0.0_dp ]))
+  !
+  !   ! ... remaining coefficients up to c0 inserted here using `add(mul(res, x), c_n)`...
+  !
+  !   ! c0 = (+0x1.71547652B82FEp+0001, +0x1.777D0FFDA0D24p-0055)
+  !   res = add(mul(res, x), float64x2([ 2.8853900817779268_dp, 4.0863032542385496e-17_dp ]))
+  ! end function evaluate_log2_wide
+  !
+  ! function evaluate_log2_narrow(x) result(res)
+  !   type(float64x2), intent(in) :: x
+  !   type(float64x2)             :: res
+  !
+  !   ! Maps to _log2_kernel_coefficients_narrow(Float64, Val{2})
+  !   ! c6 = (+0x1.C6A48D52BA6C7p-0003,)
+  !   res = float64x2([ 0.22199347895287959_dp, 0.0_dp ])
+  !
+  !   ! ... remaining coefficients up to c0 inserted here ...
+  !
+  !   ! c0 = (+0x1.71547652B82FEp+0001, +0x1.777D0FFDA0D24p-0055)
+  !   res = add(mul(res, x), float64x2([ 2.8853900817779268_dp, 4.0863032542385496e-17_dp ]))
+  ! end function evaluate_log2_narrow
+  !
+  ! ! (Stubs for get_table_index and get_log2_table_values go here)
+  !
+  !
+  !
 
 
 
