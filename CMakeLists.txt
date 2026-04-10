@@ -37,3 +37,40 @@ add_executable(multifloat_fuzz ./fsrc/multifloat_fuzz.f90)
 target_link_libraries(multifloat_fuzz PRIVATE multifloat-fortran)
 add_executable(multifloat_test ./fsrc/multifloat_test.f90)
 target_link_libraries(multifloat_test PRIVATE multifloat-fortran)
+
+# C++ tests for src/multifloats.hh.
+#
+# These tests need __float128 + libquadmath as a high-precision reference,
+# which Apple Clang does not provide. We locate a compatible g++ (e.g.
+# Homebrew g++-15) and compile the test executables with it directly via
+# add_custom_command. Override with -DMULTIFLOATS_QUADMATH_CXX=/path/to/g++.
+find_program(MULTIFLOATS_QUADMATH_CXX
+    NAMES g++-15 g++-14 g++-13 g++
+    PATHS /opt/homebrew/bin /usr/local/bin /usr/bin
+    DOC "C++ compiler used to build the C++ tests against __float128")
+
+if(MULTIFLOATS_QUADMATH_CXX)
+    set(MF_TEST_INCLUDES -I${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set(MF_TEST_FLAGS -std=c++17 -O2 -Wall -Wextra -fext-numeric-literals)
+    set(MF_TEST_LIBS -lquadmath)
+
+    foreach(name multifloats_test multifloats_fuzz)
+        set(_src ${CMAKE_CURRENT_SOURCE_DIR}/test/${name}.cc)
+        set(_bin ${CMAKE_CURRENT_BINARY_DIR}/${name})
+        add_custom_command(
+            OUTPUT ${_bin}
+            COMMAND ${MULTIFLOATS_QUADMATH_CXX}
+                    ${MF_TEST_FLAGS}
+                    ${MF_TEST_INCLUDES}
+                    ${_src}
+                    -o ${_bin}
+                    ${MF_TEST_LIBS}
+            DEPENDS ${_src} ${CMAKE_CURRENT_SOURCE_DIR}/src/multifloats.hh
+            COMMENT "Building ${name} with ${MULTIFLOATS_QUADMATH_CXX}"
+            VERBATIM)
+        add_custom_target(build_${name} ALL DEPENDS ${_bin})
+        add_test(NAME ${name} COMMAND ${_bin})
+    endforeach()
+else()
+    message(WARNING "No quadmath-capable g++ found; C++ tests will not be built.")
+endif()
