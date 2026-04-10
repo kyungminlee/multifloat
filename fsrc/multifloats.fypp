@@ -746,7 +746,10 @@ contains
         type(float64x2), intent(in) :: x
         type(float64x2) :: res
 #:if func == 'abs'
-        if (x%limbs(1) < 0.0_dp .or. (x%limbs(1) == 0.0_dp .and. x%limbs(2) < 0.0_dp)) then
+        ! IEEE abs: also flips signed-zero -0 to +0. Use sign() rather
+        ! than `<` so the -0 case is not silently treated as positive.
+        if (sign(1.0_dp, x%limbs(1)) < 0.0_dp .or. &
+            (x%limbs(1) == 0.0_dp .and. x%limbs(2) < 0.0_dp)) then
             res%limbs = -x%limbs
         else
             res = x
@@ -900,18 +903,44 @@ contains
         res%im%limbs = -x%im%limbs
 #:elif func == 'sqrt'
         ! sqrt(z) = sqrt((|z|+a)/2) + i*sign(b)*sqrt((|z|-a)/2)
+        ! Scale the input by an even power of 2 (exact) so that |z|+a
+        ! and |z|-a cannot overflow, then unscale the root by the half
+        ! power of 2.
         block
             type(float64x2) :: a, b, r, p, q
+            integer :: ea, eb, e2, eh
             a = x%re
             b = x%im
-            r = mf_hypot_mf(a, b)
-            p = mf_sqrt(mf_mul_dp((r + a), 0.5_dp))
-            q = mf_sqrt(mf_mul_dp((r - a), 0.5_dp))
-            res%re = p
-            if (b%limbs(1) < 0.0_dp) then
-                res%im%limbs = -q%limbs
+            ea = exponent(a%limbs(1))
+            eb = exponent(b%limbs(1))
+            if (a%limbs(1) == 0.0_dp .and. b%limbs(1) == 0.0_dp) then
+                res%re = MF_ZERO
+                res%im = MF_ZERO
             else
-                res%im = q
+                if (ea > eb) then
+                    e2 = ea
+                else
+                    e2 = eb
+                end if
+                ! Make e2 even so we can scale the root by exactly 2^(e2/2).
+                if (mod(e2, 2) /= 0) e2 = e2 + 1
+                eh = e2 / 2
+                a%limbs(1) = scale(a%limbs(1), -e2)
+                a%limbs(2) = scale(a%limbs(2), -e2)
+                b%limbs(1) = scale(b%limbs(1), -e2)
+                b%limbs(2) = scale(b%limbs(2), -e2)
+                r = mf_hypot_mf(a, b)
+                p = mf_sqrt(mf_mul_dp((r + a), 0.5_dp))
+                q = mf_sqrt(mf_mul_dp((r - a), 0.5_dp))
+                res%re%limbs(1) = scale(p%limbs(1), eh)
+                res%re%limbs(2) = scale(p%limbs(2), eh)
+                if (b%limbs(1) < 0.0_dp) then
+                    res%im%limbs(1) = -scale(q%limbs(1), eh)
+                    res%im%limbs(2) = -scale(q%limbs(2), eh)
+                else
+                    res%im%limbs(1) = scale(q%limbs(1), eh)
+                    res%im%limbs(2) = scale(q%limbs(2), eh)
+                end if
             end if
         end block
 #:elif func == 'exp'
@@ -1180,7 +1209,10 @@ contains
         ! modulo(a, b) = a - floor(a/b) * b
         res = x - dd_floor(x / y) * y
 #:elif func == 'dim'
-        if (x > y) then
+        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(y%limbs(1)))) then
+            ! Defer to the dp intrinsic so NaN/Inf propagation matches.
+            res%limbs = [dim(x%limbs(1), y%limbs(1)), 0.0_dp]
+        else if (x > y) then
             res = x - y
         else
             res = MF_ZERO
@@ -1188,7 +1220,14 @@ contains
 #:elif func == 'hypot'
         ! sqrt(x^2 + y^2) with scaling to avoid overflow / underflow.
         block
-            type(float64x2) :: ax, ay, big, small, ratio
+            type(float64x2) :: ax, ay, big, small, ratio, scaled, root
+            real(dp) :: scale_up
+            integer :: scale_exp
+            if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(y%limbs(1)))) then
+                ! Defer to the dp intrinsic so hypot(inf, NaN) = inf etc.
+                res%limbs = [hypot(x%limbs(1), y%limbs(1)), 0.0_dp]
+                return
+            end if
             if (x%limbs(1) < 0.0_dp .or. (x%limbs(1) == 0.0_dp .and. x%limbs(2) < 0.0_dp)) then
                 ax%limbs = -x%limbs
             else
@@ -1209,8 +1248,17 @@ contains
             if (big%limbs(1) == 0.0_dp) then
                 res = MF_ZERO
             else
+                ! Scale by powers of 2 (exact) so big stays away from
+                ! both overflow and underflow before the final multiply.
+                scale_exp = exponent(big%limbs(1))
+                big%limbs(1)   = scale(big%limbs(1),   -scale_exp)
+                big%limbs(2)   = scale(big%limbs(2),   -scale_exp)
+                small%limbs(1) = scale(small%limbs(1), -scale_exp)
+                small%limbs(2) = scale(small%limbs(2), -scale_exp)
                 ratio = small / big
-                res = big * mf_sqrt(MF_ONE + ratio * ratio)
+                root = big * mf_sqrt(MF_ONE + ratio * ratio)
+                res%limbs(1) = scale(root%limbs(1), scale_exp)
+                res%limbs(2) = scale(root%limbs(2), scale_exp)
             end if
         end block
 #:elif func == 'atan2'
@@ -2164,7 +2212,21 @@ contains
             res%limbs(2) = 0.0_dp
             return
         end if
+        if (x%limbs(1) == 0.0_dp .and. y%limbs(1) == 0.0_dp) then
+            ! Pure-zero case: rely on IEEE so signed-zero rules apply
+            ! (the EFT kernel would otherwise lose the sign of zero).
+            res%limbs(1) = x%limbs(1) + y%limbs(1)
+            res%limbs(2) = x%limbs(2) + y%limbs(2)
+            return
+        end if
         s = x%limbs(1) + y%limbs(1)
+        if (.not. ieee_is_finite(s)) then
+            ! The sum itself overflowed; the rest of the EFT would
+            ! propagate NaN through the limbs. Hand off the inf to dp.
+            res%limbs(1) = s
+            res%limbs(2) = 0.0_dp
+            return
+        end if
         aprime = s - y%limbs(1)
         bprime = s - aprime
         aerr = x%limbs(1) - aprime
@@ -2190,6 +2252,13 @@ contains
             return
         end if
         p00 = x%limbs(1) * y%limbs(1)
+        if (.not. ieee_is_finite(p00)) then
+            ! The product itself overflowed; ieee_fma(x, y, -inf) would
+            ! return NaN. Hand off the inf result to the dp leading limb.
+            res%limbs(1) = p00
+            res%limbs(2) = 0.0_dp
+            return
+        end if
         e00 = ieee_fma(x%limbs(1), y%limbs(1), -p00)
         p01 = x%limbs(1) * y%limbs(2)
         p10 = x%limbs(2) * y%limbs(1)
