@@ -1,4 +1,4 @@
-SUBROUTINE ddtrsm (side, uplo, transa, diag, m, n, alpha, a, lda, b, ldb)
+SUBROUTINE wtrsm (side, uplo, transa, diag, m, n, alpha, a, lda, b, ldb)
  use multifloats
  TYPE(FLOAT64X2) alpha
  INTEGER lda, ldb, m, n

@@ -1,4 +1,4 @@
-SUBROUTINE ddgemm (transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc&
+SUBROUTINE wgemm (transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc&
 &)
  use multifloats
  TYPE(FLOAT64X2) alpha, beta

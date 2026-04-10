@@ -29,8 +29,8 @@ target_link_libraries(test-fortran PRIVATE multifloat-fortran)
 add_test(NAME test-fortran COMMAND test-fortran)
 
 add_library(blas-multifloat
-    ./blas/ddgemm.f90
-    ./blas/ddtrsm.f90)
+    ./blas/wgemm.f90
+    ./blas/wtrsm.f90)
 target_link_libraries(blas-multifloat PRIVATE multifloat-fortran)
 
 add_executable(multifloat_fuzz ./fsrc/multifloat_fuzz.f90)
