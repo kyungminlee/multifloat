@@ -58,6 +58,8 @@
 #:set SIZES = lambda r, v='array': (', &\n' + ' '*12).join(['size(%s,%d)' % (v, i) for i in range(1, r+1)]) if r > 4 else ', '.join(['size(%s,%d)' % (v, i) for i in range(1, r+1)])
 #:set IDXS = lambda r: ', '.join(['i%d' % i for i in range(1, r+1)])
 #:set IVARS = lambda r: ', '.join(['i%d' % i for i in range(1, r+1)])
+#:set OUT_IDXS = lambda r, d: ', '.join(['i%d' % i for i in range(1, r+1) if i != d])
+#:set SURVIVOR_DIMS = lambda r, d: [i for i in range(1, r+1) if i != d]
 #:set DIM_REDUCED_SIZES = lambda r: (', &\n' + ' '*12).join(['merge(size(array,%d),size(array,%d),dim<=%d)' % (j+1,j,j) for j in range(1, r)])
 
 #! Inline function: generate nested conversion loops
@@ -524,19 +526,20 @@ contains
     elemental function mf_from_dp(v) result(res)
         real(dp), intent(in) :: v
         type(float64x2) :: res
-        res = from_qp(real(v, qp))
+        res%limbs = [v, 0.0_dp]
     end function
 
     elemental function mf_from_sp(v) result(res)
         real(sp), intent(in) :: v
         type(float64x2) :: res
-        res = from_qp(real(v, qp))
+        res%limbs = [real(v, dp), 0.0_dp]
     end function
 
     elemental function mf_from_int(v) result(res)
         integer, intent(in) :: v
         type(float64x2) :: res
-        res = from_qp(real(v, qp))
+        ! Default integer kind is 32-bit and fits exactly in dp.
+        res%limbs = [real(v, dp), 0.0_dp]
     end function
 
     function mf_from_char(v) result(res)
@@ -556,13 +559,13 @@ contains
     elemental function mf_from_cdp(x) result(res)
         complex(dp), intent(in) :: x
         type(float64x2) :: res
-        res = from_qp(real(x, qp))
+        res%limbs = [real(x, dp), 0.0_dp]
     end function
 
     elemental function mf_from_csp(x) result(res)
         complex(sp), intent(in) :: x
         type(float64x2) :: res
-        res = from_qp(real(x, qp))
+        res%limbs = [real(real(x, sp), dp), 0.0_dp]
     end function
 
     elemental function cx_from_mf_2(r, i) result(res)
@@ -575,22 +578,22 @@ contains
     elemental function cx_from_dp_2(r, i) result(res)
         real(dp), intent(in) :: r, i
         type(complex128x2) :: res
-        res%re = from_qp(real(r, qp))
-        res%im = from_qp(real(i, qp))
+        res%re%limbs = [r, 0.0_dp]
+        res%im%limbs = [i, 0.0_dp]
     end function
 
     elemental function cx_from_mf_1(r) result(res)
         type(float64x2), intent(in) :: r
         type(complex128x2) :: res
         res%re = r
-        res%im = from_qp(0.0_qp)
+        res%im%limbs = [0.0_dp, 0.0_dp]
     end function
 
     elemental function cx_from_dp_1(r) result(res)
         real(dp), intent(in) :: r
         type(complex128x2) :: res
-        res%re = from_qp(real(r, qp))
-        res%im = from_qp(0.0_qp)
+        res%re%limbs = [r, 0.0_dp]
+        res%im%limbs = [0.0_dp, 0.0_dp]
     end function
 
     ! ================================================================
@@ -602,10 +605,18 @@ contains
     elemental subroutine mf_assign_${n}$(lhs, rhs)
         type(float64x2), intent(out) :: lhs
         ${d}$, intent(in) :: rhs
-#:if ISCPLX[n]
-        lhs = from_qp(real(${CONV[n].format('rhs')}$, qp))
-#:else
-        lhs = from_qp(${CONV[n].format('rhs')}$)
+#:if n == 'dp'
+        lhs%limbs = [rhs, 0.0_dp]
+#:elif n == 'sp'
+        lhs%limbs = [real(rhs, dp), 0.0_dp]
+#:elif n == 'int'
+        lhs%limbs = [real(rhs, dp), 0.0_dp]
+#:elif n == 'cx'
+        lhs = rhs%re
+#:elif n == 'cdp'
+        lhs%limbs = [real(rhs, dp), 0.0_dp]
+#:elif n == 'csp'
+        lhs%limbs = [real(real(rhs, sp), dp), 0.0_dp]
 #:endif
     end subroutine
 
@@ -616,10 +627,24 @@ contains
     elemental subroutine cx_assign_${n}$(lhs, rhs)
         type(complex128x2), intent(out) :: lhs
         ${d}$, intent(in) :: rhs
-#:if ISCPLX[n]
-        lhs = from_cqp(${CONV[n].format('rhs')}$)
-#:else
-        lhs = from_cqp(cmplx(${CONV[n].format('rhs')}$, 0.0_qp, qp))
+#:if n == 'mf'
+        lhs%re = rhs
+        lhs%im%limbs = [0.0_dp, 0.0_dp]
+#:elif n == 'dp'
+        lhs%re%limbs = [rhs, 0.0_dp]
+        lhs%im%limbs = [0.0_dp, 0.0_dp]
+#:elif n == 'sp'
+        lhs%re%limbs = [real(rhs, dp), 0.0_dp]
+        lhs%im%limbs = [0.0_dp, 0.0_dp]
+#:elif n == 'int'
+        lhs%re%limbs = [real(rhs, dp), 0.0_dp]
+        lhs%im%limbs = [0.0_dp, 0.0_dp]
+#:elif n == 'cdp'
+        lhs%re%limbs = [real(rhs, dp), 0.0_dp]
+        lhs%im%limbs = [aimag(rhs), 0.0_dp]
+#:elif n == 'csp'
+        lhs%re%limbs = [real(real(rhs, sp), dp), 0.0_dp]
+        lhs%im%limbs = [real(aimag(rhs), dp), 0.0_dp]
 #:endif
     end subroutine
 
@@ -632,43 +657,61 @@ contains
     elemental function mf_dble(x) result(res)
         type(float64x2), intent(in) :: x
         real(dp) :: res
-        res = real(to_qp(x), dp)
+        ! For a normalized DD, |lo| <= ulp(hi)/2, so the round-to-nearest
+        ! double of hi+lo is exactly hi.
+        res = x%limbs(1)
     end function
 
     elemental function mf_int(x) result(res)
         type(float64x2), intent(in) :: x
         integer :: res
-        res = int(to_qp(x))
+        real(dp) :: hi
+        hi = x%limbs(1)
+        res = int(hi)
+        if (hi == real(res, dp)) then
+            ! hi is exactly an integer; the lo limb determines whether
+            ! the true value crosses an integer boundary toward zero.
+            if (res > 0 .and. x%limbs(2) < 0.0_dp) res = res - 1
+            if (res < 0 .and. x%limbs(2) > 0.0_dp) res = res + 1
+        end if
     end function
 
     elemental function mf_nint(x) result(res)
         type(float64x2), intent(in) :: x
         integer :: res
-        res = nint(to_qp(x))
+        ! For all values where the closest integer is unambiguous, the
+        ! leading limb suffices: |lo| <= ulp(hi)/2 < 1/2.
+        res = nint(x%limbs(1))
     end function
 
     elemental function mf_to_double(x) result(res)
         type(float64x2), intent(in) :: x
         real(dp) :: res
-        res = real(to_qp(x), dp)
+        res = x%limbs(1)
     end function
 
     elemental function mf_ceiling(x) result(res)
         type(float64x2), intent(in) :: x
         integer :: res
-        res = ceiling(to_qp(x))
+        real(dp) :: hi
+        hi = x%limbs(1)
+        res = ceiling(hi)
+        if (hi == real(res, dp) .and. x%limbs(2) > 0.0_dp) res = res + 1
     end function
 
     elemental function mf_floor(x) result(res)
         type(float64x2), intent(in) :: x
         integer :: res
-        res = floor(to_qp(x))
+        real(dp) :: hi
+        hi = x%limbs(1)
+        res = floor(hi)
+        if (hi == real(res, dp) .and. x%limbs(2) < 0.0_dp) res = res - 1
     end function
 
     elemental function mf_exponent(x) result(res)
         type(float64x2), intent(in) :: x
         integer :: res
-        res = exponent(to_qp(x))
+        res = exponent(x%limbs(1))
     end function
 
     ! ================================================================
@@ -684,7 +727,8 @@ contains
     elemental function cx_neg(x) result(res)
         type(complex128x2), intent(in) :: x
         type(complex128x2) :: res
-        res = from_cqp(-to_cqp(x))
+        res%re%limbs = -x%re%limbs
+        res%im%limbs = -x%im%limbs
     end function
 
     ! ================================================================
@@ -701,6 +745,41 @@ contains
         else
             res = x
         end if
+#:elif func == 'sqrt'
+        ! Karp/Markstein DD sqrt — port of Julia mfsqrt for N == 2.
+        ! Start from a single-double reciprocal sqrt seed and refine.
+        block
+            real(dp) :: u, half_u
+            type(float64x2) :: root, residual, correction, half_u_dd
+            if (.not. (x%limbs(1) > 0.0_dp .and. ieee_is_finite(x%limbs(1)))) then
+                ! 0, -0, negative, NaN, or +Inf — leading-limb sqrt handles
+                ! every IEEE special case naturally.
+                res%limbs = [sqrt(x%limbs(1)), 0.0_dp]
+            else
+                u = 1.0_dp / sqrt(x%limbs(1))
+                half_u = 0.5_dp * u
+                root = x * mf_from_dp(u)               ! ≈ sqrt(x)
+                residual = root * root - x             ! ≈ 0
+                half_u_dd = mf_from_dp(half_u)
+                correction = residual * half_u_dd
+                res = root - correction
+            end if
+        end block
+#:elif func == 'aint'
+        res = dd_trunc(x)
+#:elif func == 'anint'
+        res = dd_round(x)
+#:elif func == 'fraction'
+        block
+            integer :: e
+            if (x%limbs(1) == 0.0_dp) then
+                res%limbs = [0.0_dp, 0.0_dp]
+            else
+                e = exponent(x%limbs(1))
+                res%limbs(1) = scale(x%limbs(1), -e)
+                res%limbs(2) = scale(x%limbs(2), -e)
+            end if
+        end block
 #:elif func == 'tiny' or func == 'huge' or func == 'epsilon'
         ! Inquiry constants: derive from the underlying double, not via
         ! quad precision (which under/overflows when stored back as dp).
@@ -722,8 +801,82 @@ contains
         ! rrspacing(x) = |x| / spacing(x). Compute against the DD spacing
         ! so the result is consistent with mf_spacing above.
         res%limbs = [abs(x%limbs(1)) / scale(spacing(x%limbs(1)), -53), 0.0_dp]
+#:elif func in ('exp', 'log', 'log10', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'erf', 'erfc', 'erfc_scaled', 'gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1')
+        ! Derivative-corrected DD evaluation:
+        !     func(hi + lo) ≈ func(hi) + func'(hi) * lo
+        ! combined via fast_two_sum into a normalized DD result. Roughly
+        ! doubles the precision of the leading-limb std intrinsic without
+        ! ever touching quad precision.
+        block
+            real(dp) :: fhi, deriv, corr, s, bp
+#:if func == 'exp'
+            fhi = exp(x%limbs(1))
+            deriv = fhi
+#:elif func == 'log'
+            fhi = log(x%limbs(1))
+            deriv = 1.0_dp / x%limbs(1)
+#:elif func == 'log10'
+            fhi = log10(x%limbs(1))
+            deriv = 1.0_dp / (x%limbs(1) * log(10.0_dp))
+#:elif func == 'sin'
+            fhi = sin(x%limbs(1))
+            deriv = cos(x%limbs(1))
+#:elif func == 'cos'
+            fhi = cos(x%limbs(1))
+            deriv = -sin(x%limbs(1))
+#:elif func == 'tan'
+            fhi = tan(x%limbs(1))
+            deriv = 1.0_dp + fhi * fhi
+#:elif func == 'asin'
+            fhi = asin(x%limbs(1))
+            deriv = 1.0_dp / sqrt(1.0_dp - x%limbs(1) * x%limbs(1))
+#:elif func == 'acos'
+            fhi = acos(x%limbs(1))
+            deriv = -1.0_dp / sqrt(1.0_dp - x%limbs(1) * x%limbs(1))
+#:elif func == 'atan'
+            fhi = atan(x%limbs(1))
+            deriv = 1.0_dp / (1.0_dp + x%limbs(1) * x%limbs(1))
+#:elif func == 'sinh'
+            fhi = sinh(x%limbs(1))
+            deriv = cosh(x%limbs(1))
+#:elif func == 'cosh'
+            fhi = cosh(x%limbs(1))
+            deriv = sinh(x%limbs(1))
+#:elif func == 'tanh'
+            fhi = tanh(x%limbs(1))
+            deriv = 1.0_dp - fhi * fhi
+#:elif func == 'asinh'
+            fhi = asinh(x%limbs(1))
+            deriv = 1.0_dp / sqrt(1.0_dp + x%limbs(1) * x%limbs(1))
+#:elif func == 'acosh'
+            fhi = acosh(x%limbs(1))
+            deriv = 1.0_dp / sqrt(x%limbs(1) * x%limbs(1) - 1.0_dp)
+#:elif func == 'atanh'
+            fhi = atanh(x%limbs(1))
+            deriv = 1.0_dp / (1.0_dp - x%limbs(1) * x%limbs(1))
+#:elif func == 'erf'
+            fhi = erf(x%limbs(1))
+            deriv = (2.0_dp / sqrt(acos(-1.0_dp))) * exp(-x%limbs(1) * x%limbs(1))
+#:elif func == 'erfc'
+            fhi = erfc(x%limbs(1))
+            deriv = -(2.0_dp / sqrt(acos(-1.0_dp))) * exp(-x%limbs(1) * x%limbs(1))
 #:else
-        res = from_qp(${func}$(to_qp(x)))
+            ! erfc_scaled, gamma, log_gamma, bessel_*: no closed-form
+            ! correction available without further special functions, so
+            ! fall back to a leading-limb evaluation. Precision drops to
+            ! single-double for these but no quad precision is involved.
+            fhi = ${func}$(x%limbs(1))
+            deriv = 0.0_dp
+#:endif
+            corr = deriv * x%limbs(2)
+            s = fhi + corr
+            bp = s - fhi
+            res%limbs(1) = s
+            res%limbs(2) = corr - bp
+        end block
+#:else
+        ! Should be unreachable: every entry of UNARY_MF_MF is handled above.
+        res%limbs = [0.0_dp, 0.0_dp]
 #:endif
     end function
 
@@ -736,7 +889,138 @@ contains
     elemental function cx_${func}$(x) result(res)
         type(complex128x2), intent(in) :: x
         type(complex128x2) :: res
-        res = from_cqp(${func}$(to_cqp(x)))
+#:if func == 'conjg'
+        res%re = x%re
+        res%im%limbs = -x%im%limbs
+#:elif func == 'sqrt'
+        ! sqrt(z) = sqrt((|z|+a)/2) + i*sign(b)*sqrt((|z|-a)/2)
+        block
+            type(float64x2) :: a, b, r, p, q
+            a = x%re
+            b = x%im
+            r = mf_hypot_mf(a, b)
+            p = mf_sqrt(mf_mul_dp((r + a), 0.5_dp))
+            q = mf_sqrt(mf_mul_dp((r - a), 0.5_dp))
+            res%re = p
+            if (b%limbs(1) < 0.0_dp) then
+                res%im%limbs = -q%limbs
+            else
+                res%im = q
+            end if
+        end block
+#:elif func == 'exp'
+        ! exp(a+bi) = exp(a) * (cos(b) + i sin(b))
+        block
+            type(float64x2) :: ea
+            ea = mf_exp(x%re)
+            res%re = ea * mf_cos(x%im)
+            res%im = ea * mf_sin(x%im)
+        end block
+#:elif func == 'log'
+        ! log(a+bi) = log(|z|) + i*atan2(b, a)
+        res%re = mf_log(mf_hypot_mf(x%re, x%im))
+        res%im = mf_atan2_mf(x%im, x%re)
+#:elif func == 'sin'
+        ! sin(a+bi) = sin(a)*cosh(b) + i*cos(a)*sinh(b)
+        res%re = mf_sin(x%re) * mf_cosh(x%im)
+        res%im = mf_cos(x%re) * mf_sinh(x%im)
+#:elif func == 'cos'
+        ! cos(a+bi) = cos(a)*cosh(b) - i*sin(a)*sinh(b)
+        block
+            type(float64x2) :: tmp
+            res%re = mf_cos(x%re) * mf_cosh(x%im)
+            tmp = mf_sin(x%re) * mf_sinh(x%im)
+            res%im%limbs = -tmp%limbs
+        end block
+#:elif func == 'tan'
+        ! tan(z) = sin(z) / cos(z)
+        res = cx_sin(x) / cx_cos(x)
+#:elif func == 'sinh'
+        ! sinh(a+bi) = sinh(a)*cos(b) + i*cosh(a)*sin(b)
+        res%re = mf_sinh(x%re) * mf_cos(x%im)
+        res%im = mf_cosh(x%re) * mf_sin(x%im)
+#:elif func == 'cosh'
+        ! cosh(a+bi) = cosh(a)*cos(b) + i*sinh(a)*sin(b)
+        res%re = mf_cosh(x%re) * mf_cos(x%im)
+        res%im = mf_sinh(x%re) * mf_sin(x%im)
+#:elif func == 'tanh'
+        res = cx_sinh(x) / cx_cosh(x)
+#:elif func == 'asin'
+        ! asin(z) = -i * log(i*z + sqrt(1 - z^2))
+        block
+            type(complex128x2) :: iz, one_minus_z2, root, arg
+            type(float64x2) :: tmp
+            iz%re%limbs = -x%im%limbs
+            iz%im = x%re
+            one_minus_z2%re = MF_ONE - (x%re*x%re - x%im*x%im)
+            tmp = MF_TWO * x%re * x%im
+            one_minus_z2%im%limbs = -tmp%limbs
+            root = cx_sqrt(one_minus_z2)
+            arg = iz + root
+            arg = cx_log(arg)
+            ! multiply by -i: (-i)*(p+qi) = q - p*i
+            res%re = arg%im
+            res%im%limbs = -arg%re%limbs
+        end block
+#:elif func == 'acos'
+        ! acos(z) = pi/2 - asin(z)
+        block
+            type(complex128x2) :: a
+            a = cx_asin(x)
+            res%re = mf_from_dp(2.0_dp * atan(1.0_dp)) - a%re  ! pi/2
+            res%im%limbs = -a%im%limbs
+        end block
+#:elif func == 'atan'
+        ! atan(z) = (i/2) * log((i+z)/(i-z))
+        block
+            type(complex128x2) :: num, den, ratio, l
+            type(float64x2) :: half_im
+            num%re = x%re
+            num%im = MF_ONE + x%im
+            den%re%limbs = -x%re%limbs
+            den%im = MF_ONE - x%im
+            ratio = num / den
+            l = cx_log(ratio)
+            ! multiply by i/2: (i/2)*(p+qi) = -q/2 + (p/2)*i
+            half_im = mf_mul_dp(l%im, 0.5_dp)
+            res%re%limbs = -half_im%limbs
+            res%im = mf_mul_dp(l%re, 0.5_dp)
+        end block
+#:elif func == 'asinh'
+        ! asinh(z) = log(z + sqrt(z^2 + 1))
+        block
+            type(complex128x2) :: z2, root, arg
+            z2%re = x%re*x%re - x%im*x%im + MF_ONE
+            z2%im = MF_TWO * x%re * x%im
+            root = cx_sqrt(z2)
+            arg = x + root
+            res = cx_log(arg)
+        end block
+#:elif func == 'acosh'
+        ! acosh(z) = log(z + sqrt(z-1) * sqrt(z+1))
+        block
+            type(complex128x2) :: zp1, zm1, r1, r2, arg
+            zp1 = x; zp1%re = x%re + MF_ONE
+            zm1 = x; zm1%re = x%re - MF_ONE
+            r1 = cx_sqrt(zm1)
+            r2 = cx_sqrt(zp1)
+            arg = x + r1 * r2
+            res = cx_log(arg)
+        end block
+#:elif func == 'atanh'
+        ! atanh(z) = (1/2) * log((1+z)/(1-z))
+        block
+            type(complex128x2) :: num, den, ratio, l
+            num%re = MF_ONE + x%re
+            num%im = x%im
+            den%re = MF_ONE - x%re
+            den%im%limbs = -x%im%limbs
+            ratio = num / den
+            l = cx_log(ratio)
+            res%re = mf_mul_dp(l%re, 0.5_dp)
+            res%im = mf_mul_dp(l%im, 0.5_dp)
+        end block
+#:endif
     end function
 
 #:endfor
@@ -748,7 +1032,13 @@ contains
     elemental function cx_${func}$(x) result(res)
         type(complex128x2), intent(in) :: x
         type(float64x2) :: res
-        res = from_qp(${func}$(to_cqp(x)))
+#:if func == 'abs'
+        ! |a + bi| = hypot(a, b)
+        res = mf_hypot_mf(x%re, x%im)
+#:else
+        ! aimag(a + bi) = b
+        res = x%im
+#:endif
     end function
 
 #:endfor
@@ -767,13 +1057,13 @@ contains
         type(float64x2), intent(in) :: re
         type(complex128x2) :: res
         res%re = re
-        res%im = from_qp(0.0_qp)
+        res%im%limbs = [0.0_dp, 0.0_dp]
     end function
 
     elemental function cx_real(x) result(res)
         type(complex128x2), intent(in) :: x
         type(float64x2) :: res
-        res = from_qp(real(to_cqp(x), qp))
+        res = x%re
     end function
 
     elemental function mf_real_mf(x) result(res)
@@ -789,6 +1079,56 @@ contains
     end function
 
     ! ================================================================
+    ! Internal DD rounding helpers (used by mod/modulo and aint/anint)
+    ! ================================================================
+
+    elemental function dd_trunc(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res
+        real(dp) :: t1, t2, s, b
+        t1 = aint(x%limbs(1))
+        t2 = aint(x%limbs(2))
+        s = t1 + t2
+        b = s - t1
+        res%limbs(1) = s
+        res%limbs(2) = t2 - b
+        if (x%limbs(1) >= 0.0_dp) then
+            if (res > x) res = res - MF_ONE
+        else
+            if (res < x) res = res + MF_ONE
+        end if
+    end function
+
+    elemental function dd_floor(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res
+        res = dd_trunc(x)
+        if (x%limbs(1) < 0.0_dp .and. res /= x) then
+            res = res - MF_ONE
+        end if
+    end function
+
+    elemental function dd_ceil(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res
+        res = dd_trunc(x)
+        if (x%limbs(1) > 0.0_dp .and. res /= x) then
+            res = res + MF_ONE
+        end if
+    end function
+
+    elemental function dd_round(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res
+        ! Round half away from zero, matching Fortran nint / anint.
+        if (x%limbs(1) >= 0.0_dp) then
+            res = dd_floor(x + MF_HALF)
+        else
+            res = dd_ceil(x - MF_HALF)
+        end if
+    end function
+
+    ! ================================================================
     ! Binary real functions (elemental)
     ! ================================================================
 
@@ -800,7 +1140,108 @@ contains
         ${d1}$, intent(in) :: a
         ${d2}$, intent(in) :: b
         type(float64x2) :: res
-        res = from_qp(${func}$(${CONV[n1].format('a')}$, ${CONV[n2].format('b')}$))
+        type(float64x2) :: x, y
+        x = ${MFCONV[n1].format('a')}$
+        y = ${MFCONV[n2].format('b')}$
+#:if func == 'min'
+        if (x < y) then
+            res = x
+        else
+            res = y
+        end if
+#:elif func == 'max'
+        if (x > y) then
+            res = x
+        else
+            res = y
+        end if
+#:elif func == 'sign'
+        ! Fortran sign(a, b): magnitude of |a|, sign of b.
+        block
+            logical :: x_neg, y_neg
+            x_neg = (x%limbs(1) < 0.0_dp .or. (x%limbs(1) == 0.0_dp .and. x%limbs(2) < 0.0_dp))
+            y_neg = (y%limbs(1) < 0.0_dp .or. (y%limbs(1) == 0.0_dp .and. y%limbs(2) < 0.0_dp))
+            if (x_neg .neqv. y_neg) then
+                res%limbs = -x%limbs
+            else
+                res = x
+            end if
+        end block
+#:elif func == 'mod'
+        ! mod(a, b) = a - aint(a/b) * b
+        res = x - dd_trunc(x / y) * y
+#:elif func == 'modulo'
+        ! modulo(a, b) = a - floor(a/b) * b
+        res = x - dd_floor(x / y) * y
+#:elif func == 'dim'
+        if (x > y) then
+            res = x - y
+        else
+            res = MF_ZERO
+        end if
+#:elif func == 'hypot'
+        ! sqrt(x^2 + y^2) with scaling to avoid overflow / underflow.
+        block
+            type(float64x2) :: ax, ay, big, small, ratio
+            if (x%limbs(1) < 0.0_dp .or. (x%limbs(1) == 0.0_dp .and. x%limbs(2) < 0.0_dp)) then
+                ax%limbs = -x%limbs
+            else
+                ax = x
+            end if
+            if (y%limbs(1) < 0.0_dp .or. (y%limbs(1) == 0.0_dp .and. y%limbs(2) < 0.0_dp)) then
+                ay%limbs = -y%limbs
+            else
+                ay = y
+            end if
+            if (ax > ay) then
+                big = ax
+                small = ay
+            else
+                big = ay
+                small = ax
+            end if
+            if (big%limbs(1) == 0.0_dp) then
+                res = MF_ZERO
+            else
+                ratio = small / big
+                res = big * mf_sqrt(MF_ONE + ratio * ratio)
+            end if
+        end block
+#:elif func == 'atan2'
+        ! atan2(a, b) with first-order correction.
+        ! d atan2(y, x)/dt = (x*dy - y*dx) / (x^2 + y^2)
+        ! Here a is the "y", b is the "x".
+        block
+            real(dp) :: ahi, bhi, fhi, denom, num, corr, s, bp
+            ahi = x%limbs(1)
+            bhi = y%limbs(1)
+            fhi = atan2(ahi, bhi)
+            denom = ahi * ahi + bhi * bhi
+            if (denom > 0.0_dp) then
+                num = bhi * x%limbs(2) - ahi * y%limbs(2)
+                corr = num / denom
+            else
+                corr = 0.0_dp
+            end if
+            s = fhi + corr
+            bp = s - fhi
+            res%limbs(1) = s
+            res%limbs(2) = corr - bp
+        end block
+#:elif func == 'nearest'
+        ! Approximate one DD ulp toward y on the leading limb only.
+        block
+            real(dp) :: hi, dir
+            hi = x%limbs(1)
+            if (y%limbs(1) > 0.0_dp) then
+                dir = huge(0.0_dp)
+            else
+                dir = -huge(0.0_dp)
+            end if
+            res%limbs(1) = nearest(hi, dir)
+            res%limbs(2) = 0.0_dp
+        end block
+#:endif
     end function
 
 #:endif
@@ -812,7 +1253,21 @@ contains
     elemental function mf_${func}$3(a, b, c) result(res)
         type(float64x2), intent(in) :: a, b, c
         type(float64x2) :: res
-        res = from_qp(${func}$(to_qp(a), to_qp(b), to_qp(c)))
+#:if func == 'min'
+        if (a < b) then
+            res = a
+        else
+            res = b
+        end if
+        if (c < res) res = c
+#:else
+        if (a > b) then
+            res = a
+        else
+            res = b
+        end if
+        if (c > res) res = c
+#:endif
     end function
 
 #:endfor
@@ -825,18 +1280,20 @@ contains
         integer, intent(in) :: n
         type(float64x2), intent(in) :: x
         type(float64x2) :: res
-        res = from_qp(${func}$(n, to_qp(x)))
+        ! Leading-limb only — no closed-form derivative for general bessel
+        ! orders without dragging in more special-function machinery.
+        res%limbs = [${func}$(n, x%limbs(1)), 0.0_dp]
     end function
 
     pure function mf_${func}$_range(n1, n2, x) result(res)
         integer, intent(in) :: n1, n2
         type(float64x2), intent(in) :: x
         type(float64x2) :: res(max(n2 - n1 + 1, 0))
-        real(qp) :: tmp(max(n2 - n1 + 1, 0))
+        real(dp) :: tmp(max(n2 - n1 + 1, 0))
         integer :: i
-        tmp = ${func}$(n1, n2, to_qp(x))
+        tmp = ${func}$(n1, n2, x%limbs(1))
         do i = 1, size(tmp)
-            res(i) = from_qp(tmp(i))
+            res(i)%limbs = [tmp(i), 0.0_dp]
         end do
     end function
 
@@ -850,7 +1307,23 @@ contains
         type(float64x2), intent(in) :: x
         integer, intent(in) :: i
         type(float64x2) :: res
-        res = from_qp(${func}$(to_qp(x), i))
+#:if func == 'scale'
+        ! scale(x, i) = x * 2^i — exact on dp limbs.
+        res%limbs(1) = scale(x%limbs(1), i)
+        res%limbs(2) = scale(x%limbs(2), i)
+#:else
+        ! set_exponent(x, i) = fraction(x) * 2^i.
+        block
+            integer :: e
+            if (x%limbs(1) == 0.0_dp) then
+                res%limbs = [0.0_dp, 0.0_dp]
+            else
+                e = exponent(x%limbs(1))
+                res%limbs(1) = scale(x%limbs(1), i - e)
+                res%limbs(2) = scale(x%limbs(2), i - e)
+            end if
+        end block
+#:endif
     end function
 
 #:endfor
@@ -913,19 +1386,32 @@ contains
     ! ================================================================
 
 #:for func in ARRAY_REDUCE_VAL
+#:set CMP_OP = '>' if func == 'maxval' else '<'
 #:for rank in range(1, MAX_RANK+1)
     pure function mf_${func}$_${rank}$d(array, mask) result(res)
         type(float64x2), intent(in) :: array(${COLONS(rank)}$)
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         type(float64x2) :: res
-        real(qp) :: tmp(${SIZES(rank)}$)
+        logical :: have
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        if (present(mask)) then
-            res = from_qp(${func}$(tmp, mask=mask))
-        else
-            res = from_qp(${func}$(tmp))
-        end if
+        have = .false.
+        ! Provide a deterministic default for empty / fully-masked input.
+        res = mf_from_dp(0.0_dp)
+#:for d in range(rank, 0, -1)
+        do i${d}$ = 1, size(array, ${d}$)
+#:endfor
+            if (present(mask)) then
+                if (.not. mask(${IDXS(rank)}$)) cycle
+            end if
+            if (.not. have) then
+                res = array(${IDXS(rank)}$)
+                have = .true.
+            else if (array(${IDXS(rank)}$) ${CMP_OP}$ res) then
+                res = array(${IDXS(rank)}$)
+            end if
+#:for d in range(rank)
+        end do
+#:endfor
     end function
 
 #:if rank == 1
@@ -934,13 +1420,10 @@ $:conv_loops(rank, 'array', 'tmp', 'to_qp')
         integer, intent(in) :: dim
         logical, intent(in), optional :: mask(:)
         type(float64x2) :: res
-        real(qp) :: tmp(size(array))
-        integer :: i1
-$:conv_loops(1, 'array', 'tmp', 'to_qp')
         if (present(mask)) then
-            res = from_qp(${func}$(tmp, dim=dim, mask=mask))
+            res = mf_${func}$_1d(array, mask=mask)
         else
-            res = from_qp(${func}$(tmp, dim=dim))
+            res = mf_${func}$_1d(array)
         end if
     end function
 #:else
@@ -949,16 +1432,34 @@ $:conv_loops(1, 'array', 'tmp', 'to_qp')
         integer, intent(in) :: dim
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         type(float64x2) :: res(${DIM_REDUCED_SIZES(rank)}$)
-        real(qp) :: tmp(${SIZES(rank)}$)
-        real(qp) :: tmp_res(${DIM_REDUCED_SIZES(rank)}$)
+        type(float64x2) :: cur
+        logical :: have
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        if (present(mask)) then
-            tmp_res = ${func}$(tmp, dim=dim, mask=mask)
-        else
-            tmp_res = ${func}$(tmp, dim=dim)
-        end if
-$:conv_loops(rank - 1, 'tmp_res', 'res', 'from_qp')
+        select case (dim)
+#:for d in range(1, rank+1)
+        case (${d}$)
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            do i${i}$ = 1, size(array, ${i}$)
+#:endfor
+                have = .false.
+                cur = mf_from_dp(0.0_dp)
+                do i${d}$ = 1, size(array, ${d}$)
+                    if (present(mask)) then
+                        if (.not. mask(${IDXS(rank)}$)) cycle
+                    end if
+                    if (.not. have) then
+                        cur = array(${IDXS(rank)}$)
+                        have = .true.
+                    else if (array(${IDXS(rank)}$) ${CMP_OP}$ cur) then
+                        cur = array(${IDXS(rank)}$)
+                    end if
+                end do
+                res(${OUT_IDXS(rank, d)}$) = cur
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            end do
+#:endfor
+#:endfor
+        end select
     end function
 #:endif
 
@@ -969,24 +1470,41 @@ $:conv_loops(rank - 1, 'tmp_res', 'res', 'from_qp')
     ! ================================================================
 
 #:for func in ARRAY_REDUCE_LOC
+#:set CMP_OP = '>' if func == 'maxloc' else '<'
+#:set CMP_STRICT = '>' if func == 'maxloc' else '<'
 #:for rank in range(1, MAX_RANK+1)
     pure function mf_${func}$_${rank}$d(array, mask, back) result(res)
         type(float64x2), intent(in) :: array(${COLONS(rank)}$)
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         logical, intent(in), optional :: back
         integer :: res(${rank}$)
-        real(qp) :: tmp(${SIZES(rank)}$)
+        type(float64x2) :: best
+        logical :: have, scan_back
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        if (present(mask) .and. present(back)) then
-            res = ${func}$(tmp, mask=mask, back=back)
-        else if (present(mask)) then
-            res = ${func}$(tmp, mask=mask)
-        else if (present(back)) then
-            res = ${func}$(tmp, back=back)
-        else
-            res = ${func}$(tmp)
-        end if
+        scan_back = .false.
+        if (present(back)) scan_back = back
+        have = .false.
+        best = mf_from_dp(0.0_dp)
+        res = 0
+#:for d in range(rank, 0, -1)
+        do i${d}$ = 1, size(array, ${d}$)
+#:endfor
+            if (present(mask)) then
+                if (.not. mask(${IDXS(rank)}$)) cycle
+            end if
+            if (.not. have) then
+                best = array(${IDXS(rank)}$)
+                res = [${IDXS(rank)}$]
+                have = .true.
+            else if (array(${IDXS(rank)}$) ${CMP_STRICT}$ best) then
+                best = array(${IDXS(rank)}$)
+                res = [${IDXS(rank)}$]
+            else if (scan_back .and. array(${IDXS(rank)}$) == best) then
+                res = [${IDXS(rank)}$]
+            end if
+#:for d in range(rank)
+        end do
+#:endfor
     end function
 
 #:if rank == 1
@@ -996,18 +1514,17 @@ $:conv_loops(rank, 'array', 'tmp', 'to_qp')
         logical, intent(in), optional :: mask(:)
         logical, intent(in), optional :: back
         integer :: res
-        real(qp) :: tmp(size(array))
-        integer :: i1
-$:conv_loops(1, 'array', 'tmp', 'to_qp')
+        integer :: r1(1)
         if (present(mask) .and. present(back)) then
-            res = ${func}$(tmp, dim=dim, mask=mask, back=back)
+            r1 = mf_${func}$_1d(array, mask=mask, back=back)
         else if (present(mask)) then
-            res = ${func}$(tmp, dim=dim, mask=mask)
+            r1 = mf_${func}$_1d(array, mask=mask)
         else if (present(back)) then
-            res = ${func}$(tmp, dim=dim, back=back)
+            r1 = mf_${func}$_1d(array, back=back)
         else
-            res = ${func}$(tmp, dim=dim)
+            r1 = mf_${func}$_1d(array)
         end if
+        res = r1(1)
     end function
 #:else
     pure function mf_${func}$_${rank}$d_dim(array, dim, mask, back) result(res)
@@ -1016,18 +1533,41 @@ $:conv_loops(1, 'array', 'tmp', 'to_qp')
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         logical, intent(in), optional :: back
         integer :: res(${DIM_REDUCED_SIZES(rank)}$)
-        real(qp) :: tmp(${SIZES(rank)}$)
-        integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        if (present(mask) .and. present(back)) then
-            res = ${func}$(tmp, dim=dim, mask=mask, back=back)
-        else if (present(mask)) then
-            res = ${func}$(tmp, dim=dim, mask=mask)
-        else if (present(back)) then
-            res = ${func}$(tmp, dim=dim, back=back)
-        else
-            res = ${func}$(tmp, dim=dim)
-        end if
+        type(float64x2) :: best
+        logical :: have, scan_back
+        integer :: ${IVARS(rank)}$, idx
+        scan_back = .false.
+        if (present(back)) scan_back = back
+        select case (dim)
+#:for d in range(1, rank+1)
+        case (${d}$)
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            do i${i}$ = 1, size(array, ${i}$)
+#:endfor
+                have = .false.
+                best = mf_from_dp(0.0_dp)
+                idx = 0
+                do i${d}$ = 1, size(array, ${d}$)
+                    if (present(mask)) then
+                        if (.not. mask(${IDXS(rank)}$)) cycle
+                    end if
+                    if (.not. have) then
+                        best = array(${IDXS(rank)}$)
+                        idx = i${d}$
+                        have = .true.
+                    else if (array(${IDXS(rank)}$) ${CMP_STRICT}$ best) then
+                        best = array(${IDXS(rank)}$)
+                        idx = i${d}$
+                    else if (scan_back .and. array(${IDXS(rank)}$) == best) then
+                        idx = i${d}$
+                    end if
+                end do
+                res(${OUT_IDXS(rank, d)}$) = idx
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            end do
+#:endfor
+#:endfor
+        end select
     end function
 #:endif
 
@@ -1038,20 +1578,26 @@ $:conv_loops(rank, 'array', 'tmp', 'to_qp')
     ! ================================================================
 
 #:for func in ARRAY_REDUCE_SUM
+#:set INIT_VAL = '0.0_dp' if func == 'sum' else '1.0_dp'
+#:set OP_SYM = '+' if func == 'sum' else '*'
 #:for rank in range(1, MAX_RANK+1)
     ! mf ${func}$ rank ${rank}$
     pure function mf_${func}$_${rank}$d(array, mask) result(res)
         type(float64x2), intent(in) :: array(${COLONS(rank)}$)
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         type(float64x2) :: res
-        real(qp) :: tmp(${SIZES(rank)}$)
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        if (present(mask)) then
-            res = from_qp(${func}$(tmp, mask=mask))
-        else
-            res = from_qp(${func}$(tmp))
-        end if
+        res = mf_from_dp(${INIT_VAL}$)
+#:for d in range(rank, 0, -1)
+        do i${d}$ = 1, size(array, ${d}$)
+#:endfor
+            if (present(mask)) then
+                if (.not. mask(${IDXS(rank)}$)) cycle
+            end if
+            res = res ${OP_SYM}$ array(${IDXS(rank)}$)
+#:for d in range(rank)
+        end do
+#:endfor
     end function
 
 #:if rank == 1
@@ -1060,13 +1606,10 @@ $:conv_loops(rank, 'array', 'tmp', 'to_qp')
         integer, intent(in) :: dim
         logical, intent(in), optional :: mask(:)
         type(float64x2) :: res
-        real(qp) :: tmp(size(array))
-        integer :: i1
-$:conv_loops(1, 'array', 'tmp', 'to_qp')
         if (present(mask)) then
-            res = from_qp(${func}$(tmp, dim=dim, mask=mask))
+            res = mf_${func}$_1d(array, mask=mask)
         else
-            res = from_qp(${func}$(tmp, dim=dim))
+            res = mf_${func}$_1d(array)
         end if
     end function
 #:else
@@ -1075,16 +1618,27 @@ $:conv_loops(1, 'array', 'tmp', 'to_qp')
         integer, intent(in) :: dim
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         type(float64x2) :: res(${DIM_REDUCED_SIZES(rank)}$)
-        real(qp) :: tmp(${SIZES(rank)}$)
-        real(qp) :: tmp_res(${DIM_REDUCED_SIZES(rank)}$)
+        type(float64x2) :: cur
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        if (present(mask)) then
-            tmp_res = ${func}$(tmp, dim=dim, mask=mask)
-        else
-            tmp_res = ${func}$(tmp, dim=dim)
-        end if
-$:conv_loops(rank - 1, 'tmp_res', 'res', 'from_qp')
+        select case (dim)
+#:for d in range(1, rank+1)
+        case (${d}$)
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            do i${i}$ = 1, size(array, ${i}$)
+#:endfor
+                cur = mf_from_dp(${INIT_VAL}$)
+                do i${d}$ = 1, size(array, ${d}$)
+                    if (present(mask)) then
+                        if (.not. mask(${IDXS(rank)}$)) cycle
+                    end if
+                    cur = cur ${OP_SYM}$ array(${IDXS(rank)}$)
+                end do
+                res(${OUT_IDXS(rank, d)}$) = cur
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            end do
+#:endfor
+#:endfor
+        end select
     end function
 #:endif
 
@@ -1093,14 +1647,27 @@ $:conv_loops(rank - 1, 'tmp_res', 'res', 'from_qp')
         type(complex128x2), intent(in) :: array(${COLONS(rank)}$)
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         type(complex128x2) :: res
-        complex(qp) :: tmp(${SIZES(rank)}$)
+        type(float64x2) :: zero, one
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_cqp')
-        if (present(mask)) then
-            res = from_cqp(${func}$(tmp, mask=mask))
-        else
-            res = from_cqp(${func}$(tmp))
-        end if
+        zero = mf_from_dp(0.0_dp)
+        one = mf_from_dp(1.0_dp)
+#:if func == 'sum'
+        res%re = zero
+        res%im = zero
+#:else
+        res%re = one
+        res%im = zero
+#:endif
+#:for d in range(rank, 0, -1)
+        do i${d}$ = 1, size(array, ${d}$)
+#:endfor
+            if (present(mask)) then
+                if (.not. mask(${IDXS(rank)}$)) cycle
+            end if
+            res = res ${OP_SYM}$ array(${IDXS(rank)}$)
+#:for d in range(rank)
+        end do
+#:endfor
     end function
 
 #:if rank == 1
@@ -1109,13 +1676,10 @@ $:conv_loops(rank, 'array', 'tmp', 'to_cqp')
         integer, intent(in) :: dim
         logical, intent(in), optional :: mask(:)
         type(complex128x2) :: res
-        complex(qp) :: tmp(size(array))
-        integer :: i1
-$:conv_loops(1, 'array', 'tmp', 'to_cqp')
         if (present(mask)) then
-            res = from_cqp(${func}$(tmp, dim=dim, mask=mask))
+            res = cx_${func}$_1d(array, mask=mask)
         else
-            res = from_cqp(${func}$(tmp, dim=dim))
+            res = cx_${func}$_1d(array)
         end if
     end function
 #:else
@@ -1124,16 +1688,36 @@ $:conv_loops(1, 'array', 'tmp', 'to_cqp')
         integer, intent(in) :: dim
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         type(complex128x2) :: res(${DIM_REDUCED_SIZES(rank)}$)
-        complex(qp) :: tmp(${SIZES(rank)}$)
-        complex(qp) :: tmp_res(${DIM_REDUCED_SIZES(rank)}$)
+        type(complex128x2) :: cur
+        type(float64x2) :: zero, one
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_cqp')
-        if (present(mask)) then
-            tmp_res = ${func}$(tmp, dim=dim, mask=mask)
-        else
-            tmp_res = ${func}$(tmp, dim=dim)
-        end if
-$:conv_loops(rank - 1, 'tmp_res', 'res', 'from_cqp')
+        zero = mf_from_dp(0.0_dp)
+        one = mf_from_dp(1.0_dp)
+        select case (dim)
+#:for d in range(1, rank+1)
+        case (${d}$)
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            do i${i}$ = 1, size(array, ${i}$)
+#:endfor
+#:if func == 'sum'
+                cur%re = zero
+                cur%im = zero
+#:else
+                cur%re = one
+                cur%im = zero
+#:endif
+                do i${d}$ = 1, size(array, ${d}$)
+                    if (present(mask)) then
+                        if (.not. mask(${IDXS(rank)}$)) cycle
+                    end if
+                    cur = cur ${OP_SYM}$ array(${IDXS(rank)}$)
+                end do
+                res(${OUT_IDXS(rank, d)}$) = cur
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            end do
+#:endfor
+#:endfor
+        end select
     end function
 #:endif
 
@@ -1146,29 +1730,25 @@ $:conv_loops(rank - 1, 'tmp_res', 'res', 'from_cqp')
     pure function mf_dot_product(a, b) result(res)
         type(float64x2), intent(in) :: a(:), b(:)
         type(float64x2) :: res
-        real(qp) :: qa(size(a)), qb(size(b))
         integer :: i1
+        res = mf_from_dp(0.0_dp)
         do i1 = 1, size(a)
-            qa(i1) = to_qp(a(i1))
+            res = res + a(i1) * b(i1)
         end do
-        do i1 = 1, size(b)
-            qb(i1) = to_qp(b(i1))
-        end do
-        res = from_qp(dot_product(qa, qb))
     end function
 
     pure function cx_dot_product(a, b) result(res)
         type(complex128x2), intent(in) :: a(:), b(:)
         type(complex128x2) :: res
-        complex(qp) :: qa(size(a)), qb(size(b))
+        type(float64x2) :: zero
         integer :: i1
+        zero = mf_from_dp(0.0_dp)
+        res%re = zero
+        res%im = zero
+        ! Standard Fortran dot_product conjugates the first argument.
         do i1 = 1, size(a)
-            qa(i1) = to_cqp(a(i1))
+            res = res + cx_conjg(a(i1)) * b(i1)
         end do
-        do i1 = 1, size(b)
-            qb(i1) = to_cqp(b(i1))
-        end do
-        res = from_cqp(dot_product(qa, qb))
     end function
 
     ! ================================================================
@@ -1179,10 +1759,17 @@ $:conv_loops(rank - 1, 'tmp_res', 'res', 'from_cqp')
     pure function mf_norm2_${rank}$d(array) result(res)
         type(float64x2), intent(in) :: array(${COLONS(rank)}$)
         type(float64x2) :: res
-        real(qp) :: tmp(${SIZES(rank)}$)
+        type(float64x2) :: s
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        res = from_qp(norm2(tmp))
+        s = mf_from_dp(0.0_dp)
+#:for d in range(rank, 0, -1)
+        do i${d}$ = 1, size(array, ${d}$)
+#:endfor
+            s = s + array(${IDXS(rank)}$) * array(${IDXS(rank)}$)
+#:for d in range(rank)
+        end do
+#:endfor
+        res = mf_sqrt(s)
     end function
 
 #:if rank > 1
@@ -1190,12 +1777,24 @@ $:conv_loops(rank, 'array', 'tmp', 'to_qp')
         type(float64x2), intent(in) :: array(${COLONS(rank)}$)
         integer, intent(in) :: dim
         type(float64x2) :: res(${DIM_REDUCED_SIZES(rank)}$)
-        real(qp) :: tmp(${SIZES(rank)}$)
-        real(qp) :: tmp_res(${DIM_REDUCED_SIZES(rank)}$)
+        type(float64x2) :: cur
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        tmp_res = norm2(tmp, dim=dim)
-$:conv_loops(rank - 1, 'tmp_res', 'res', 'from_qp')
+        select case (dim)
+#:for d in range(1, rank+1)
+        case (${d}$)
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            do i${i}$ = 1, size(array, ${i}$)
+#:endfor
+                cur = mf_from_dp(0.0_dp)
+                do i${d}$ = 1, size(array, ${d}$)
+                    cur = cur + array(${IDXS(rank)}$) * array(${IDXS(rank)}$)
+                end do
+                res(${OUT_IDXS(rank, d)}$) = mf_sqrt(cur)
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            end do
+#:endfor
+#:endfor
+        end select
     end function
 #:endif
 
@@ -1212,18 +1811,26 @@ $:conv_loops(rank - 1, 'tmp_res', 'res', 'from_qp')
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         logical, intent(in), optional :: back
         integer :: res(${rank}$)
-        real(qp) :: tmp(${SIZES(rank)}$)
+        logical :: scan_back, found
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        if (present(mask) .and. present(back)) then
-            res = findloc(tmp, to_qp(value), mask=mask, back=back)
-        else if (present(mask)) then
-            res = findloc(tmp, to_qp(value), mask=mask)
-        else if (present(back)) then
-            res = findloc(tmp, to_qp(value), back=back)
-        else
-            res = findloc(tmp, to_qp(value))
-        end if
+        scan_back = .false.
+        if (present(back)) scan_back = back
+        res = 0
+        found = .false.
+#:for d in range(rank, 0, -1)
+        do i${d}$ = 1, size(array, ${d}$)
+#:endfor
+            if (present(mask)) then
+                if (.not. mask(${IDXS(rank)}$)) cycle
+            end if
+            if (array(${IDXS(rank)}$) == value) then
+                res = [${IDXS(rank)}$]
+                found = .true.
+                if (.not. scan_back) return
+            end if
+#:for d in range(rank)
+        end do
+#:endfor
     end function
 
 #:if rank == 1
@@ -1234,18 +1841,17 @@ $:conv_loops(rank, 'array', 'tmp', 'to_qp')
         logical, intent(in), optional :: mask(:)
         logical, intent(in), optional :: back
         integer :: res
-        real(qp) :: tmp(size(array))
-        integer :: i1
-$:conv_loops(1, 'array', 'tmp', 'to_qp')
+        integer :: r1(1)
         if (present(mask) .and. present(back)) then
-            res = findloc(tmp, to_qp(value), dim=dim, mask=mask, back=back)
+            r1 = mf_findloc_1d(array, value, mask=mask, back=back)
         else if (present(mask)) then
-            res = findloc(tmp, to_qp(value), dim=dim, mask=mask)
+            r1 = mf_findloc_1d(array, value, mask=mask)
         else if (present(back)) then
-            res = findloc(tmp, to_qp(value), dim=dim, back=back)
+            r1 = mf_findloc_1d(array, value, back=back)
         else
-            res = findloc(tmp, to_qp(value), dim=dim)
+            r1 = mf_findloc_1d(array, value)
         end if
+        res = r1(1)
     end function
 #:else
     pure function mf_findloc_${rank}$d_dim(array, value, dim, mask, back) result(res)
@@ -1255,18 +1861,34 @@ $:conv_loops(1, 'array', 'tmp', 'to_qp')
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         logical, intent(in), optional :: back
         integer :: res(${DIM_REDUCED_SIZES(rank)}$)
-        real(qp) :: tmp(${SIZES(rank)}$)
-        integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_qp')
-        if (present(mask) .and. present(back)) then
-            res = findloc(tmp, to_qp(value), dim=dim, mask=mask, back=back)
-        else if (present(mask)) then
-            res = findloc(tmp, to_qp(value), dim=dim, mask=mask)
-        else if (present(back)) then
-            res = findloc(tmp, to_qp(value), dim=dim, back=back)
-        else
-            res = findloc(tmp, to_qp(value), dim=dim)
-        end if
+        logical :: scan_back, found
+        integer :: ${IVARS(rank)}$, idx
+        scan_back = .false.
+        if (present(back)) scan_back = back
+        select case (dim)
+#:for d in range(1, rank+1)
+        case (${d}$)
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            do i${i}$ = 1, size(array, ${i}$)
+#:endfor
+                idx = 0
+                found = .false.
+                do i${d}$ = 1, size(array, ${d}$)
+                    if (present(mask)) then
+                        if (.not. mask(${IDXS(rank)}$)) cycle
+                    end if
+                    if (array(${IDXS(rank)}$) == value) then
+                        idx = i${d}$
+                        found = .true.
+                        if (.not. scan_back) exit
+                    end if
+                end do
+                res(${OUT_IDXS(rank, d)}$) = idx
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            end do
+#:endfor
+#:endfor
+        end select
     end function
 #:endif
 
@@ -1277,18 +1899,26 @@ $:conv_loops(rank, 'array', 'tmp', 'to_qp')
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         logical, intent(in), optional :: back
         integer :: res(${rank}$)
-        complex(qp) :: tmp(${SIZES(rank)}$)
+        logical :: scan_back, found
         integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_cqp')
-        if (present(mask) .and. present(back)) then
-            res = findloc(tmp, to_cqp(value), mask=mask, back=back)
-        else if (present(mask)) then
-            res = findloc(tmp, to_cqp(value), mask=mask)
-        else if (present(back)) then
-            res = findloc(tmp, to_cqp(value), back=back)
-        else
-            res = findloc(tmp, to_cqp(value))
-        end if
+        scan_back = .false.
+        if (present(back)) scan_back = back
+        res = 0
+        found = .false.
+#:for d in range(rank, 0, -1)
+        do i${d}$ = 1, size(array, ${d}$)
+#:endfor
+            if (present(mask)) then
+                if (.not. mask(${IDXS(rank)}$)) cycle
+            end if
+            if (array(${IDXS(rank)}$) == value) then
+                res = [${IDXS(rank)}$]
+                found = .true.
+                if (.not. scan_back) return
+            end if
+#:for d in range(rank)
+        end do
+#:endfor
     end function
 
 #:if rank == 1
@@ -1299,18 +1929,17 @@ $:conv_loops(rank, 'array', 'tmp', 'to_cqp')
         logical, intent(in), optional :: mask(:)
         logical, intent(in), optional :: back
         integer :: res
-        complex(qp) :: tmp(size(array))
-        integer :: i1
-$:conv_loops(1, 'array', 'tmp', 'to_cqp')
+        integer :: r1(1)
         if (present(mask) .and. present(back)) then
-            res = findloc(tmp, to_cqp(value), dim=dim, mask=mask, back=back)
+            r1 = cx_findloc_1d(array, value, mask=mask, back=back)
         else if (present(mask)) then
-            res = findloc(tmp, to_cqp(value), dim=dim, mask=mask)
+            r1 = cx_findloc_1d(array, value, mask=mask)
         else if (present(back)) then
-            res = findloc(tmp, to_cqp(value), dim=dim, back=back)
+            r1 = cx_findloc_1d(array, value, back=back)
         else
-            res = findloc(tmp, to_cqp(value), dim=dim)
+            r1 = cx_findloc_1d(array, value)
         end if
+        res = r1(1)
     end function
 #:else
     pure function cx_findloc_${rank}$d_dim(array, value, dim, mask, back) result(res)
@@ -1320,18 +1949,34 @@ $:conv_loops(1, 'array', 'tmp', 'to_cqp')
         logical, intent(in), optional :: mask(${COLONS(rank)}$)
         logical, intent(in), optional :: back
         integer :: res(${DIM_REDUCED_SIZES(rank)}$)
-        complex(qp) :: tmp(${SIZES(rank)}$)
-        integer :: ${IVARS(rank)}$
-$:conv_loops(rank, 'array', 'tmp', 'to_cqp')
-        if (present(mask) .and. present(back)) then
-            res = findloc(tmp, to_cqp(value), dim=dim, mask=mask, back=back)
-        else if (present(mask)) then
-            res = findloc(tmp, to_cqp(value), dim=dim, mask=mask)
-        else if (present(back)) then
-            res = findloc(tmp, to_cqp(value), dim=dim, back=back)
-        else
-            res = findloc(tmp, to_cqp(value), dim=dim)
-        end if
+        logical :: scan_back, found
+        integer :: ${IVARS(rank)}$, idx
+        scan_back = .false.
+        if (present(back)) scan_back = back
+        select case (dim)
+#:for d in range(1, rank+1)
+        case (${d}$)
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            do i${i}$ = 1, size(array, ${i}$)
+#:endfor
+                idx = 0
+                found = .false.
+                do i${d}$ = 1, size(array, ${d}$)
+                    if (present(mask)) then
+                        if (.not. mask(${IDXS(rank)}$)) cycle
+                    end if
+                    if (array(${IDXS(rank)}$) == value) then
+                        idx = i${d}$
+                        found = .true.
+                        if (.not. scan_back) exit
+                    end if
+                end do
+                res(${OUT_IDXS(rank, d)}$) = idx
+#:for i in [j for j in range(rank, 0, -1) if j != d]
+            end do
+#:endfor
+#:endfor
+        end select
     end function
 #:endif
 
@@ -1344,23 +1989,15 @@ $:conv_loops(rank, 'array', 'tmp', 'to_cqp')
     pure function mf_matmul_mm(a, b) result(res)
         type(float64x2), intent(in) :: a(:,:), b(:,:)
         type(float64x2) :: res(size(a,1), size(b,2))
-        real(qp) :: qa(size(a,1), size(a,2)), qb(size(b,1), size(b,2))
-        real(qp) :: qr(size(a,1), size(b,2))
-        integer :: i1, i2
-        do i2 = 1, size(a,2)
-            do i1 = 1, size(a,1)
-                qa(i1,i2) = to_qp(a(i1,i2))
-            end do
-        end do
+        type(float64x2) :: s
+        integer :: i1, i2, k
         do i2 = 1, size(b,2)
-            do i1 = 1, size(b,1)
-                qb(i1,i2) = to_qp(b(i1,i2))
-            end do
-        end do
-        qr = matmul(qa, qb)
-        do i2 = 1, size(res,2)
-            do i1 = 1, size(res,1)
-                res(i1,i2) = from_qp(qr(i1,i2))
+            do i1 = 1, size(a,1)
+                s = mf_from_dp(0.0_dp)
+                do k = 1, size(a,2)
+                    s = s + a(i1,k) * b(k,i2)
+                end do
+                res(i1,i2) = s
             end do
         end do
     end function
@@ -1369,20 +2006,14 @@ $:conv_loops(rank, 'array', 'tmp', 'to_cqp')
     pure function mf_matmul_mv(a, b) result(res)
         type(float64x2), intent(in) :: a(:,:), b(:)
         type(float64x2) :: res(size(a,1))
-        real(qp) :: qa(size(a,1), size(a,2)), qb(size(b))
-        real(qp) :: qr(size(a,1))
-        integer :: i1, i2
-        do i2 = 1, size(a,2)
-            do i1 = 1, size(a,1)
-                qa(i1,i2) = to_qp(a(i1,i2))
+        type(float64x2) :: s
+        integer :: i1, k
+        do i1 = 1, size(a,1)
+            s = mf_from_dp(0.0_dp)
+            do k = 1, size(a,2)
+                s = s + a(i1,k) * b(k)
             end do
-        end do
-        do i1 = 1, size(b)
-            qb(i1) = to_qp(b(i1))
-        end do
-        qr = matmul(qa, qb)
-        do i1 = 1, size(res)
-            res(i1) = from_qp(qr(i1))
+            res(i1) = s
         end do
     end function
 
@@ -1390,20 +2021,14 @@ $:conv_loops(rank, 'array', 'tmp', 'to_cqp')
     pure function mf_matmul_vm(a, b) result(res)
         type(float64x2), intent(in) :: a(:), b(:,:)
         type(float64x2) :: res(size(b,2))
-        real(qp) :: qa(size(a)), qb(size(b,1), size(b,2))
-        real(qp) :: qr(size(b,2))
-        integer :: i1, i2
-        do i1 = 1, size(a)
-            qa(i1) = to_qp(a(i1))
-        end do
+        type(float64x2) :: s
+        integer :: i2, k
         do i2 = 1, size(b,2)
-            do i1 = 1, size(b,1)
-                qb(i1,i2) = to_qp(b(i1,i2))
+            s = mf_from_dp(0.0_dp)
+            do k = 1, size(a)
+                s = s + a(k) * b(k,i2)
             end do
-        end do
-        qr = matmul(qa, qb)
-        do i1 = 1, size(res)
-            res(i1) = from_qp(qr(i1))
+            res(i2) = s
         end do
     end function
 
@@ -1411,23 +2036,18 @@ $:conv_loops(rank, 'array', 'tmp', 'to_cqp')
     pure function cx_matmul_mm(a, b) result(res)
         type(complex128x2), intent(in) :: a(:,:), b(:,:)
         type(complex128x2) :: res(size(a,1), size(b,2))
-        complex(qp) :: qa(size(a,1), size(a,2)), qb(size(b,1), size(b,2))
-        complex(qp) :: qr(size(a,1), size(b,2))
-        integer :: i1, i2
-        do i2 = 1, size(a,2)
-            do i1 = 1, size(a,1)
-                qa(i1,i2) = to_cqp(a(i1,i2))
-            end do
-        end do
+        type(complex128x2) :: s
+        type(float64x2) :: zero
+        integer :: i1, i2, k
+        zero = mf_from_dp(0.0_dp)
         do i2 = 1, size(b,2)
-            do i1 = 1, size(b,1)
-                qb(i1,i2) = to_cqp(b(i1,i2))
-            end do
-        end do
-        qr = matmul(qa, qb)
-        do i2 = 1, size(res,2)
-            do i1 = 1, size(res,1)
-                res(i1,i2) = from_cqp(qr(i1,i2))
+            do i1 = 1, size(a,1)
+                s%re = zero
+                s%im = zero
+                do k = 1, size(a,2)
+                    s = s + a(i1,k) * b(k,i2)
+                end do
+                res(i1,i2) = s
             end do
         end do
     end function
@@ -1436,20 +2056,17 @@ $:conv_loops(rank, 'array', 'tmp', 'to_cqp')
     pure function cx_matmul_mv(a, b) result(res)
         type(complex128x2), intent(in) :: a(:,:), b(:)
         type(complex128x2) :: res(size(a,1))
-        complex(qp) :: qa(size(a,1), size(a,2)), qb(size(b))
-        complex(qp) :: qr(size(a,1))
-        integer :: i1, i2
-        do i2 = 1, size(a,2)
-            do i1 = 1, size(a,1)
-                qa(i1,i2) = to_cqp(a(i1,i2))
+        type(complex128x2) :: s
+        type(float64x2) :: zero
+        integer :: i1, k
+        zero = mf_from_dp(0.0_dp)
+        do i1 = 1, size(a,1)
+            s%re = zero
+            s%im = zero
+            do k = 1, size(a,2)
+                s = s + a(i1,k) * b(k)
             end do
-        end do
-        do i1 = 1, size(b)
-            qb(i1) = to_cqp(b(i1))
-        end do
-        qr = matmul(qa, qb)
-        do i1 = 1, size(res)
-            res(i1) = from_cqp(qr(i1))
+            res(i1) = s
         end do
     end function
 
@@ -1457,20 +2074,17 @@ $:conv_loops(rank, 'array', 'tmp', 'to_cqp')
     pure function cx_matmul_vm(a, b) result(res)
         type(complex128x2), intent(in) :: a(:), b(:,:)
         type(complex128x2) :: res(size(b,2))
-        complex(qp) :: qa(size(a)), qb(size(b,1), size(b,2))
-        complex(qp) :: qr(size(b,2))
-        integer :: i1, i2
-        do i1 = 1, size(a)
-            qa(i1) = to_cqp(a(i1))
-        end do
+        type(complex128x2) :: s
+        type(float64x2) :: zero
+        integer :: i2, k
+        zero = mf_from_dp(0.0_dp)
         do i2 = 1, size(b,2)
-            do i1 = 1, size(b,1)
-                qb(i1,i2) = to_cqp(b(i1,i2))
+            s%re = zero
+            s%im = zero
+            do k = 1, size(a)
+                s = s + a(k) * b(k,i2)
             end do
-        end do
-        qr = matmul(qa, qb)
-        do i1 = 1, size(res)
-            res(i1) = from_cqp(qr(i1))
+            res(i2) = s
         end do
     end function
 
@@ -1480,18 +2094,37 @@ $:conv_loops(rank, 'array', 'tmp', 'to_cqp')
 
     subroutine mf_random_number_0d(harvest)
         type(float64x2), intent(out) :: harvest
-        real(qp) :: tmp
-        call random_number(tmp)
-        harvest = from_qp(tmp)
+        real(dp) :: hi, lo, s, b
+        call random_number(hi)
+        call random_number(lo)
+        ! Pack two independent dp randoms into a DD: hi gets ~53 bits in [0,1),
+        ! lo contributes ~53 more bits below hi's ulp.
+        lo = lo * 2.0_dp**(-53)
+        s = hi + lo
+        b = s - hi
+        harvest%limbs(1) = s
+        harvest%limbs(2) = lo - b
     end subroutine
 
 #:for rank in range(1, MAX_RANK+1)
     subroutine mf_random_number_${rank}$d(harvest)
         type(float64x2), intent(out) :: harvest(${COLONS(rank)}$)
-        real(qp) :: tmp(${SIZES(rank, 'harvest')}$)
+        real(dp) :: hi(${SIZES(rank, 'harvest')}$), lo(${SIZES(rank, 'harvest')}$)
+        real(dp) :: s, b
         integer :: ${IVARS(rank)}$
-        call random_number(tmp)
-$:conv_loops(rank, 'tmp', 'harvest', 'from_qp')
+        call random_number(hi)
+        call random_number(lo)
+        lo = lo * 2.0_dp**(-53)
+#:for d in range(rank, 0, -1)
+        do i${d}$ = 1, size(harvest, ${d}$)
+#:endfor
+            s = hi(${IDXS(rank)}$) + lo(${IDXS(rank)}$)
+            b = s - hi(${IDXS(rank)}$)
+            harvest(${IDXS(rank)}$)%limbs(1) = s
+            harvest(${IDXS(rank)}$)%limbs(2) = lo(${IDXS(rank)}$) - b
+#:for d in range(rank)
+        end do
+#:endfor
     end subroutine
 
 #:endfor
@@ -1518,73 +2151,98 @@ $:conv_loops(rank, 'tmp', 'harvest', 'from_qp')
 #:if opname == 'sub'
         y%limbs = -y%limbs
 #:endif
-        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(x%limbs(2)) .and. &
-     &             ieee_is_finite(y%limbs(1)) .and. ieee_is_finite(y%limbs(2)))) then
-            res = from_qp(to_qp(x) ${'+' if opname == 'add' else '-'}$ to_qp(${MFCONV[n2].format('b')}$))
-        else
-            s = x%limbs(1) + y%limbs(1)
-            aprime = s - y%limbs(1)
-            bprime = s - aprime
-            aerr = x%limbs(1) - aprime
-            berr = y%limbs(1) - bprime
-            e = aerr + berr
-            c = x%limbs(2) + y%limbs(2)
-            aprime = c - y%limbs(2)
-            bprime = c - aprime
-            aerr = x%limbs(2) - aprime
-            berr = y%limbs(2) - bprime
-            d = aerr + berr
-            t = s + c
-            bprime = t - s
-            c = c - bprime
-            e = e + d + c
-            res%limbs(1) = t + e
-            bprime = res%limbs(1) - t
-            res%limbs(2) = e - bprime
+        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(y%limbs(1)))) then
+            ! IEEE handles inf/nan correctly on the leading limbs; the
+            ! EFT kernel below would otherwise contaminate them with NaN.
+            res%limbs(1) = x%limbs(1) + y%limbs(1)
+            res%limbs(2) = 0.0_dp
+            return
         end if
+        s = x%limbs(1) + y%limbs(1)
+        aprime = s - y%limbs(1)
+        bprime = s - aprime
+        aerr = x%limbs(1) - aprime
+        berr = y%limbs(1) - bprime
+        e = aerr + berr
+        c = x%limbs(2) + y%limbs(2)
+        aprime = c - y%limbs(2)
+        bprime = c - aprime
+        aerr = x%limbs(2) - aprime
+        berr = y%limbs(2) - bprime
+        d = aerr + berr
+        t = s + c
+        bprime = t - s
+        c = c - bprime
+        e = e + d + c
+        res%limbs(1) = t + e
+        bprime = res%limbs(1) - t
+        res%limbs(2) = e - bprime
 #:elif opname == 'mul'
-        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(x%limbs(2)) .and. &
-     &             ieee_is_finite(y%limbs(1)) .and. ieee_is_finite(y%limbs(2)))) then
-            res = from_qp(to_qp(x) * to_qp(y))
-        else
-            p00 = x%limbs(1) * y%limbs(1)
-            e00 = ieee_fma(x%limbs(1), y%limbs(1), -p00)
-            p01 = x%limbs(1) * y%limbs(2)
-            p10 = x%limbs(2) * y%limbs(1)
-            e00 = e00 + (p01 + p10)
-            res%limbs(1) = p00 + e00
-            bprime = res%limbs(1) - p00
-            res%limbs(2) = e00 - bprime
+        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(y%limbs(1)))) then
+            res%limbs(1) = x%limbs(1) * y%limbs(1)
+            res%limbs(2) = 0.0_dp
+            return
         end if
+        p00 = x%limbs(1) * y%limbs(1)
+        e00 = ieee_fma(x%limbs(1), y%limbs(1), -p00)
+        p01 = x%limbs(1) * y%limbs(2)
+        p10 = x%limbs(2) * y%limbs(1)
+        e00 = e00 + (p01 + p10)
+        res%limbs(1) = p00 + e00
+        bprime = res%limbs(1) - p00
+        res%limbs(2) = e00 - bprime
 #:else
-        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(x%limbs(2)) .and. &
-     &             ieee_is_finite(y%limbs(1)) .and. ieee_is_finite(y%limbs(2))) .or. y%limbs(1) == 0.0_dp) then
-            res = from_qp(to_qp(x) / to_qp(y))
-        else
-            u = mf_from_dp(1.0_dp / y%limbs(1))
-            p00 = x%limbs(1) * u%limbs(1)
-            e00 = ieee_fma(x%limbs(1), u%limbs(1), -p00) + x%limbs(1) * u%limbs(2) + x%limbs(2) * u%limbs(1)
-            q%limbs(1) = p00 + e00
-            bprime = q%limbs(1) - p00
-            q%limbs(2) = e00 - bprime
-            p00 = q%limbs(1) * y%limbs(1)
-            e00 = ieee_fma(q%limbs(1), y%limbs(1), -p00) + q%limbs(1) * y%limbs(2) + q%limbs(2) * y%limbs(1)
-            correction%limbs(1) = p00 + e00
-            bprime = correction%limbs(1) - p00
-            correction%limbs(2) = e00 - bprime
-            ! residual = q*y - x  (sign chosen so that the final step is q - residual*u,
-            ! matching the Newton update q' = q + (x - q*y)*u).
-            residual = correction - x
-            p00 = residual%limbs(1) * u%limbs(1)
-            e00 = ieee_fma(residual%limbs(1), u%limbs(1), -p00) + residual%limbs(1) * u%limbs(2) + residual%limbs(2) * u%limbs(1)
-            correction%limbs(1) = p00 + e00
-            bprime = correction%limbs(1) - p00
-            correction%limbs(2) = e00 - bprime
-            res = q - correction
+        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(y%limbs(1))) &
+     &      .or. y%limbs(1) == 0.0_dp) then
+            res%limbs(1) = x%limbs(1) / y%limbs(1)
+            res%limbs(2) = 0.0_dp
+            return
         end if
+        u = mf_from_dp(1.0_dp / y%limbs(1))
+        p00 = x%limbs(1) * u%limbs(1)
+        e00 = ieee_fma(x%limbs(1), u%limbs(1), -p00) + x%limbs(1) * u%limbs(2) + x%limbs(2) * u%limbs(1)
+        q%limbs(1) = p00 + e00
+        bprime = q%limbs(1) - p00
+        q%limbs(2) = e00 - bprime
+        p00 = q%limbs(1) * y%limbs(1)
+        e00 = ieee_fma(q%limbs(1), y%limbs(1), -p00) + q%limbs(1) * y%limbs(2) + q%limbs(2) * y%limbs(1)
+        correction%limbs(1) = p00 + e00
+        bprime = correction%limbs(1) - p00
+        correction%limbs(2) = e00 - bprime
+        ! residual = q*y - x  (sign chosen so that the final step is q - residual*u,
+        ! matching the Newton update q' = q + (x - q*y)*u).
+        residual = correction - x
+        p00 = residual%limbs(1) * u%limbs(1)
+        e00 = ieee_fma(residual%limbs(1), u%limbs(1), -p00) + residual%limbs(1) * u%limbs(2) + residual%limbs(2) * u%limbs(1)
+        correction%limbs(1) = p00 + e00
+        bprime = correction%limbs(1) - p00
+        correction%limbs(2) = e00 - bprime
+        res = q - correction
 #:endif
 #:else
-        res = ${'from_cqp' if rc else 'from_qp'}$(${CONV[n1].format('a')}$ ${opsym}$ ${CONV[n2].format('b')}$)
+        ! Complex result: use native DD complex arithmetic. Lift any
+        ! non-complex operand to a complex128x2 via the assignment overloads
+        ! and then do the operation in (a.re, a.im) form.
+        block
+            type(complex128x2) :: ca, cb
+            type(float64x2) :: denom
+            ca = a
+            cb = b
+#:if opname == 'add'
+            res%re = ca%re + cb%re
+            res%im = ca%im + cb%im
+#:elif opname == 'sub'
+            res%re = ca%re - cb%re
+            res%im = ca%im - cb%im
+#:elif opname == 'mul'
+            res%re = ca%re * cb%re - ca%im * cb%im
+            res%im = ca%re * cb%im + ca%im * cb%re
+#:else
+            denom = cb%re * cb%re + cb%im * cb%im
+            res%re = (ca%re * cb%re + ca%im * cb%im) / denom
+            res%im = (ca%im * cb%re - ca%re * cb%im) / denom
+#:endif
+        end block
 #:endif
     end function
 
@@ -1593,7 +2251,7 @@ $:conv_loops(rank, 'tmp', 'harvest', 'from_qp')
 #:endfor
 #:endfor
     ! ================================================================
-    ! Power operator (**) ��� elemental
+    ! Power operator (**) — elemental
     ! ================================================================
 
 #:for n1, d1 in ATYPES
@@ -1605,9 +2263,52 @@ $:conv_loops(rank, 'tmp', 'harvest', 'from_qp')
         ${d2}$, intent(in) :: b
         ${'type(complex128x2)' if rc else 'type(float64x2)'}$ :: res
 #:if n2 == 'int'
-        res = ${'from_cqp' if rc else 'from_qp'}$(${CONV[n1].format('a')}$ ** b)
+#:if rc
+        ! Integer-power on a complex base via repeated multiplication.
+        block
+            type(complex128x2) :: base
+            integer :: k, n
+            base = a
+            res%re = MF_ONE
+            res%im%limbs = [0.0_dp, 0.0_dp]
+            n = abs(b)
+            do k = 1, n
+                res = res * base
+            end do
+            if (b < 0) then
+                res = complex128x2(MF_ONE, mf_from_dp(0.0_dp)) / res
+            end if
+        end block
 #:else
-        res = ${'from_cqp' if rc else 'from_qp'}$(${CONV[n1].format('a')}$ ** ${CONV[n2].format('b')}$)
+        ! Integer-power on a real base via repeated multiplication.
+        block
+            type(float64x2) :: base
+            integer :: k, n
+            base = a
+            res = MF_ONE
+            n = abs(b)
+            do k = 1, n
+                res = res * base
+            end do
+            if (b < 0) res = MF_ONE / res
+        end block
+#:endif
+#:elif rc
+        ! General complex power: a^b = exp(b * log(a))
+        block
+            type(complex128x2) :: ca, cb
+            ca = a
+            cb = b
+            res = cx_exp(cb * cx_log(ca))
+        end block
+#:else
+        ! General real power: a^b = exp(b * log(a))
+        block
+            type(float64x2) :: x, y
+            x = a
+            y = b
+            res = mf_exp(y * mf_log(x))
+        end block
 #:endif
     end function
 
@@ -1636,7 +2337,17 @@ $:conv_loops(rank, 'tmp', 'harvest', 'from_qp')
         res = x%limbs(1) /= y%limbs(1) .or. x%limbs(2) /= y%limbs(2)
 #:endif
 #:else
-        res = ${CONV[n1].format('a')}$ ${opsym}$ ${CONV[n2].format('b')}$
+        ! Complex (in)equality: compare real and imaginary parts in native DD.
+        block
+            type(complex128x2) :: ca, cb
+            ca = a
+            cb = b
+#:if opname == 'eq'
+            res = (ca%re == cb%re) .and. (ca%im == cb%im)
+#:else
+            res = (ca%re /= cb%re) .or. (ca%im /= cb%im)
+#:endif
+        end block
 #:endif
     end function
 

@@ -85,9 +85,10 @@ contains
     character(*), intent(in) :: msg
     real(16) :: qa
     qa = real(a%limbs(1), 16) + real(a%limbs(2), 16)
-    ! Transcendentals are computed via qp internally; allow ~1e-30 relative
-    ! to absorb the round-trip from qp back to a normalized double-double.
-    if (abs(qa - b) > abs(b)*1e-30_16 .and. abs(qa - b) > 1e-300_16) then
+    ! Transcendentals are computed via a first-order derivative-corrected
+    ! DD evaluation (no qp temporaries), giving roughly single-double
+    ! precision. Allow a relative error around 1e-15.
+    if (abs(qa - b) > abs(b)*1e-15_16 .and. abs(qa - b) > 1e-300_16) then
        print *, "ASSERT_APPROX_QP FAILED: ", msg
        print *, "  Expected: ", b
        print *, "  Got:      ", qa, "(limbs:", a%limbs, ")"

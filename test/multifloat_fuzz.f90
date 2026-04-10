@@ -183,15 +183,23 @@ contains
       
       if (abs(q) > input_mag * 1e-10_qp) then
         rel_err = diff / abs(q)
-        if (op == "div" .or. op == "sqrt" .or. op == "exp" .or. op == "log") then
+        if (op == "div" .or. op == "sqrt") then
+          tol = 1e-15_qp
+        else if (op == "exp" .or. op == "log") then
+          ! exp/log are first-order derivative-corrected DD evaluations,
+          ! roughly single-double precision. Hard cap is ulp(double).
           tol = 1e-15_qp
         else
           tol = 1e-26_qp
         end if
       else
-        ! For results near zero, use error relative to input magnitude
+        ! For results near zero, use error relative to input magnitude.
         rel_err = diff / input_mag
-        tol = 1e-28_qp
+        if (op == "exp" .or. op == "log") then
+          tol = 1e-15_qp
+        else
+          tol = 1e-28_qp
+        end if
       end if
 
       if (rel_err > tol) then
