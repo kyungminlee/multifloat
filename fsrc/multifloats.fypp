@@ -74,19 +74,17 @@ module multifloats
     integer, parameter :: dp = 8   ! Double precision
     integer, parameter :: sp = 4   ! Single precision
 
-    ! BIND(C) attribute is required so derived-type variables of these
-    ! types may appear in EQUIVALENCE statements (used by some LAPACK
-    ! routines such as DLALN2/wlaln2 to overlay 2x2 work arrays with
-    ! linearized vectors). SEQUENCE would also work but is incompatible
-    ! with the defined I/O generics below, whereas BIND(C) is not.
-    ! Both components are interoperable: real(kind=8) matches c_double
-    ! on all supported platforms, and a nested BIND(C) derived type is
-    ! itself an interoperable component type.
-    type, bind(C), public :: float64x2
+    ! SEQUENCE is required so derived-type variables of these types may
+    ! appear in EQUIVALENCE statements (used by some LAPACK routines
+    ! such as DLALN2/wlaln2 to overlay 2x2 work arrays with linearized
+    ! vectors).
+    type, public :: float64x2
+        sequence
         real(dp) :: limbs(2)
     end type float64x2
 
-    type, bind(C), public :: complex128x2
+    type, public :: complex128x2
+        sequence
         type(float64x2) :: re, im
     end type complex128x2
 

@@ -69,11 +69,19 @@ module multifloats
     integer, parameter :: dp = 8   ! Double precision
     integer, parameter :: sp = 4   ! Single precision
 
+    ! SEQUENCE is required so derived-type variables of these types may
+    ! appear in EQUIVALENCE statements (used by some LAPACK routines
+    ! such as DLALN2/wlaln2 to overlay 2x2 work arrays with linearized
+    ! vectors). Per F2018 8.10.3.2 an EQUIVALENCE object that is a
+    ! derived-type variable must have the SEQUENCE attribute — BIND(C)
+    ! is not an acceptable substitute (gfortran rejects it explicitly).
     type, public :: float64x2
+        sequence
         real(dp) :: limbs(2)
     end type float64x2
 
     type, public :: complex128x2
+        sequence
         type(float64x2) :: re, im
     end type complex128x2
 
@@ -1520,7 +1528,7 @@ $:conv_loops(rank, 'tmp', 'harvest', 'from_qp')
     ! ================================================================
 
     subroutine write_mf_formatted(dtv, unit, iotype, v_list, iostat, iomsg)
-        class(float64x2), intent(in) :: dtv
+        type(float64x2), intent(in) :: dtv
         integer, intent(in) :: unit
         character(*), intent(in) :: iotype
         integer, intent(in) :: v_list(:)
@@ -1538,7 +1546,7 @@ $:conv_loops(rank, 'tmp', 'harvest', 'from_qp')
     end subroutine
 
     subroutine write_cx_formatted(dtv, unit, iotype, v_list, iostat, iomsg)
-        class(complex128x2), intent(in) :: dtv
+        type(complex128x2), intent(in) :: dtv
         integer, intent(in) :: unit
         character(*), intent(in) :: iotype
         integer, intent(in) :: v_list(:)
@@ -1556,7 +1564,7 @@ $:conv_loops(rank, 'tmp', 'harvest', 'from_qp')
     end subroutine
 
     subroutine read_mf_formatted(dtv, unit, iotype, v_list, iostat, iomsg)
-        class(float64x2), intent(inout) :: dtv
+        type(float64x2), intent(inout) :: dtv
         integer, intent(in) :: unit
         character(*), intent(in) :: iotype
         integer, intent(in) :: v_list(:)
@@ -1577,7 +1585,7 @@ $:conv_loops(rank, 'tmp', 'harvest', 'from_qp')
     end subroutine
 
     subroutine read_cx_formatted(dtv, unit, iotype, v_list, iostat, iomsg)
-        class(complex128x2), intent(inout) :: dtv
+        type(complex128x2), intent(inout) :: dtv
         integer, intent(in) :: unit
         character(*), intent(in) :: iotype
         integer, intent(in) :: v_list(:)
