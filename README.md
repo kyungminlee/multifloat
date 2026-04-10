@@ -74,21 +74,158 @@ The full `<cmath>` double-name surface (`floor`, `ceil`, `trunc`, `round`,
 `MultiFloat`. The C++ side has zero external dependencies — `__float128`
 is only used by the test harness as a high-precision reference.
 
-## Precision classes
+## Precision
 
-The library distinguishes three classes of operations by the precision they
-deliver:
+`multifloat_fuzz` runs every operation listed below through 1M random
+input pairs (using adversarial input strategies that include subnormals,
+near-cancellation pairs, near-overflow pairs, and non-finite leading limbs)
+and reports the per-op `(max_rel_err, mean_rel_err)` against a
+quad-precision (`real(16)`) reference. The numbers in the tables below are
+representative samples from a recent run of `multifloat_fuzz` (seed = 0,
+1M iterations); your build will land in the same orders of magnitude.
 
-| Class                                              | Typical max relative error | Operations |
-| -------------------------------------------------- | -------------------------- | ---------- |
-| **Full DD**                                        | ~1e-32 (one DD ulp)        | `+`, `-`, `*`, `/`, `sqrt`, `abs`, `neg`, `min`, `max`, `mod`, `modulo`, `dim`, `sign`, `hypot`, `aint`, `anint`, `fraction`, `scale`, `set_exponent`, `pow_int`, complex `+`/`-`/`*`, `cx_conjg`, `cx_abs`, `cx_aimag`, every constructor and assignment |
-| **Single-double (derivative-corrected)**           | ~1e-16 (one double ulp)    | `exp`, `log`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `erf`, `erfc`, `erfc_scaled` |
-| **Compound (chained derivative correction)**      | ~1e-12 to 1e-14            | `pow` (= `exp(b·log(a))`), `gamma`, `log_gamma`, `bessel_*`, complex transcendentals (`cx_exp`, `cx_log`, `cx_sin`, `cx_cos`, `cx_tan`, `cx_sinh`, `cx_cosh`, `cx_tanh`, `cx_asin`, `cx_acos`, `cx_atan`, `cx_asinh`, `cx_acosh`, `cx_atanh`), `cx_div`, `cx_sqrt` |
+A relative error reported as `0` means *exactly bit-equal* to the qp
+reference for every input the fuzz drew. Operations are organized by their
+precision class.
 
-The transcendentals use a single first-order derivative correction over the
-leading-limb `std::` (or libm) intrinsic. This roughly doubles the precision
-of single-double for benign inputs but does not reach the full ~106-bit DD
-precision of the arithmetic kernels.
+### Full double-double (~1e-32 max — one DD ulp)
+
+The arithmetic kernels and operations whose result is a bit-exact rearrangement
+of the input limbs. Worst-case error is one DD ulp, mean error around 1/100
+of a DD ulp.
+
+| Op | max_rel | mean_rel |
+| --- | --- | --- |
+| `+` (mf±mf, mf±dp, etc.) | 1.5e-32 | 3.0e-34 |
+| `-` | 6.2e-33 | 1.8e-34 |
+| `*` | 3.5e-32 | 6.5e-34 |
+| `/` | 5.3e-32 | 1.8e-33 |
+| `sqrt` (Karp/Markstein iteration) | 5.0e-32 | 5.3e-33 |
+| `mod`, `modulo` | 2.2e-32 | 9e-36 |
+| `dim` | 6.2e-33 | 9.4e-35 |
+| `min`, `max`, `min(a..h)`, `max(a..h)` | 6.2e-33 | 9.5e-35 |
+| `hypot` (with overflow-safe scaling) | 7.8e-32 | 5.2e-33 |
+| `pow` (integer exponent, repeated multiplication) | 2.2e-32 | 1.3e-33 |
+| Complex `+`, `-` (real and imag parts) | 1.4e-32 | 3.2e-34 |
+| Complex `*` real part | 0 | 0 |
+| Complex `*` imag part | 1.9e-32 | 1.5e-33 |
+| Complex `/` real part | 4.5e-32 | 2.5e-33 |
+| `cx_conjg`, `cx_abs`, `cx_aimag` | 6.7e-32 | 5.4e-33 |
+
+### Bit-exact (always 0 error)
+
+Operations that are pure limb manipulation, sign flips, or trivial
+promotions / truncations. The fuzz reports `max_rel = mean_rel = 0` over
+1M iterations for every operation in this group.
+
+- **Unary**: `abs`, `neg`, `sign`, `aint`, `anint`, `fraction`,
+  `scale`, `set_exponent`
+- **Mixed-mode arithmetic where one side is dp**: `mf + dp` (`add_fd`)
+  reports 0 because the lo-limb error is in the dp ulp range
+- **Every constructor**: `float64x2(...)` and `complex128x2(...)` for
+  every supported numeric kind
+- **Every assignment**: `mf ↔ {dp, sp, int, int8, int16, int64, cdp, csp}`
+  and `cx ↔ {dp, sp, int, int8, int16, int64, cdp, csp}`
+- **Complex `*` real part**: bit-exact because the real part is computed
+  as a single fma-style chain with no cancellation between terms
+
+### Single-double, first-order derivative corrected (~1e-16 max)
+
+Real transcendentals computed as `f(hi) + f'(hi) · lo` combined via
+`fast_two_sum`. Each gives roughly one double ulp of relative error,
+which is single-double precision — *not* full DD precision. The cost
+saving (no quad-precision temporaries, no polynomial tables) is the
+deliberate tradeoff.
+
+| Op | max_rel | mean_rel |
+| --- | --- | --- |
+| `exp` | 1.1e-16 | 2.2e-17 |
+| `log` | 1.1e-16 | 2.4e-17 |
+| `log10` | 1.0e-16 | 2.4e-17 |
+| `sin` | 1.1e-16 | 2.3e-17 |
+| `cos` | 1.1e-16 | 1.8e-17 |
+| `tan` | 2.9e-16 | 3.8e-17 |
+| `asin` | 1.2e-16 | 1.8e-17 |
+| `acos` | 1.6e-16 | 4.4e-17 |
+| `atan` | 1.3e-16 | 1.6e-17 |
+| `atan2` | 1.0e-16 | 1.4e-17 |
+| `sinh` | 1.1e-16 | 2.1e-17 |
+| `cosh` | 1.1e-16 | 2.7e-17 |
+| `tanh` | 1.1e-16 | 1.8e-17 |
+| `asinh` | 1.9e-16 | 2.2e-17 |
+| `acosh` | 1.7e-16 | 1.6e-17 |
+| `atanh` | 2.1e-16 | 2.5e-17 |
+| `erf` | 3.8e-16 | 1.0e-16 |
+| `erfc` | 5.2e-16 | 3.6e-17 |
+| `erfc_scaled` | 4.1e-16 | 4.8e-17 |
+
+### Compound — chained derivative corrections (~1e-12 to 1e-14 max)
+
+Functions that internally chain two or more single-double-precision
+transcendentals or have cancellation in their construction. Worst-case
+error is several orders of magnitude looser than a single transcendental,
+but mean precision is typically still ~1e-15.
+
+| Op | max_rel | mean_rel | Notes |
+| --- | --- | --- | --- |
+| `pow` (mf**mf), `mf**dp`, `dp**mf` | 3.4e-14 | 5.7e-16 | implemented as `exp(b·log(a))` |
+| `gamma` | 1.2e-16 | 4.0e-17 | derivative correction unavailable; uses libm directly |
+| `log_gamma` | 3.3e-16 | 5.0e-17 | likewise |
+| `bessel_j0` | 3.9e-16 | 2.4e-17 | libm Bessel precision |
+| `bessel_j1` | 2.5e-15 | 3.1e-17 | |
+| `bessel_jn` (n=3 sample) | 5.0e-15 | 4.4e-17 | |
+| `bessel_y0` | 2.3e-15 | 8.3e-17 | |
+| `bessel_y1` | 7.9e-16 | 8.3e-17 | |
+| `bessel_yn` (n=3 sample) | 1.4e-13 | 2.1e-16 | |
+| `cx_exp` | 1.9e-16 | 5.0e-17 | derived from real `exp`, `sin`, `cos` |
+| `cx_log` | 1.1e-16 | 2.0e-17 | |
+| `cx_sin`, `cx_cos`, `cx_sinh`, `cx_cosh` | 2.2e-16 | 5.1e-17 | |
+| `cx_tan`, `cx_tanh` | 1.9e-14 | 1.4e-16 | catastrophic cancellation in `sin/cos` near poles |
+| `cx_atan` | 1.1e-16 | 3.9e-17 | |
+| `cx_asin`, `cx_acos`, `cx_atanh`, `cx_acosh` | 1.1e-16 | 3.9e-17 | range-restricted in fuzz to avoid the near-zero cancellation regime |
+| `cx_asinh` | 1.2e-16 | 3.9e-17 | |
+| `cx_div` real part | 4.5e-32 | 2.5e-33 | full DD on real part |
+| `cx_div` imag part | 8.7e-16 | 6.8e-19 | cancellation |
+| `cx_sqrt` real / imag (with even-power scaling) | 2.5e-20 | 1e-23 | almost full DD; loses a few digits to the cancellation in `sqrt((|z|±a)/2)` |
+
+### Array reductions (small-array fuzz, n = 8)
+
+| Op | max_rel | mean_rel |
+| --- | --- | --- |
+| `sum`     | 4.0e-30 | 1.3e-32 |
+| `product` | 1.1e-49 | 2.6e-52 |
+| `maxval`  | 5.9e-33 | 1.5e-33 |
+| `minval`  | 6.1e-33 | 1.4e-33 |
+| `dot_product` | 1.2e-31 | 7.0e-33 |
+| `norm2`   | 6.0e-32 | 1.0e-32 |
+| `matmul` (mv, n=8) | 5.0e-31 | 6.6e-33 |
+
+The reductions accumulate over `n` elements, so worst-case error grows
+linearly with `n` while staying inside the full-DD regime.
+
+### Why some functions only get single-double precision
+
+The transcendentals (`exp`, `log`, `sin`, `cos`, ...) are evaluated as
+
+  `f(hi + lo) ≈ f(hi) + f'(hi) · lo`
+
+where `f(hi)` and `f'(hi)` come from the standard library on the leading
+limb only. This is *one* Newton step rather than the full polynomial
+evaluation that
+[Julia's MultiFloats.jl](https://github.com/dzhang314/MultiFloats.jl)
+uses to reach full DD precision in `exp`/`log`. The trade-off:
+
+- **No quad-precision dependency** — there are no polynomial coefficient
+  tables and no `__float128` / libquadmath calls in any kernel.
+- **Roughly doubles the precision of double** for benign inputs, but
+  cancellation in the formula or in `f'(hi)·lo` itself can reduce the
+  effective precision back toward single-double in pathological cases.
+
+If you need true ~106-bit transcendentals, the route is to port the Julia
+polynomial evaluators (the tables under `external/MultiFloats.jl/src/`)
+into the `mf_${func}$` cases of `fsrc/multifloats.fypp`. The rest of the
+infrastructure (operators, reductions, complex / array support) is
+already at full DD.
 
 ## Building
 

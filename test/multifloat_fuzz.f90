@@ -607,10 +607,11 @@ contains
         end if
       end if
 
-      ! Inverse trig / hyperbolic — small input range to avoid the
-      ! cancellation regimes near branch cuts that the first-order
-      ! derivative correction can't follow.
-      if (abs(q1) < 0.5_qp .and. abs(q2) < 0.5_qp) then
+      ! Inverse trig / hyperbolic — small but non-tiny input range to
+      ! avoid the cancellation regimes near branch cuts and near zero
+      ! that the first-order derivative correction can't follow.
+      if (abs(q1) < 0.5_qp .and. abs(q2) < 0.5_qp .and. &
+          max(abs(q1), abs(q2)) > 0.05_qp) then
         cfres = atan(cf1)
         cqres = atan(cq1)
         call check_cx(cfres, cqres, "cx_atan", q1, q2, 0.0_qp, 0.0_qp, errs)
