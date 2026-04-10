@@ -67,6 +67,7 @@
 
 module multifloats
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_fma
+    use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64
     implicit none
     private
 
@@ -433,6 +434,7 @@ module multifloats
     ! ================================================================
 
     interface assignment(=)
+        ! lhs = mf / cx (forward direction: build a multifloat type)
 #:for n, _ in ATYPES
 #:if n != 'mf'
         module procedure mf_assign_${n}$
@@ -443,6 +445,31 @@ module multifloats
         module procedure cx_assign_${n}$
 #:endif
 #:endfor
+        ! Non-default integer kinds → mf / cx
+        module procedure mf_assign_i8
+        module procedure mf_assign_i16
+        module procedure mf_assign_i64
+        module procedure cx_assign_i8
+        module procedure cx_assign_i16
+        module procedure cx_assign_i64
+        ! mf → built-in numeric types
+        module procedure dp_assign_mf
+        module procedure sp_assign_mf
+        module procedure int_assign_mf
+        module procedure i8_assign_mf
+        module procedure i16_assign_mf
+        module procedure i64_assign_mf
+        module procedure cdp_assign_mf
+        module procedure csp_assign_mf
+        ! cx → built-in numeric types
+        module procedure dp_assign_cx
+        module procedure sp_assign_cx
+        module procedure int_assign_cx
+        module procedure i8_assign_cx
+        module procedure i16_assign_cx
+        module procedure i64_assign_cx
+        module procedure cdp_assign_cx
+        module procedure csp_assign_cx
     end interface
     public :: assignment(=)
 
@@ -655,6 +682,113 @@ contains
     end subroutine
 
 #:endif
+#:endfor
+    ! ----------------------------------------------------------------
+    ! Non-default integer kinds → mf / cx
+    ! ----------------------------------------------------------------
+
+#:for ksuf, ktype in [('i8', 'integer(int8)'), ('i16', 'integer(int16)'), ('i64', 'integer(int64)')]
+    elemental subroutine mf_assign_${ksuf}$(lhs, rhs)
+        type(float64x2), intent(out) :: lhs
+        ${ktype}$, intent(in) :: rhs
+        lhs%limbs = [real(rhs, dp), 0.0_dp]
+    end subroutine
+
+    elemental subroutine cx_assign_${ksuf}$(lhs, rhs)
+        type(complex128x2), intent(out) :: lhs
+        ${ktype}$, intent(in) :: rhs
+        lhs%re%limbs = [real(rhs, dp), 0.0_dp]
+        lhs%im%limbs = [0.0_dp, 0.0_dp]
+    end subroutine
+
+#:endfor
+    ! ----------------------------------------------------------------
+    ! mf → built-in numeric types (truncation for integer kinds, mirrors
+    ! the same semantics as `int_var = real_dp_var` in plain Fortran).
+    ! ----------------------------------------------------------------
+
+    elemental subroutine dp_assign_mf(lhs, rhs)
+        real(dp), intent(out) :: lhs
+        type(float64x2), intent(in) :: rhs
+        lhs = rhs%limbs(1)
+    end subroutine
+
+    elemental subroutine sp_assign_mf(lhs, rhs)
+        real(sp), intent(out) :: lhs
+        type(float64x2), intent(in) :: rhs
+        lhs = real(rhs%limbs(1), sp)
+    end subroutine
+
+    elemental subroutine cdp_assign_mf(lhs, rhs)
+        complex(dp), intent(out) :: lhs
+        type(float64x2), intent(in) :: rhs
+        lhs = cmplx(rhs%limbs(1), 0.0_dp, dp)
+    end subroutine
+
+    elemental subroutine csp_assign_mf(lhs, rhs)
+        complex(sp), intent(out) :: lhs
+        type(float64x2), intent(in) :: rhs
+        lhs = cmplx(real(rhs%limbs(1), sp), 0.0_sp, sp)
+    end subroutine
+
+#:for ksuf, ktype, klit in [('int', 'integer', 'int32'), ('i8', 'integer(int8)', 'int8'), ('i16', 'integer(int16)', 'int16'), ('i64', 'integer(int64)', 'int64')]
+    elemental subroutine ${ksuf}$_assign_mf(lhs, rhs)
+        ${ktype}$, intent(out) :: lhs
+        type(float64x2), intent(in) :: rhs
+        real(dp) :: hi
+        hi = rhs%limbs(1)
+        lhs = int(hi, kind(lhs))
+        ! Adjust toward zero when the leading limb is exactly an integer
+        ! and the lo limb pushes the true value across the boundary.
+        if (hi == real(lhs, dp)) then
+            if (lhs > 0 .and. rhs%limbs(2) < 0.0_dp) lhs = lhs - 1_${klit}$
+            if (lhs < 0 .and. rhs%limbs(2) > 0.0_dp) lhs = lhs + 1_${klit}$
+        end if
+    end subroutine
+
+#:endfor
+    ! ----------------------------------------------------------------
+    ! cx → built-in numeric types (real types take the real part;
+    ! integer kinds truncate the real part toward zero).
+    ! ----------------------------------------------------------------
+
+    elemental subroutine dp_assign_cx(lhs, rhs)
+        real(dp), intent(out) :: lhs
+        type(complex128x2), intent(in) :: rhs
+        lhs = rhs%re%limbs(1)
+    end subroutine
+
+    elemental subroutine sp_assign_cx(lhs, rhs)
+        real(sp), intent(out) :: lhs
+        type(complex128x2), intent(in) :: rhs
+        lhs = real(rhs%re%limbs(1), sp)
+    end subroutine
+
+    elemental subroutine cdp_assign_cx(lhs, rhs)
+        complex(dp), intent(out) :: lhs
+        type(complex128x2), intent(in) :: rhs
+        lhs = cmplx(rhs%re%limbs(1), rhs%im%limbs(1), dp)
+    end subroutine
+
+    elemental subroutine csp_assign_cx(lhs, rhs)
+        complex(sp), intent(out) :: lhs
+        type(complex128x2), intent(in) :: rhs
+        lhs = cmplx(real(rhs%re%limbs(1), sp), real(rhs%im%limbs(1), sp), sp)
+    end subroutine
+
+#:for ksuf, ktype, klit in [('int', 'integer', 'int32'), ('i8', 'integer(int8)', 'int8'), ('i16', 'integer(int16)', 'int16'), ('i64', 'integer(int64)', 'int64')]
+    elemental subroutine ${ksuf}$_assign_cx(lhs, rhs)
+        ${ktype}$, intent(out) :: lhs
+        type(complex128x2), intent(in) :: rhs
+        real(dp) :: hi
+        hi = rhs%re%limbs(1)
+        lhs = int(hi, kind(lhs))
+        if (hi == real(lhs, dp)) then
+            if (lhs > 0 .and. rhs%re%limbs(2) < 0.0_dp) lhs = lhs - 1_${klit}$
+            if (lhs < 0 .and. rhs%re%limbs(2) > 0.0_dp) lhs = lhs + 1_${klit}$
+        end if
+    end subroutine
+
 #:endfor
     ! ================================================================
     ! Conversions (elemental)
