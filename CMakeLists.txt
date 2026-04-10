@@ -24,18 +24,18 @@ set_target_properties(multifloat-fortran PROPERTIES
 target_include_directories(multifloat-fortran PUBLIC
     ${CMAKE_BINARY_DIR}/modules)
 
-add_executable(test-fortran ./fsrc/test.f90)
-target_link_libraries(test-fortran PRIVATE multifloat-fortran)
-add_test(NAME test-fortran COMMAND test-fortran)
+add_executable(multifloats_precision ./test/multifloats_precision.f90)
+target_link_libraries(multifloats_precision PRIVATE multifloat-fortran)
+add_test(NAME multifloats_precision COMMAND multifloats_precision)
 
 add_library(blas-multifloat
     ./blas/wgemm.f90
     ./blas/wtrsm.f90)
 target_link_libraries(blas-multifloat PRIVATE multifloat-fortran)
 
-add_executable(multifloat_fuzz ./fsrc/multifloat_fuzz.f90)
+add_executable(multifloat_fuzz ./test/multifloat_fuzz.f90)
 target_link_libraries(multifloat_fuzz PRIVATE multifloat-fortran)
-add_executable(multifloat_test ./fsrc/multifloat_test.f90)
+add_executable(multifloat_test ./test/multifloat_test.f90)
 target_link_libraries(multifloat_test PRIVATE multifloat-fortran)
 
 # C++ tests for src/multifloats.hh.
