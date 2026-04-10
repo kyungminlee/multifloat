@@ -14,7 +14,7 @@ program multifloat_fuzz
   double precision :: inf_d, nan_d
 
   ! Per-op precision statistics (tracked across all check() calls).
-  integer, parameter :: max_stats = 64
+  integer, parameter :: max_stats = 256
   type :: stat_entry
     character(len=12) :: name = ''
     real(qp) :: max_rel = 0.0_qp
@@ -74,6 +74,15 @@ program multifloat_fuzz
     qres = -q1
     fres = -f1
     call check(fres, qres, "neg", q1, 0.0_qp, num_errors)
+
+    ! Bit-exact rounding/manipulation (full DD)
+    if (ieee_is_finite(real(q1, 8)) .and. abs(q1) < 1.0e15_qp) then
+      call check(aint(f1), aint(q1), "aint", q1, 0.0_qp, num_errors)
+      call check(anint(f1), anint(q1), "anint", q1, 0.0_qp, num_errors)
+    end if
+    if (ieee_is_finite(real(q1, 8)) .and. q1 /= 0.0_qp) then
+      call check(fraction(f1), fraction(q1), "fraction", q1, 0.0_qp, num_errors)
+    end if
 
     call check_comp(f1, f2, q1, q2, num_errors)
 
@@ -167,6 +176,7 @@ program multifloat_fuzz
        if (ieee_is_finite(real(q1, 8)) .and. abs(q1) < 100.0_qp) then
          call check(erf(f1), erf(q1), "erf", q1, 0.0_qp, num_errors)
          call check(erfc(f1), erfc(q1), "erfc", q1, 0.0_qp, num_errors)
+         call check(erfc_scaled(f1), erfc_scaled(q1), "erfc_scaled", q1, 0.0_qp, num_errors)
        end if
        if (ieee_is_finite(real(q1, 8)) .and. q1 > 0.0_qp .and. q1 < 100.0_qp) then
          call check(gamma(f1), gamma(q1), "gamma", q1, 0.0_qp, num_errors)
@@ -177,9 +187,11 @@ program multifloat_fuzz
        if (ieee_is_finite(real(q1, 8)) .and. abs(q1) < 1e3_qp) then
          call check(bessel_j0(f1), bessel_j0(q1), "bj0", q1, 0.0_qp, num_errors)
          call check(bessel_j1(f1), bessel_j1(q1), "bj1", q1, 0.0_qp, num_errors)
+         call check(bessel_jn(3, f1), bessel_jn(3, q1), "bjn", q1, 0.0_qp, num_errors)
          if (q1 > 0.0_qp) then
            call check(bessel_y0(f1), bessel_y0(q1), "by0", q1, 0.0_qp, num_errors)
            call check(bessel_y1(f1), bessel_y1(q1), "by1", q1, 0.0_qp, num_errors)
+           call check(bessel_yn(3, f1), bessel_yn(3, q1), "byn", q1, 0.0_qp, num_errors)
          end if
        end if
 
@@ -190,9 +202,36 @@ program multifloat_fuzz
        if (ieee_is_finite(real(q1, 8)) .and. q1 > 0.0_qp .and. q1 < 1e10_qp .and. &
            ieee_is_finite(real(q2, 8)) .and. abs(q2) < 100.0_qp) then
          call check(f1 ** f2, q1 ** q2, "pow", q1, q2, num_errors)
+         ! Mixed-type pow: mf**dp, dp**mf
+         call check(f1 ** real(q2, 8), q1 ** real(q2, 8), "pow_md", q1, q2, num_errors)
+         call check(real(q1, 8) ** f2, real(q1, 8) ** q2, "pow_dm", q1, q2, num_errors)
        end if
        if (ieee_is_finite(real(q1, 8)) .and. abs(q1) < 1e10_qp) then
          call check(f1 ** 3, q1 ** 3, "pow_int", q1, 3.0_qp, num_errors)
+       end if
+
+       ! scale(x, k) = x * 2^k — exact, full DD. Note: cast the dp
+       ! reference up to qp so check() can compare in its native type.
+       if (ieee_is_finite(real(q1, 8))) then
+         call check(scale(f1, 5), real(scale(real(q1, 8), 5), qp), &
+             "scale", q1, 0.0_qp, num_errors)
+         if (q1 /= 0.0_qp) then
+           call check(set_exponent(f1, 5), &
+               real(set_exponent(real(q1, 8), 5), qp), &
+               "set_exponent", q1, 0.0_qp, num_errors)
+         end if
+       end if
+
+       ! 3-argument min/max
+       if (ieee_is_finite(real(q1, 8)) .and. ieee_is_finite(real(q2, 8))) then
+         block
+           type(float64x2) :: f3
+           real(qp) :: q3
+           q3 = (q1 + q2) * 0.5_qp
+           f3 = to_f64x2(q3)
+           call check(min(f1, f2, f3), min(q1, q2, q3), "min3", q1, q2, num_errors)
+           call check(max(f1, f2, f3), max(q1, q2, q3), "max3", q1, q2, num_errors)
+         end block
        end if
     end if
 
@@ -201,6 +240,13 @@ program multifloat_fuzz
     ! ----------------------------------------------------------------
     if (mod(i, 200) == 0) then
        call fuzz_complex(f1, f2, q1, q2, num_errors)
+    end if
+
+    ! ----------------------------------------------------------------
+    ! Periodic (every 1000): small-array reductions
+    ! ----------------------------------------------------------------
+    if (mod(i, 1000) == 0) then
+       call fuzz_arrays(num_errors)
     end if
 
     if (mod(i, 100000) == 0) print *, "Completed", i, "iterations..."
@@ -328,6 +374,9 @@ contains
     case ("add", "sub", "mul", "div", "sqrt", "abs", "neg", &
           "add_fd", "mul_df", "min", "max", "sign", "dim", &
           "mod", "modulo", "hypot", "pow_int", &
+          "aint", "anint", "fraction", "scale", "set_exponent", &
+          "min3", "max3", &
+          "arr_sum", "arr_max", "arr_min", "arr_dot", "arr_norm2", "arr_matmul", &
           "cx_add_re", "cx_add_im", "cx_sub_re", "cx_sub_im", &
           "cx_mul_re", "cx_mul_im", "cx_conjg_re", "cx_conjg_im", &
           "cx_abs", "cx_aimag")
@@ -344,9 +393,16 @@ contains
   logical function is_compound(op)
     character(*), intent(in) :: op
     select case (op)
-    case ("pow", "bj0", "bj1", "by0", "by1", "gamma", "lgamma", &
+    case ("pow", "pow_md", "pow_dm", "arr_prod", &
+          "bj0", "bj1", "by0", "by1", "bjn", "byn", &
+          "gamma", "lgamma", "erfc_scaled", &
           "cx_exp_re", "cx_exp_im", "cx_log_re", "cx_log_im", &
           "cx_sin_re", "cx_sin_im", "cx_cos_re", "cx_cos_im", &
+          "cx_sinh_re", "cx_sinh_im", "cx_cosh_re", "cx_cosh_im", &
+          "cx_tan_re", "cx_tan_im", "cx_tanh_re", "cx_tanh_im", &
+          "cx_atan_re", "cx_atan_im", "cx_asin_re", "cx_asin_im", &
+          "cx_acos_re", "cx_acos_im", "cx_asinh_re", "cx_asinh_im", &
+          "cx_acosh_re", "cx_acosh_im", "cx_atanh_re", "cx_atanh_im", &
           "cx_div_re", "cx_div_im", "cx_sqrt_re", "cx_sqrt_im")
       is_compound = .true.
     case default
@@ -380,7 +436,10 @@ contains
         if (is_full_dd(op)) then
           tol = 1e-26_qp
         else if (is_compound(op)) then
-          tol = 1e-12_qp
+          ! Compound transcendentals (pow, bessel, complex non-elementary)
+          ! chain two derivative-corrected steps and are subject to
+          ! cancellation; allow ~1e-10 relative.
+          tol = 1e-10_qp
         else
           tol = 1e-15_qp
         end if
@@ -390,7 +449,7 @@ contains
         if (is_full_dd(op)) then
           tol = 1e-28_qp
         else if (is_compound(op)) then
-          tol = 1e-12_qp
+          tol = 1e-10_qp
         else
           tol = 1e-15_qp
         end if
@@ -502,6 +561,56 @@ contains
         cfres = cos(cf1)
         cqres = cos(cq1)
         call check_cx(cfres, cqres, "cx_cos", q1, q2, 0.0_qp, 0.0_qp, errs)
+
+        cfres = sinh(cf1)
+        cqres = sinh(cq1)
+        call check_cx(cfres, cqres, "cx_sinh", q1, q2, 0.0_qp, 0.0_qp, errs)
+
+        cfres = cosh(cf1)
+        cqres = cosh(cq1)
+        call check_cx(cfres, cqres, "cx_cosh", q1, q2, 0.0_qp, 0.0_qp, errs)
+
+        ! tan/tanh: skip when sinh(b)/cosh(b) overwhelms the leading
+        ! limb so the real-part cancellation isn't catastrophic.
+        if (abs(q1) < 3.0_qp .and. abs(q2) < 3.0_qp .and. &
+            abs(cos(real(q2, 8))) > 0.01d0) then
+          cfres = tan(cf1)
+          cqres = tan(cq1)
+          call check_cx(cfres, cqres, "cx_tan", q1, q2, 0.0_qp, 0.0_qp, errs)
+
+          cfres = tanh(cf1)
+          cqres = tanh(cq1)
+          call check_cx(cfres, cqres, "cx_tanh", q1, q2, 0.0_qp, 0.0_qp, errs)
+        end if
+      end if
+
+      ! Inverse trig / hyperbolic — small input range to avoid the
+      ! cancellation regimes near branch cuts that the first-order
+      ! derivative correction can't follow.
+      if (abs(q1) < 0.5_qp .and. abs(q2) < 0.5_qp) then
+        cfres = atan(cf1)
+        cqres = atan(cq1)
+        call check_cx(cfres, cqres, "cx_atan", q1, q2, 0.0_qp, 0.0_qp, errs)
+
+        cfres = asin(cf1)
+        cqres = asin(cq1)
+        call check_cx(cfres, cqres, "cx_asin", q1, q2, 0.0_qp, 0.0_qp, errs)
+
+        cfres = acos(cf1)
+        cqres = acos(cq1)
+        call check_cx(cfres, cqres, "cx_acos", q1, q2, 0.0_qp, 0.0_qp, errs)
+
+        cfres = asinh(cf1)
+        cqres = asinh(cq1)
+        call check_cx(cfres, cqres, "cx_asinh", q1, q2, 0.0_qp, 0.0_qp, errs)
+
+        cfres = acosh(cf1)
+        cqres = acosh(cq1)
+        call check_cx(cfres, cqres, "cx_acosh", q1, q2, 0.0_qp, 0.0_qp, errs)
+
+        cfres = atanh(cf1)
+        cqres = atanh(cq1)
+        call check_cx(cfres, cqres, "cx_atanh", q1, q2, 0.0_qp, 0.0_qp, errs)
       end if
 
       ! conjg, abs, aimag — full DD
@@ -512,6 +621,50 @@ contains
       call check(abs(cf1), abs(cq1), "cx_abs", q1, q2, errs)
       call check(aimag(cf1), aimag(cq1), "cx_aimag", q1, q2, errs)
     end if
+  end subroutine
+
+  ! Small-array reductions exercised every 1000 iterations.
+  subroutine fuzz_arrays(errs)
+    integer, intent(inout) :: errs
+    integer, parameter :: nn = 8
+    type(float64x2) :: a(nn), b(nn), m(nn,nn)
+    real(qp) :: qa(nn), qb(nn), qm(nn,nn)
+    type(float64x2) :: mvres(nn)
+    real(qp) :: qmvres(nn)
+    real(qp) :: r(2)
+    integer :: k, l
+
+    do k = 1, nn
+      call random_number(r)
+      qa(k) = (r(1) - 0.5_qp) * 10.0_qp ** int(r(2)*20.0_qp - 10.0_qp)
+      a(k) = to_f64x2(qa(k))
+      call random_number(r)
+      qb(k) = (r(1) - 0.5_qp) * 10.0_qp ** int(r(2)*20.0_qp - 10.0_qp)
+      b(k) = to_f64x2(qb(k))
+    end do
+    do l = 1, nn
+      do k = 1, nn
+        call random_number(r)
+        qm(k,l) = (r(1) - 0.5_qp) * 10.0_qp ** int(r(2)*20.0_qp - 10.0_qp)
+        m(k,l) = to_f64x2(qm(k,l))
+      end do
+    end do
+
+    call check(sum(a), sum(qa), "arr_sum", maxval(abs(qa)), 0.0_qp, errs)
+    call check(product(a), product(qa), "arr_prod", &
+               maxval(abs(qa))**nn, 0.0_qp, errs)
+    call check(maxval(a), maxval(qa), "arr_max", maxval(abs(qa)), 0.0_qp, errs)
+    call check(minval(a), minval(qa), "arr_min", maxval(abs(qa)), 0.0_qp, errs)
+    call check(dot_product(a, b), dot_product(qa, qb), "arr_dot", &
+               maxval(abs(qa)) * maxval(abs(qb)) * nn, 0.0_qp, errs)
+    call check(norm2(a), norm2(qa), "arr_norm2", maxval(abs(qa)), 0.0_qp, errs)
+
+    mvres = matmul(m, a)
+    qmvres = matmul(qm, qa)
+    do k = 1, nn
+      call check(mvres(k), qmvres(k), "arr_matmul", &
+                 maxval(abs(qm)) * maxval(abs(qa)) * nn, 0.0_qp, errs)
+    end do
   end subroutine
 
   subroutine check_comp(f1, f2, q1, q2, errs)
