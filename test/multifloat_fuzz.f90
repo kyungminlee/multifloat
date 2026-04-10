@@ -13,6 +13,17 @@ program multifloat_fuzz
   real(qp) :: inf_q, nan_q
   double precision :: inf_d, nan_d
 
+  ! Per-op precision statistics (tracked across all check() calls).
+  integer, parameter :: max_stats = 64
+  type :: stat_entry
+    character(len=12) :: name = ''
+    real(qp) :: max_rel = 0.0_qp
+    real(qp) :: sum_rel = 0.0_qp
+    integer(8) :: count = 0_8
+  end type stat_entry
+  type(stat_entry) :: stats(max_stats)
+  integer :: nstats = 0
+
   inf_q = ieee_value(inf_q, ieee_positive_inf)
   nan_q = ieee_value(nan_q, ieee_quiet_nan)
   inf_d = ieee_value(inf_d, ieee_positive_inf)
@@ -199,6 +210,8 @@ program multifloat_fuzz
     end if
   end do
 
+  call print_all_stats()
+
   if (num_errors == 0) then
     print *, "FUZZ TEST PASSED"
   else
@@ -207,6 +220,45 @@ program multifloat_fuzz
   end if
 
 contains
+
+  subroutine update_stats(op, rel_err)
+    character(*), intent(in) :: op
+    real(qp), intent(in) :: rel_err
+    integer :: k
+    if (.not. ieee_is_finite(real(rel_err, 8))) return
+    do k = 1, nstats
+      if (stats(k)%name == op) then
+        if (rel_err > stats(k)%max_rel) stats(k)%max_rel = rel_err
+        stats(k)%sum_rel = stats(k)%sum_rel + rel_err
+        stats(k)%count = stats(k)%count + 1_8
+        return
+      end if
+    end do
+    if (nstats >= max_stats) return  ! out of slots; silently drop
+    nstats = nstats + 1
+    stats(nstats)%name = op
+    stats(nstats)%max_rel = rel_err
+    stats(nstats)%sum_rel = rel_err
+    stats(nstats)%count = 1_8
+  end subroutine
+
+  subroutine print_all_stats()
+    integer :: k
+    real(qp) :: mean_rel
+    print *, ""
+    print *, "Per-operation precision report (1M iterations):"
+    print *, "  ", "op           ", "      n  ", "    max_rel  ", "    mean_rel"
+    do k = 1, nstats
+      if (stats(k)%count > 0_8) then
+        mean_rel = stats(k)%sum_rel / real(stats(k)%count, qp)
+        write(*, '(2x, a12, 1x, i10, 1x, es14.4, 1x, es14.4)') &
+            stats(k)%name, stats(k)%count, real(stats(k)%max_rel, 8), real(mean_rel, 8)
+      else
+        write(*, '(2x, a12, 1x, i10, 1x, a)') stats(k)%name, stats(k)%count, "   (no data)"
+      end if
+    end do
+    print *, ""
+  end subroutine
 
   subroutine generate_pair(q1, q2)
     real(qp), intent(out) :: q1, q2
@@ -342,6 +394,15 @@ contains
         else
           tol = 1e-15_qp
         end if
+      end if
+
+      ! Record the rel_err in the per-op precision report. Skip the
+      ! subnormal-input range where the lo limb is below the dp normal
+      ! range and DD precision is unattainable in principle.
+      if (.not. ((abs(i1) > 0.0_qp .and. abs(i1) < 1.0e-290_qp) .or. &
+                 (abs(i2) > 0.0_qp .and. abs(i2) < 1.0e-290_qp) .or. &
+                 (abs(q)  > 0.0_qp .and. abs(q)  < 1.0e-290_qp))) then
+        call update_stats(op, rel_err)
       end if
 
       if (rel_err > tol) then
