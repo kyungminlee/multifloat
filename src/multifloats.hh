@@ -284,4 +284,6 @@ constexpr MultiFloat<T, N> copysign(MultiFloat<T, N> const &x,
   return (xs == ys) ? x : -x;
 }
 
+using float64x2 = MultiFloat<double, 2>;
+
 } // namespace multifloats
