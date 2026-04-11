@@ -62,11 +62,19 @@
 #:set SURVIVOR_DIMS = lambda r, d: [i for i in range(1, r+1) if i != d]
 #:set DIM_REDUCED_SIZES = lambda r: (', &\n' + ' '*12).join(['merge(size(array,%d),size(array,%d),dim<=%d)' % (j+1,j,j) for j in range(1, r)])
 
+#! Convert a Julia / C99 hex floating-point literal to a Fortran double
+#! literal body via Python's float.fromhex + repr (round-trip exact).
+#:set hex_dp = lambda h: repr(float.fromhex(h))
+#:set hex_array = lambda lst: (', &\n        ').join([hex_dp(h) + '_dp' for h in lst])
+#:set hex_array_padded = lambda lst, n: hex_array(lst + ['0x0p+0'] * (n - len(lst)))
+
 #! Inline function: generate nested conversion loops
 #:set conv_loops = lambda r, src, dst, func: '\n'.join(['        do i%d = 1, size(%s, %d)' % (d, src, d) for d in range(r, 0, -1)] + ['            %s(%s) = %s(%s(%s))' % (dst, IDXS(r), func, src, IDXS(r))] + ['        end do'] * r)
 
 module multifloats
-    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_fma
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
+                                              ieee_fma, ieee_value, &
+                                              ieee_quiet_nan
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64
     implicit none
     private
@@ -532,6 +540,90 @@ module multifloats
     type(float64x2), parameter, public :: MF_SBIG   = float64x2([1.0e+50_dp,    0.0_dp])
     type(float64x2), parameter, public :: MF_RTMIN  = float64x2([1.0e-150_dp,   0.0_dp])
     type(float64x2), parameter, public :: MF_RTMAX  = float64x2([1.0e+150_dp,   0.0_dp])
+
+    ! ================================================================
+    ! Tables for full-DD exp / log (ported from MultiFloats.jl)
+    ! ================================================================
+
+    ! Polynomial coefficients for exp2 (Float64, N=2). 14 entries; the
+    ! lo limb is zero for entries 10..14.
+    real(dp), parameter :: exp2_coefs_hi(14) = [ &
+        ${hex_array(['+0x1.0000000000000p+0000', '+0x1.62E42FEFA39EFp-0001', '+0x1.EBFBDFF82C58Fp-0003', '+0x1.C6B08D704A0C0p-0005', '+0x1.3B2AB6FBA4E77p-0007', '+0x1.5D87FE78A6731p-0010', '+0x1.430912F86C787p-0013', '+0x1.FFCBFC588B0C7p-0017', '+0x1.62C0223A5C863p-0020', '+0x1.B5253D395E80Fp-0024', '+0x1.E4CF5152FBB30p-0028', '+0x1.E8CAC72F6E9E5p-0032', '+0x1.C3C1919538484p-0036', '+0x1.816519F74C4AFp-0040'])}$ ]
+    real(dp), parameter :: exp2_coefs_lo(14) = [ &
+        ${hex_array_padded(['+0x1.314BACF0323FFp-0113', '+0x1.ABC9E3B39803Fp-0056', '-0x1.5E43A53E454F1p-0057', '-0x1.D3316275139AEp-0059', '+0x1.4E65DFEF67D34p-0062', '+0x1.0717F88815ADFp-0066', '+0x1.BC7CDBCDC0339p-0067', '-0x1.E645E286FE571p-0071', '-0x1.99EF542AA8E1Ep-0074'], 14)}$ ]
+
+    ! exp2 input clamps. Below min: result = 0. Above max: result = inf.
+    real(dp), parameter :: exp2_min = ${hex_dp('-0x1.FF00000000000p+0009')}$_dp
+    real(dp), parameter :: exp2_max = ${hex_dp('+0x1.FFFFFFFFFFFFFp+0009')}$_dp
+
+    ! High-precision constants needed by exp / log conversions.
+    real(dp), parameter :: log2_e_hi = ${hex_dp('+0x1.71547652B82FEp+0000')}$_dp
+    real(dp), parameter :: log2_e_lo = ${hex_dp('+0x1.777D0FFDA0D24p-0056')}$_dp
+    real(dp), parameter :: ln_2_hi   = ${hex_dp('+0x1.62E42FEFA39EFp-0001')}$_dp
+    real(dp), parameter :: ln_2_lo   = ${hex_dp('+0x1.ABC9E3B39803Fp-0056')}$_dp
+    real(dp), parameter :: log10_2_hi = ${hex_dp('+0x1.34413509F79FFp-0002')}$_dp
+    real(dp), parameter :: log10_2_lo = ${hex_dp('-0x1.9DC1DA994FD21p-0059')}$_dp
+
+    ! log2 polynomial — narrow kernel (used with table lookup).
+    ! 7 coefficients; lo limb zero for entries 5..7.
+    real(dp), parameter :: log2_narrow_hi(7) = [ &
+        ${hex_array(['+0x1.71547652B82FEp+0001', '+0x1.EC709DC3A03FDp-0001', '+0x1.2776C50EF9BFEp-0001', '+0x1.A61762A7ADED9p-0002', '+0x1.484B13D7C0C4Dp-0002', '+0x1.0C9A845FCF968p-0002', '+0x1.C6A48D52BA6C7p-0003'])}$ ]
+    real(dp), parameter :: log2_narrow_lo(7) = [ &
+        ${hex_array_padded(['+0x1.777D0FFDA0D24p-0055', '+0x1.D27F055486A5Ap-0055', '+0x1.E4B2AE3DCBD87p-0055', '+0x1.90D60ECEBE07Fp-0057'], 7)}$ ]
+
+    ! log2 polynomial — wide kernel (direct path for x near 1).
+    ! 9 coefficients; lo limb zero for entries 7..9.
+    real(dp), parameter :: log2_wide_hi(9) = [ &
+        ${hex_array(['+0x1.71547652B82FEp+0001', '+0x1.EC709DC3A03FDp-0001', '+0x1.2776C50EF9BFEp-0001', '+0x1.A61762A7ADED9p-0002', '+0x1.484B13D7C02AFp-0002', '+0x1.0C9A84993C2EEp-0002', '+0x1.C68F56BF8A8ACp-0003', '+0x1.89F2F69137330p-0003', '+0x1.5D108CD7E21EBp-0003'])}$ ]
+    real(dp), parameter :: log2_wide_lo(9) = [ &
+        ${hex_array_padded(['+0x1.777D0FFDA0D24p-0055', '+0x1.D27F055480ABFp-0055', '+0x1.E4B2A0D0290E2p-0055', '+0x1.F8B804528988Ap-0057', '-0x1.9282874496178p-0057', '+0x1.0E0FE2C5542A6p-0056'], 9)}$ ]
+
+    ! 32-entry log2 lookup table. centers[i] = 1 + (2i-1)/64 (exact in dp,
+    ! lo limb is zero). values[i] = log2(centers[i]) precomputed in
+    ! BigFloat to ~106 bits then split into a DD pair.
+    real(dp), parameter :: log2_centers(32) = [ &
+        1.015625_dp, 1.046875_dp, 1.078125_dp, 1.109375_dp, &
+        1.140625_dp, 1.171875_dp, 1.203125_dp, 1.234375_dp, &
+        1.265625_dp, 1.296875_dp, 1.328125_dp, 1.359375_dp, &
+        1.390625_dp, 1.421875_dp, 1.453125_dp, 1.484375_dp, &
+        1.515625_dp, 1.546875_dp, 1.578125_dp, 1.609375_dp, &
+        1.640625_dp, 1.671875_dp, 1.703125_dp, 1.734375_dp, &
+        1.765625_dp, 1.796875_dp, 1.828125_dp, 1.859375_dp, &
+        1.890625_dp, 1.921875_dp, 1.953125_dp, 1.984375_dp ]
+    real(dp), parameter :: log2_values_hi(32) = [ &
+        0.02236781302845451_dp, 0.06608919045777244_dp, &
+        0.10852445677816905_dp, 0.14974711950468206_dp, &
+        0.18982455888001723_dp, 0.22881869049588088_dp, &
+        0.2667865406949014_dp,  0.30378074817710293_dp, &
+        0.33985000288462475_dp, 0.37503943134692475_dp, &
+        0.4093909361377018_dp,  0.4429434958487283_dp, &
+        0.47573343096639775_dp, 0.5077946401986962_dp, &
+        0.5391588111080314_dp,  0.5698556083309478_dp, &
+        0.5999128421871277_dp,  0.6293566200796096_dp, &
+        0.6582114827517948_dp,  0.6865005271832184_dp, &
+        0.7142455176661227_dp,  0.7414669864011469_dp, &
+        0.7681843247769263_dp,  0.794415866350106_dp, &
+        0.8201789624151877_dp,  0.8454900509443752_dp, &
+        0.8703647195834046_dp,  0.8948177633079435_dp, &
+        0.9188632372745945_dp,  0.9425145053392399_dp, &
+        0.965784284662087_dp,   0.9886846867721658_dp ]
+    real(dp), parameter :: log2_values_lo(32) = [ &
+        -1.593366605276194e-18_dp, -4.130247852756734e-18_dp, &
+         5.4046572138033075e-18_dp,  3.3957331682262494e-18_dp, &
+        -2.362617117852667e-19_dp, -5.967894054218645e-18_dp, &
+        -1.148454798555715e-17_dp, -8.333787019748188e-18_dp, &
+        -2.0897960245560436e-17_dp, 1.099000777384843e-17_dp, &
+        -2.1361956385051908e-17_dp, 2.7429379563921325e-17_dp, &
+         2.6712179058256416e-18_dp, 2.2368792763711565e-17_dp, &
+        -4.246405680857825e-17_dp,  3.494516357745965e-18_dp, &
+        -2.4103897311490816e-17_dp, 4.468163526988311e-17_dp, &
+        -1.4783628552133162e-17_dp, -3.0880950164975563e-17_dp, &
+        -1.670020420476703e-17_dp,  4.3007535189465375e-18_dp, &
+         2.7943000056050083e-17_dp, -6.972291600506703e-18_dp, &
+        -2.0610765990304212e-17_dp, -1.7498130336849765e-17_dp, &
+        -3.248732644336383e-17_dp,  2.3416884695657537e-17_dp, &
+        -7.610716771889941e-19_dp,  1.3760330846314947e-17_dp, &
+         5.439604524201502e-17_dp,  4.274898271281587e-17_dp ]
 
 contains
 
@@ -1037,6 +1129,163 @@ contains
     end function
 
     ! ================================================================
+    ! Full-DD exp / log kernels (ported from MultiFloats.jl)
+    ! ================================================================
+
+    ! Horner polynomial evaluation in DD. coefs(1) is the constant term.
+    pure function dd_horner(y, coefs_hi, coefs_lo) result(p)
+        type(float64x2), intent(in) :: y
+        real(dp), intent(in) :: coefs_hi(:), coefs_lo(:)
+        type(float64x2) :: p, c
+        integer :: i, n
+        n = size(coefs_hi)
+        p%limbs = [coefs_hi(n), coefs_lo(n)]
+        do i = n - 1, 1, -1
+            p = p * y
+            c%limbs = [coefs_hi(i), coefs_lo(i)]
+            p = p + c
+        end do
+    end function
+
+    ! exp2 kernel: x is in [-exp2_max, +exp2_max]. Returns 2^x as DD.
+    pure function dd_exp2_kernel(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, y, neg_n_dd, p
+        real(dp) :: n_float
+        integer :: n, half_n
+        ! Range reduction: n = nearest integer to x.hi, y = (x - n) / 8.
+        n_float = anint(x%limbs(1))
+        neg_n_dd%limbs = [-n_float, 0.0_dp]
+        y = x + neg_n_dd
+        y%limbs(1) = scale(y%limbs(1), -3)  ! exact divide by 8
+        y%limbs(2) = scale(y%limbs(2), -3)
+        ! Polynomial in y, then cube via three squarings to undo the / 8.
+        p = dd_horner(y, exp2_coefs_hi, exp2_coefs_lo)
+        p = p * p
+        p = p * p
+        p = p * p
+        ! Multiply by 2^n via two ldexps split to keep intermediates in
+        ! the dp normal range when |n| is near 1024.
+        n = nint(n_float)
+        half_n = n / 2
+        res%limbs(1) = scale(p%limbs(1), half_n)
+        res%limbs(2) = scale(p%limbs(2), half_n)
+        res%limbs(1) = scale(res%limbs(1), n - half_n)
+        res%limbs(2) = scale(res%limbs(2), n - half_n)
+    end function
+
+    ! Public-facing exp2 with input clamping for over- / underflow.
+    elemental function dd_exp2_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            ! exp2(NaN) = NaN; exp2(+inf) = +inf; exp2(-inf) = +0.
+            if (x%limbs(1) > 0.0_dp) then
+                res%limbs = [x%limbs(1), 0.0_dp]      ! +inf
+            else if (x%limbs(1) < 0.0_dp) then
+                res%limbs = [0.0_dp, 0.0_dp]
+            else
+                res%limbs = [x%limbs(1), 0.0_dp]      ! NaN
+            end if
+        else if (x%limbs(1) < exp2_min) then
+            res%limbs = [0.0_dp, 0.0_dp]
+        else if (x%limbs(1) > exp2_max) then
+            res%limbs = [huge(0.0_dp), 0.0_dp]
+        else
+            res = dd_exp2_kernel(x)
+        end if
+    end function
+
+    ! exp(x) = exp2(x * log2(e))
+    elemental function dd_exp_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, l2e
+        l2e%limbs = [log2_e_hi, log2_e_lo]
+        res = dd_exp2_full(x * l2e)
+    end function
+
+    ! log2 kernel for x > 0 finite. Implements both the direct branch
+    ! (x near 1) and the table-lookup branch (general x).
+    pure function dd_log2_kernel(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, t, t_sq, p, m, c, v, e_dd, num, den
+        real(dp) :: hi
+        integer :: e, idx
+        hi = x%limbs(1)
+        if (hi > 15.0_dp / 16.0_dp .and. hi < 17.0_dp / 16.0_dp) then
+            ! Direct path: t = (x - 1) / (x + 1).
+            num = x - MF_ONE
+            den = x + MF_ONE
+            t = num / den
+            t_sq = t * t
+            p = dd_horner(t_sq, log2_wide_hi, log2_wide_lo)
+            res = t * p
+        else
+            ! Table path: extract the binary exponent and the high 5
+            ! mantissa bits, then look up log2 of the bin center.
+            ! Fortran's exponent() puts the implicit fraction in [0.5,1)
+            ! whereas Julia / IEEE put it in [1,2); subtract one so the
+            ! reduced mantissa lands in [1, 2) as the table expects.
+            e = exponent(hi) - 1
+            m%limbs(1) = scale(x%limbs(1), -e)  ! m in [1, 2)
+            m%limbs(2) = scale(x%limbs(2), -e)
+            ! Index from the top 5 bits of (m - 1) * 32, clamped to 0..31.
+            idx = int((m%limbs(1) - 1.0_dp) * 32.0_dp)
+            if (idx < 0)  idx = 0
+            if (idx > 31) idx = 31
+            c%limbs = [log2_centers(idx + 1), 0.0_dp]
+            v%limbs = [log2_values_hi(idx + 1), log2_values_lo(idx + 1)]
+            num = m - c
+            den = m + c
+            t = num / den
+            t_sq = t * t
+            p = dd_horner(t_sq, log2_narrow_hi, log2_narrow_lo)
+            e_dd%limbs = [real(e, dp), 0.0_dp]
+            res = e_dd + v + t * p
+        end if
+    end function
+
+    ! log2 with special-case handling for 0, negative, inf, NaN.
+    elemental function dd_log2_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res
+        if (ieee_is_nan(x%limbs(1)) .or. x%limbs(1) < 0.0_dp) then
+            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
+        else if (x%limbs(1) == 0.0_dp) then
+            res%limbs = [-huge(0.0_dp), 0.0_dp]
+        else if (.not. ieee_is_finite(x%limbs(1))) then
+            res%limbs = [huge(0.0_dp), 0.0_dp]
+        else
+            res = dd_log2_kernel(x)
+        end if
+    end function
+
+    elemental function dd_log_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, l2, ln2
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            ! NaN propagates; +inf → +inf; -inf → NaN (caught below).
+            res%limbs = [log(x%limbs(1)), 0.0_dp]
+            return
+        end if
+        l2 = dd_log2_full(x)
+        ln2%limbs = [ln_2_hi, ln_2_lo]
+        res = l2 * ln2
+    end function
+
+    elemental function dd_log10_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, l2, l102
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            res%limbs = [log10(x%limbs(1)), 0.0_dp]
+            return
+        end if
+        l2 = dd_log2_full(x)
+        l102%limbs = [log10_2_hi, log10_2_lo]
+        res = l2 * l102
+    end function
+
+    ! ================================================================
     ! Unary math: mf → mf (elemental)
     ! ================================================================
 
@@ -1109,7 +1358,13 @@ contains
         ! rrspacing(x) = |x| / spacing(x). Compute against the DD spacing
         ! so the result is consistent with mf_spacing above.
         res%limbs = [abs(x%limbs(1)) / scale(spacing(x%limbs(1)), -53), 0.0_dp]
-#:elif func in ('exp', 'log', 'log10', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'erf', 'erfc', 'erfc_scaled', 'gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1')
+#:elif func == 'exp'
+        res = dd_exp_full(x)
+#:elif func == 'log'
+        res = dd_log_full(x)
+#:elif func == 'log10'
+        res = dd_log10_full(x)
+#:elif func in ('sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'erf', 'erfc', 'erfc_scaled', 'gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1')
         ! Derivative-corrected DD evaluation:
         !     func(hi + lo) ≈ func(hi) + func'(hi) * lo
         ! combined via fast_two_sum into a normalized DD result. Roughly
@@ -1117,16 +1372,7 @@ contains
         ! ever touching quad precision.
         block
             real(dp) :: fhi, deriv, corr, s, bp
-#:if func == 'exp'
-            fhi = exp(x%limbs(1))
-            deriv = fhi
-#:elif func == 'log'
-            fhi = log(x%limbs(1))
-            deriv = 1.0_dp / x%limbs(1)
-#:elif func == 'log10'
-            fhi = log10(x%limbs(1))
-            deriv = 1.0_dp / (x%limbs(1) * log(10.0_dp))
-#:elif func == 'sin'
+#:if func == 'sin'
             fhi = sin(x%limbs(1))
             deriv = cos(x%limbs(1))
 #:elif func == 'cos'
@@ -1252,7 +1498,27 @@ contains
         end block
 #:elif func == 'log'
         ! log(a+bi) = log(|z|) + i*atan2(b, a)
-        res%re = mf_log(mf_hypot_mf(x%re, x%im))
+        ! Compute log(|z|) without forming hypot(a, b) explicitly so the
+        ! formula does not overflow when |z| > huge.
+        block
+            type(float64x2) :: ax, ay, big, small, ratio, half
+            ax = abs(x%re)
+            ay = abs(x%im)
+            if (ax > ay) then
+                big = ax
+                small = ay
+            else
+                big = ay
+                small = ax
+            end if
+            if (big%limbs(1) == 0.0_dp) then
+                res%re%limbs = [-huge(0.0_dp), 0.0_dp]
+            else
+                ratio = small / big
+                half%limbs = [0.5_dp, 0.0_dp]
+                res%re = mf_log(big) + half * mf_log(MF_ONE + ratio * ratio)
+            end if
+        end block
         res%im = mf_atan2_mf(x%im, x%re)
 #:elif func == 'sin'
         ! sin(a+bi) = sin(a)*cosh(b) + i*cos(a)*sinh(b)
@@ -1558,6 +1824,11 @@ contains
                 root = big * mf_sqrt(MF_ONE + ratio * ratio)
                 res%limbs(1) = scale(root%limbs(1), scale_exp)
                 res%limbs(2) = scale(root%limbs(2), scale_exp)
+                if (.not. ieee_is_finite(res%limbs(1))) then
+                    ! True result exceeds dp range; force the lo limb
+                    ! to 0 so callers see a clean inf instead of garbage.
+                    res%limbs(2) = 0.0_dp
+                end if
             end if
         end block
 #:elif func == 'atan2'

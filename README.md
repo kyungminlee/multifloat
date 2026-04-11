@@ -88,11 +88,12 @@ A relative error reported as `0` means *exactly bit-equal* to the qp
 reference for every input the fuzz drew. Operations are organized by their
 precision class.
 
-### Full double-double (~1e-32 max — one DD ulp)
+### Full double-double (~1e-30 — 1e-32 max — close to one DD ulp)
 
-The arithmetic kernels and operations whose result is a bit-exact rearrangement
-of the input limbs. Worst-case error is one DD ulp, mean error around 1/100
-of a DD ulp.
+The arithmetic kernels, the kernels whose result is a bit-exact rearrangement
+of the input limbs, and the polynomial-based `exp` / `log` / `log10`
+families ported from MultiFloats.jl. Worst-case error is a small constant
+multiple of one DD ulp, mean error around 1/100 of a DD ulp.
 
 | Op | max_rel | mean_rel |
 | --- | --- | --- |
@@ -105,11 +106,15 @@ of a DD ulp.
 | `dim` | 6.2e-33 | 9.4e-35 |
 | `min`, `max`, `min(a..h)`, `max(a..h)` | 6.2e-33 | 9.5e-35 |
 | `hypot` (with overflow-safe scaling) | 7.8e-32 | 5.2e-33 |
+| `exp` (14-term polynomial in 1/8th-reduced range, cubed) | 3.2e-30 | 2.2e-32 |
+| `log`, `log10` (32-entry table + narrow polynomial) | 3.5e-32 | 3.3e-33 |
+| `pow` (mf**mf, mf**dp, dp**mf via `exp(b·log(a))`) | 2.1e-30 | 5.3e-32 |
 | `pow` (integer exponent, repeated multiplication) | 2.2e-32 | 1.3e-33 |
 | Complex `+`, `-` (real and imag parts) | 1.4e-32 | 3.2e-34 |
 | Complex `*` real part | 0 | 0 |
 | Complex `*` imag part | 1.9e-32 | 1.5e-33 |
 | Complex `/` real part | 4.5e-32 | 2.5e-33 |
+| `cx_log` real part (overflow-safe formula) | 7.7e-32 | 2.7e-33 |
 | `cx_conjg`, `cx_abs`, `cx_aimag` | 6.7e-32 | 5.4e-33 |
 
 ### Bit-exact (always 0 error)
@@ -131,17 +136,16 @@ promotions / truncations. The fuzz reports `max_rel = mean_rel = 0` over
 
 ### Single-double, first-order derivative corrected (~1e-16 max)
 
-Real transcendentals computed as `f(hi) + f'(hi) · lo` combined via
+Real transcendentals (other than `exp` / `log` / `log10` which have full
+DD implementations) computed as `f(hi) + f'(hi) · lo` combined via
 `fast_two_sum`. Each gives roughly one double ulp of relative error,
-which is single-double precision — *not* full DD precision. The cost
-saving (no quad-precision temporaries, no polynomial tables) is the
-deliberate tradeoff.
+which is single-double precision — *not* full DD precision. Porting
+these to full DD requires the same kind of polynomial / table approach
+that the new `exp` / `log` kernels use; the trig and inverse families
+are not yet ported.
 
 | Op | max_rel | mean_rel |
 | --- | --- | --- |
-| `exp` | 1.1e-16 | 2.2e-17 |
-| `log` | 1.1e-16 | 2.4e-17 |
-| `log10` | 1.0e-16 | 2.4e-17 |
 | `sin` | 1.1e-16 | 2.3e-17 |
 | `cos` | 1.1e-16 | 1.8e-17 |
 | `tan` | 2.9e-16 | 3.8e-17 |
@@ -162,13 +166,12 @@ deliberate tradeoff.
 ### Compound — chained derivative corrections (~1e-12 to 1e-14 max)
 
 Functions that internally chain two or more single-double-precision
-transcendentals or have cancellation in their construction. Worst-case
-error is several orders of magnitude looser than a single transcendental,
-but mean precision is typically still ~1e-15.
+transcendentals (`sin`, `cos`, `atan`, ...) or have cancellation in
+their construction. Mean precision is still ~1e-15 but worst-case can
+be a few orders looser.
 
 | Op | max_rel | mean_rel | Notes |
 | --- | --- | --- | --- |
-| `pow` (mf**mf), `mf**dp`, `dp**mf` | 3.4e-14 | 5.7e-16 | implemented as `exp(b·log(a))` |
 | `gamma` | 1.2e-16 | 4.0e-17 | derivative correction unavailable; uses libm directly |
 | `log_gamma` | 3.3e-16 | 5.0e-17 | likewise |
 | `bessel_j0` | 3.9e-16 | 2.4e-17 | libm Bessel precision |
@@ -177,8 +180,9 @@ but mean precision is typically still ~1e-15.
 | `bessel_y0` | 2.3e-15 | 8.3e-17 | |
 | `bessel_y1` | 7.9e-16 | 8.3e-17 | |
 | `bessel_yn` (n=3 sample) | 1.4e-13 | 2.1e-16 | |
-| `cx_exp` | 1.9e-16 | 5.0e-17 | derived from real `exp`, `sin`, `cos` |
-| `cx_log` | 1.1e-16 | 2.0e-17 | |
+| `cx_exp` | 1.9e-16 | 5.0e-17 | derived from real `exp` (full DD) and `sin`/`cos` (single-double) |
+| `cx_log` real part | (full DD — see above) | | |
+| `cx_log` imag part | 1.1e-16 | 2.0e-17 | uses `atan2` (single-double) |
 | `cx_sin`, `cx_cos`, `cx_sinh`, `cx_cosh` | 2.2e-16 | 5.1e-17 | |
 | `cx_tan`, `cx_tanh` | 1.9e-14 | 1.4e-16 | catastrophic cancellation in `sin/cos` near poles |
 | `cx_atan` | 1.1e-16 | 3.9e-17 | |
@@ -205,27 +209,35 @@ linearly with `n` while staying inside the full-DD regime.
 
 ### Why some functions only get single-double precision
 
-The transcendentals (`exp`, `log`, `sin`, `cos`, ...) are evaluated as
+The trig and inverse families (`sin`, `cos`, `tan`, `asin`, `acos`,
+`atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`),
+`erf` / `erfc` / `erfc_scaled`, and the `gamma` / `bessel` families are
+evaluated as
 
   `f(hi + lo) ≈ f(hi) + f'(hi) · lo`
 
 where `f(hi)` and `f'(hi)` come from the standard library on the leading
-limb only. This is *one* Newton step rather than the full polynomial
-evaluation that
+limb only. This is *one* Newton step rather than the polynomial /
+table-based approach that the new `exp` / `log` kernels use, and it caps
+their precision at roughly one double ulp (~1e-16).
+
+`exp`, `log`, and `log10` already have full ~1e-32 implementations
+ported from
 [Julia's MultiFloats.jl](https://github.com/dzhang314/MultiFloats.jl)
-uses to reach full DD precision in `exp`/`log`. The trade-off:
+under `external/MultiFloats.jl/src/`:
 
-- **No quad-precision dependency** — there are no polynomial coefficient
-  tables and no `__float128` / libquadmath calls in any kernel.
-- **Roughly doubles the precision of double** for benign inputs, but
-  cancellation in the formula or in `f'(hi)·lo` itself can reduce the
-  effective precision back toward single-double in pathological cases.
+- **`exp`** uses a 14-term polynomial in the 1/8th-reduced argument,
+  cubed via three squarings, with the binary exponent handled by an
+  `ldexp` split. The polynomial coefficients are 2-limb DD constants.
+- **`log` / `log10`** uses a 32-entry lookup table indexed by the top 5
+  bits of the mantissa, plus a polynomial in `t = (m - center)/(m + center)`.
+  For `x` in `[15/16, 17/16]` it falls back to a direct polynomial in
+  `t = (x - 1)/(x + 1)` with no table lookup.
 
-If you need true ~106-bit transcendentals, the route is to port the Julia
-polynomial evaluators (the tables under `external/MultiFloats.jl/src/`)
-into the `mf_${func}$` cases of `fsrc/multifloats.fypp`. The rest of the
-infrastructure (operators, reductions, complex / array support) is
-already at full DD.
+The same approach can be applied to the trig and other families — the
+polynomial / range-reduction patterns are documented in the Julia
+sources. None of the existing infrastructure (operators, reductions,
+complex / array support) needs changes; only the per-function kernel.
 
 ## Building
 

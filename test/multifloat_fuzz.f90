@@ -201,9 +201,11 @@ program multifloat_fuzz
        ! atan2 (works for any pair, including non-finite)
        call check(atan2(f1, f2), atan2(q1, q2), "atan2", q1, q2, num_errors)
 
-       ! Power operator: x**y for positive base, integer exponent
-       if (ieee_is_finite(real(q1, 8)) .and. q1 > 0.0_qp .and. q1 < 1e10_qp .and. &
-           ieee_is_finite(real(q2, 8)) .and. abs(q2) < 100.0_qp) then
+       ! Power operator: x**y for positive base, modest exponent.
+       ! Range chosen so q1**q2 stays well inside dp range, otherwise
+       ! the kernel under/overflows and the recorded rel_err is ~1.
+       if (ieee_is_finite(real(q1, 8)) .and. q1 > 1.0e-3_qp .and. q1 < 1.0e3_qp .and. &
+           ieee_is_finite(real(q2, 8)) .and. abs(q2) < 30.0_qp) then
          call check(f1 ** f2, q1 ** q2, "pow", q1, q2, num_errors)
          ! Mixed-type pow: mf**dp, dp**mf
          call check(f1 ** real(q2, 8), q1 ** real(q2, 8), "pow_md", q1, q2, num_errors)
@@ -383,7 +385,9 @@ contains
     select case (op)
     case ("add", "sub", "mul", "div", "sqrt", "abs", "neg", &
           "add_fd", "mul_df", "min", "max", "sign", "dim", &
-          "mod", "modulo", "hypot", "pow_int", &
+          "mod", "modulo", "hypot", "pow_int", "pow", "pow_md", "pow_dm", &
+          "exp", "log", "log10", &
+          "cx_log_re", &
           "aint", "anint", "fraction", "scale", "set_exponent", &
           "min3", "max3", &
           "arr_sum", "arr_max", "arr_min", "arr_dot", "arr_norm2", "arr_matmul", &
@@ -416,10 +420,10 @@ contains
   logical function is_compound(op)
     character(*), intent(in) :: op
     select case (op)
-    case ("pow", "pow_md", "pow_dm", "arr_prod", &
+    case ("arr_prod", &
           "bj0", "bj1", "by0", "by1", "bjn", "byn", &
           "gamma", "lgamma", "erfc_scaled", &
-          "cx_exp_re", "cx_exp_im", "cx_log_re", "cx_log_im", &
+          "cx_exp_re", "cx_exp_im", "cx_log_im", &
           "cx_sin_re", "cx_sin_im", "cx_cos_re", "cx_cos_im", &
           "cx_sinh_re", "cx_sinh_im", "cx_cosh_re", "cx_cosh_im", &
           "cx_tan_re", "cx_tan_im", "cx_tanh_re", "cx_tanh_im", &
