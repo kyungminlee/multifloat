@@ -671,6 +671,64 @@ module multifloats
         -1.6034234137163717e-29_dp, -4.965817957054884e-32_dp, &
         -1.0546803731213643e-32_dp ]
 
+    ! erf Taylor series:
+    !   erf(x) = x * sum_{n=0}^{49} c[n] * x^(2n)
+    ! where c[n] = (2/sqrt(pi)) * (-1)^n / (n! * (2n+1)).
+    ! 50 terms give full DD precision for |x| <= 6 (worst-case truncation
+    ! 6^99/(49!*99) ≈ 8e-40, well below the DD ulp of ~1e-32).
+    real(dp), parameter :: erf_coefs_hi(50) = [ &
+        1.1283791670955126_dp, -0.37612638903183754_dp, &
+        0.11283791670955126_dp, -0.026866170645131252_dp, &
+        0.005223977625442188_dp, -0.0008548327023450853_dp, &
+        0.00012055332981789664_dp, -1.492565035840625e-05_dp, &
+        1.6462114365889248e-06_dp, -1.6365844691234924e-07_dp, &
+        1.4807192815879218e-08_dp, -1.2290555301717928e-09_dp, &
+        9.422759064650411e-11_dp, -6.7113668551641105e-12_dp, &
+        4.4632242632864775e-13_dp, -2.7835162072109215e-14_dp, &
+        1.6342614095367152e-15_dp, -9.063970842808673e-17_dp, &
+        4.763348040515068e-18_dp, -2.3784598852774293e-19_dp, &
+        1.131218725924631e-20_dp, -5.136209054585811e-22_dp, &
+        2.2308786802746453e-23_dp, -9.28672901131906e-25_dp, &
+        3.71153285316323e-26_dp, -1.4263930180784176e-27_dp, &
+        5.279103332510834e-29_dp, -1.8841244217042036e-30_dp, &
+        6.492909974544561e-32_dp, -2.1630383901171243e-33_dp, &
+        6.973730328792914e-35_dp, -2.1781748594796097e-36_dp, &
+        6.597356545539203e-38_dp, -1.9395213725013487e-39_dp, &
+        5.539127534424142e-41_dp, -1.538027363683162e-42_dp, &
+        4.1552489658106737e-44_dp, -1.0930925207357809e-45_dp, &
+        2.801843440026779e-47_dp, -7.002335114640117e-49_dp, &
+        1.7073594878289175e-50_dp, -4.0639470618319806e-52_dp, &
+        9.448392328628975e-54_dp, -2.1467878854142287e-55_dp, &
+        4.769421502324767e-57_dp, -1.0365775670498273e-58_dp, &
+        2.2049686442621386e-60_dp, -4.59265585479012e-62_dp, &
+        9.370753999249602e-64_dp, -1.8737644566629794e-65_dp ]
+    real(dp), parameter :: erf_coefs_lo(50) = [ &
+        1.533545961316588e-17_dp, 1.3391897206030649e-17_dp, &
+        -4.017569161809194e-18_dp, 4.6092880729453e-19_dp, &
+        -8.962504586282528e-20_dp, 5.0148896786169737e-20_dp, &
+        6.480246840070509e-21_dp, -6.248427055364001e-22_dp, &
+        -1.0547266132407653e-22_dp, 1.5075323135139275e-24_dp, &
+        -3.254656350443331e-25_dp, 9.976105519856072e-26_dp, &
+        -2.8231273253303265e-27_dp, 1.0441838553137576e-28_dp, &
+        -1.415652238799887e-29_dp, 1.4189660114017355e-30_dp, &
+        -1.159587670993415e-32_dp, 3.004743561097066e-33_dp, &
+        -1.856680962530252e-34_dp, -1.5875374697145176e-35_dp, &
+        7.245880865990418e-38_dp, -1.4537189752115876e-38_dp, &
+        -4.7283897669065125e-40_dp, -2.2114070452037343e-41_dp, &
+        -2.864576959470938e-42_dp, -3.298130029636975e-44_dp, &
+        2.3921205704042427e-45_dp, -1.106406475814513e-47_dp, &
+        1.2592869837235584e-48_dp, -1.2253141605940307e-49_dp, &
+        4.242571852198481e-51_dp, -1.3045967020940556e-52_dp, &
+        4.177193607879865e-55_dp, 5.869824242611732e-56_dp, &
+        -2.1631332158779208e-57_dp, 3.262876687823446e-60_dp, &
+        -5.5037931014990846e-61_dp, 5.540458322951681e-62_dp, &
+        9.259808565197577e-64_dp, 1.3200652030502501e-65_dp, &
+        -9.490441382723132e-67_dp, -3.3631583324243266e-68_dp, &
+        2.7994711326647915e-70_dp, 1.7816791770026858e-71_dp, &
+        1.5216055227045837e-74_dp, 5.5040127417898383e-76_dp, &
+        -1.3741888831536437e-76_dp, -1.6966388960870593e-78_dp, &
+        -2.28824162542219e-80_dp, -7.09889581208805e-82_dp ]
+
 contains
 
     ! ================================================================
@@ -1675,6 +1733,70 @@ contains
         res = dd_log_full(arg)
     end function
 
+    ! erf kernel.
+    !
+    ! For |x| < 2: 50-term Taylor series with full DD precision. The
+    ! Taylor series has the property that |n!·(2n+1)| > |x|^(2n+1) past
+    ! some n₀; for x = 2 this happens around n ≈ 30, and the remaining
+    ! ~20 terms drive the truncation below the DD ulp (~1e-32). For
+    ! larger x the peak intermediate terms become so large that
+    ! cancellation erodes all the precision, so the Taylor path is
+    ! restricted to |x| ≤ 2.
+    !
+    ! For |x| ≥ 2: use erf(x) = sign(x) * (1 - erfc(|x|)) with the DD
+    ! subtraction handling the low limb. libm's erfc is ~1 dp ulp
+    ! accurate, so the low limb is correct to roughly the precision of
+    ! erfc itself:
+    !   x = 2   erfc ≈ 4.7e-3  absolute error ~ 5e-19
+    !   x = 3   erfc ≈ 2.2e-5  absolute error ~ 2e-21
+    !   x = 4   erfc ≈ 1.5e-8  absolute error ~ 2e-24
+    !   x = 5   erfc ≈ 1.5e-12 absolute error ~ 2e-28
+    !   x ≥ 6   erfc ≤ 2e-17   absolute error below DD ulp (full DD)
+    elemental function dd_erf_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, ax, x2, poly, erfc_dd
+        real(dp) :: hi
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            res%limbs = [erf(x%limbs(1)), 0.0_dp]
+            return
+        end if
+        hi = x%limbs(1)
+        if (hi >= 0.0_dp) then
+            ax = x
+        else
+            ax%limbs = -x%limbs
+        end if
+        if (ax%limbs(1) < 2.0_dp) then
+            ! Taylor: poly = sum c[n] * x²ⁿ, result = x * poly.
+            x2 = ax * ax
+            poly = dd_horner(x2, erf_coefs_hi, erf_coefs_lo)
+            res = ax * poly
+        else
+            ! (1 - libm_erfc(x)); the DD subtraction preserves the low
+            ! limb down to the libm precision floor.
+            erfc_dd%limbs = [erfc(ax%limbs(1)), 0.0_dp]
+            res = MF_ONE - erfc_dd
+        end if
+        if (hi < 0.0_dp) res%limbs = -res%limbs
+    end function
+
+    elemental function dd_erfc_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, e
+        ! erfc(x) = 1 - erf(x), with a direct dp fall-through for large
+        ! positive x where the subtraction would lose all the precision.
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            res%limbs = [erfc(x%limbs(1)), 0.0_dp]
+            return
+        end if
+        if (x%limbs(1) >= 6.0_dp) then
+            res%limbs = [erfc(x%limbs(1)), 0.0_dp]
+            return
+        end if
+        e = dd_erf_full(x)
+        res = MF_ONE - e
+    end function
+
     elemental function dd_atanh_full(x) result(res)
         type(float64x2), intent(in) :: x
         type(float64x2) :: res, num, den, ratio, half
@@ -1837,7 +1959,11 @@ contains
         res = dd_acosh_full(x)
 #:elif func == 'atanh'
         res = dd_atanh_full(x)
-#:elif func in ('erf', 'erfc', 'erfc_scaled', 'gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1')
+#:elif func == 'erf'
+        res = dd_erf_full(x)
+#:elif func == 'erfc'
+        res = dd_erfc_full(x)
+#:elif func in ('erfc_scaled', 'gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1')
         ! Derivative-corrected DD evaluation:
         !     func(hi + lo) ≈ func(hi) + func'(hi) * lo
         ! combined via fast_two_sum into a normalized DD result. Roughly
@@ -1845,20 +1971,12 @@ contains
         ! ever touching quad precision.
         block
             real(dp) :: fhi, deriv, corr, s, bp
-#:if func == 'erf'
-            fhi = erf(x%limbs(1))
-            deriv = (2.0_dp / sqrt(acos(-1.0_dp))) * exp(-x%limbs(1) * x%limbs(1))
-#:elif func == 'erfc'
-            fhi = erfc(x%limbs(1))
-            deriv = -(2.0_dp / sqrt(acos(-1.0_dp))) * exp(-x%limbs(1) * x%limbs(1))
-#:else
             ! erfc_scaled, gamma, log_gamma, bessel_*: no closed-form
             ! correction available without further special functions, so
             ! fall back to a leading-limb evaluation. Precision drops to
             ! single-double for these but no quad precision is involved.
             fhi = ${func}$(x%limbs(1))
             deriv = 0.0_dp
-#:endif
             corr = deriv * x%limbs(2)
             s = fhi + corr
             bp = s - fhi

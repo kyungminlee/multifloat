@@ -160,18 +160,35 @@ promotions / truncations. The fuzz reports `max_rel = mean_rel = 0` over
 
 ### Single-double, first-order derivative corrected (~1e-16 max)
 
-Error and gamma families computed as `f(hi) + f'(hi) · lo` combined
-via `fast_two_sum`. Each gives roughly one double ulp of relative
-error, which is single-double precision — *not* full DD precision.
+`gamma` / `log_gamma` and the Bessel family are still computed as
+`f(hi) + f'(hi) · lo` combined via `fast_two_sum`, which gives
+roughly one double ulp of relative error — single-double precision.
 There is no Julia polynomial port to crib from for these; getting
 them to full DD would need dedicated polynomial / continued-fraction
-approximations.
+approximations. `erfc_scaled` is in the same bucket.
+
+`erf` and `erfc` have been upgraded to a hybrid kernel:
+
+- **`|x| < 2`** — 50-term Taylor series with DD coefficients (full DD).
+- **`|x| ≥ 2`** — `erf(x) = sign(x) · (1 − erfc_dp(|x|))` with the DD
+  subtraction preserving the low limb down to the precision of libm's
+  dp `erfc`. At `|x| = 2` that's ~5e-19; at `|x| ≥ 6` the low limb is
+  below the DD ulp floor and the result is full DD.
+
+Mean error across `multifloat_fuzz`'s random input distribution is
+now ~2e-21 for `erf` (5 orders better than the previous
+derivative-corrected version). Worst case is still ~2e-18 because
+the `|x| ∈ [2, 6]` band inherits libm's dp precision for `erfc`.
+Reaching full DD across the whole range would need a full-DD
+asymptotic expansion (for `|x| > 6`, already trivial) and either a
+many-term positive-series `e^(-x²) · Σ (2x²)^n / (2n+1)!!` for the
+intermediate range or a much larger Taylor table.
 
 | Op | max_rel | mean_rel |
 | --- | --- | --- |
-| `erf` | 4.1e-16 | 9.8e-17 |
-| `erfc` | 5.4e-16 | 3.6e-17 |
-| `erfc_scaled` | 5.8e-16 | 4.8e-17 |
+| `erf` | 2.2e-18 | 1.9e-21 |
+| `erfc` | 5.0e-16 | 2.1e-18 |
+| `erfc_scaled` | 4.8e-16 | 4.9e-17 |
 
 ### Compound — chained derivative corrections (~1e-12 to 1e-14 max)
 
