@@ -3093,11 +3093,30 @@ $:mf_minmax_body(func, n)
     pure function mf_dot_product(a, b) result(res)
         type(float64x2), intent(in) :: a(:), b(:)
         type(float64x2) :: res
-        integer :: i1
-        res = mf_from_dp(0.0_dp)
-        do i1 = 1, size(a)
-            res = res + a(i1) * b(i1)
+        ! Fused multiply-accumulate: compute each a(k)*b(k) via two_prod,
+        ! add the leading term into s_hi via two_sum, and sweep all
+        ! corrections into s_lo. Single normalization at the end.
+        real(dp) :: s_hi, s_lo, ah, al, bh, bl
+        real(dp) :: p, e, cross, t, bp, ap, aerr, berr
+        integer :: k
+        s_hi = 0.0_dp
+        s_lo = 0.0_dp
+        do k = 1, size(a)
+            ah = a(k)%limbs(1); al = a(k)%limbs(2)
+            bh = b(k)%limbs(1); bl = b(k)%limbs(2)
+            p = ah * bh
+            e = ieee_fma(ah, bh, -p)
+            cross = ah * bl + al * bh
+            t = s_hi + p
+            bp = t - s_hi; ap = t - bp
+            aerr = s_hi - ap; berr = p - bp
+            s_lo = s_lo + (e + cross + aerr + berr)
+            s_hi = t
         end do
+        t = s_hi + s_lo
+        bp = t - s_hi
+        res%limbs(1) = t
+        res%limbs(2) = s_lo - bp
     end function
 
     pure function cx_dot_product(a, b) result(res)
@@ -3352,15 +3371,30 @@ $:mf_minmax_body(func, n)
     pure function mf_matmul_mm(a, b) result(res)
         type(float64x2), intent(in) :: a(:,:), b(:,:)
         type(float64x2) :: res(size(a,1), size(b,2))
-        type(float64x2) :: s
-        integer :: i1, i2, k
+        ! Fused DD multiply-accumulate — same kernel as mf_dot_product
+        ! but inlined to avoid assumed-shape descriptor overhead.
+        real(dp) :: s_hi, s_lo, ah, al, bh, bl
+        real(dp) :: p, e, cross, t, bp, ap, aerr, berr
+        integer :: i1, i2, k, n
+        n = size(a, 2)
         do i2 = 1, size(b,2)
             do i1 = 1, size(a,1)
-                s = mf_from_dp(0.0_dp)
-                do k = 1, size(a,2)
-                    s = s + a(i1,k) * b(k,i2)
+                s_hi = 0.0_dp; s_lo = 0.0_dp
+                do k = 1, n
+                    ah = a(i1,k)%limbs(1); al = a(i1,k)%limbs(2)
+                    bh = b(k,i2)%limbs(1); bl = b(k,i2)%limbs(2)
+                    p = ah * bh
+                    e = ieee_fma(ah, bh, -p)
+                    cross = ah * bl + al * bh
+                    t = s_hi + p
+                    bp = t - s_hi; ap = t - bp
+                    aerr = s_hi - ap; berr = p - bp
+                    s_lo = s_lo + (e + cross + aerr + berr)
+                    s_hi = t
                 end do
-                res(i1,i2) = s
+                t = s_hi + s_lo; bp = t - s_hi
+                res(i1,i2)%limbs(1) = t
+                res(i1,i2)%limbs(2) = s_lo - bp
             end do
         end do
     end function
@@ -3369,14 +3403,27 @@ $:mf_minmax_body(func, n)
     pure function mf_matmul_mv(a, b) result(res)
         type(float64x2), intent(in) :: a(:,:), b(:)
         type(float64x2) :: res(size(a,1))
-        type(float64x2) :: s
-        integer :: i1, k
+        real(dp) :: s_hi, s_lo, ah, al, bh, bl
+        real(dp) :: p, e, cross, t, bp, ap, aerr, berr
+        integer :: i1, k, n
+        n = size(a, 2)
         do i1 = 1, size(a,1)
-            s = mf_from_dp(0.0_dp)
-            do k = 1, size(a,2)
-                s = s + a(i1,k) * b(k)
+            s_hi = 0.0_dp; s_lo = 0.0_dp
+            do k = 1, n
+                ah = a(i1,k)%limbs(1); al = a(i1,k)%limbs(2)
+                bh = b(k)%limbs(1);    bl = b(k)%limbs(2)
+                p = ah * bh
+                e = ieee_fma(ah, bh, -p)
+                cross = ah * bl + al * bh
+                t = s_hi + p
+                bp = t - s_hi; ap = t - bp
+                aerr = s_hi - ap; berr = p - bp
+                s_lo = s_lo + (e + cross + aerr + berr)
+                s_hi = t
             end do
-            res(i1) = s
+            t = s_hi + s_lo; bp = t - s_hi
+            res(i1)%limbs(1) = t
+            res(i1)%limbs(2) = s_lo - bp
         end do
     end function
 
@@ -3384,14 +3431,27 @@ $:mf_minmax_body(func, n)
     pure function mf_matmul_vm(a, b) result(res)
         type(float64x2), intent(in) :: a(:), b(:,:)
         type(float64x2) :: res(size(b,2))
-        type(float64x2) :: s
-        integer :: i2, k
+        real(dp) :: s_hi, s_lo, ah, al, bh, bl
+        real(dp) :: p, e, cross, t, bp, ap, aerr, berr
+        integer :: i2, k, n
+        n = size(a)
         do i2 = 1, size(b,2)
-            s = mf_from_dp(0.0_dp)
-            do k = 1, size(a)
-                s = s + a(k) * b(k,i2)
+            s_hi = 0.0_dp; s_lo = 0.0_dp
+            do k = 1, n
+                ah = a(k)%limbs(1);    al = a(k)%limbs(2)
+                bh = b(k,i2)%limbs(1); bl = b(k,i2)%limbs(2)
+                p = ah * bh
+                e = ieee_fma(ah, bh, -p)
+                cross = ah * bl + al * bh
+                t = s_hi + p
+                bp = t - s_hi; ap = t - bp
+                aerr = s_hi - ap; berr = p - bp
+                s_lo = s_lo + (e + cross + aerr + berr)
+                s_hi = t
             end do
-            res(i2) = s
+            t = s_hi + s_lo; bp = t - s_hi
+            res(i2)%limbs(1) = t
+            res(i2)%limbs(2) = s_lo - bp
         end do
     end function
 
