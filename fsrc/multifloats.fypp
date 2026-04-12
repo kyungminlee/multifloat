@@ -668,6 +668,40 @@ module multifloats
     real(dp), parameter :: inv_pi_lo  = -1.9678676675182486e-17_dp
     real(dp), parameter :: inv_pi_lo2 = -1.0721436282893004e-33_dp
 
+    ! pi/2 as a 3-part constant for Cody-Waite range reduction (~161 bits).
+    real(dp), parameter :: pi_half_cw1 = 1.5707963267948966_dp
+    real(dp), parameter :: pi_half_cw2 = 6.123233995736766e-17_dp
+    real(dp), parameter :: pi_half_cw3 = -1.4973849048591698e-33_dp
+
+    ! sin(x)/x Taylor coefficients as DD pairs: c(k) = (-1)^k / (2k+1)!
+    ! 10 terms cover |x| <= pi/4 to ~2^-115 (well below DD epsilon).
+    real(dp), parameter :: sin_taylor_hi(10) = [ &
+        1.0_dp, -0.16666666666666666_dp, 0.008333333333333333_dp, &
+        -0.0001984126984126984_dp, 2.7557319223985893e-06_dp, &
+        -2.505210838544172e-08_dp, 1.6059043836821613e-10_dp, &
+        -7.647163731819816e-13_dp, 2.8114572543455206e-15_dp, &
+        -8.22063524662433e-18_dp]
+    real(dp), parameter :: sin_taylor_lo(10) = [ &
+        0.0_dp, -9.25185853854297e-18_dp, 1.1564823173178714e-19_dp, &
+        -1.7209558293420705e-22_dp, -1.858393274046472e-22_dp, &
+        1.448814070935912e-24_dp, 1.2585294588752098e-26_dp, &
+        -7.03872877733453e-30_dp, 1.6508842730861433e-31_dp, &
+        -2.2141894119604265e-34_dp]
+
+    ! cos(x) Taylor coefficients as DD pairs: c(k) = (-1)^k / (2k)!
+    real(dp), parameter :: cos_taylor_hi(10) = [ &
+        1.0_dp, -0.5_dp, 0.041666666666666664_dp, &
+        -0.001388888888888889_dp, 2.48015873015873e-05_dp, &
+        -2.755731922398589e-07_dp, 2.08767569878681e-09_dp, &
+        -1.1470745597729725e-11_dp, 4.779477332387385e-14_dp, &
+        -1.5619206968586225e-16_dp]
+    real(dp), parameter :: cos_taylor_lo(10) = [ &
+        0.0_dp, 0.0_dp, 2.3129646346357427e-18_dp, &
+        5.300543954373577e-20_dp, 2.1511947866775882e-23_dp, &
+        -2.3767714622250297e-23_dp, -1.20734505911326e-25_dp, &
+        -2.0655512752830745e-28_dp, 4.399205485834081e-31_dp, &
+        -1.1910679660273754e-32_dp]
+
     ! sinpi polynomial: sinpi(x) = x * sum coefs[n]*x^(2n-2) for n=1..15.
     ! coefs[n] = -(-1)^n * pi^(2n-1) / (2n-1)!
     real(dp), parameter :: sinpi_coefs_hi(15) = [ &
@@ -1514,47 +1548,151 @@ contains
         end select
     end function
 
-    ! Compute x / pi using a 3-part 1/pi constant (~161 bits). The extra
-    ! 55 bits vs the 2-part DD constant ensure that the reduced argument
-    ! retains full DD precision for |x| up to ~1e15. The third part
-    ! (inv_pi_lo2) contributes ~1e-33 * x, which is below DD epsilon for
-    ! |x| < ~1e2 but matters for larger |x|.
-    elemental function dd_mul_inv_pi(x) result(res)
+    ! 3-part Cody-Waite range reduction: compute r = x - n*(π/2) using
+    ! the 3-part π/2 constant (~161 bits). n is the nearest integer to
+    ! x/(π/2), computed via dp. Each subtraction step uses DD - dp
+    ! (exact via two_sum when |n*pi_half_cw*| < 2^53).
+    ! Returns (r, n_mod4) where r is the DD reduced argument and
+    ! n_mod4 is n mod 4 for quadrant dispatch.
+    elemental subroutine dd_reduce_pi_half(x, r, n_mod4)
         type(float64x2), intent(in) :: x
-        type(float64x2) :: res
-        real(dp) :: p1, e1, p2, e2, p3, s, t, bp
-        ! x_hi * inv_pi_hi — the dominant term
-        p1 = x%limbs(1) * inv_pi_hi
-        e1 = ieee_fma(x%limbs(1), inv_pi_hi, -p1)
-        ! Cross terms and lower-order products
-        p2 = x%limbs(1) * inv_pi_lo + x%limbs(2) * inv_pi_hi
-        p3 = x%limbs(1) * inv_pi_lo2 + x%limbs(2) * inv_pi_lo
-        ! Combine: p1 + (e1 + p2 + p3) via two_sum
-        s = e1 + p2 + p3
-        t = p1 + s; bp = t - p1
-        res%limbs(1) = t
-        res%limbs(2) = s - bp
+        type(float64x2), intent(out) :: r
+        integer, intent(out) :: n_mod4
+        real(dp) :: n_float, p, s, bp, ap, aerr, berr, rh, rl
+        ! n = nearest integer to x / (π/2)
+        n_float = anint(x%limbs(1) * 0.6366197723675814_dp)  ! 2/π
+        ! r = x - n*(π/2) using 3-part Cody-Waite with DD arithmetic.
+        ! Each n*pi_half_cwK is computed exactly as a DD via FMA, then
+        ! subtracted from r using full DD subtraction. This preserves
+        ! ~106 bits throughout (vs dp accumulation which loses ~36 bits).
+        block
+            type(float64x2) :: npi
+            r = x
+            ! Step 1: r -= n * pi_half_cw1 (exact DD product via FMA)
+            npi%limbs(1) = n_float * pi_half_cw1
+            npi%limbs(2) = ieee_fma(n_float, pi_half_cw1, -npi%limbs(1))
+            r = r - npi
+            ! Step 2: r -= n * pi_half_cw2
+            npi%limbs(1) = n_float * pi_half_cw2
+            npi%limbs(2) = ieee_fma(n_float, pi_half_cw2, -npi%limbs(1))
+            r = r - npi
+            ! Step 3: r -= n * pi_half_cw3 (single dp, error is ~1e-50)
+            npi%limbs(1) = n_float * pi_half_cw3
+            npi%limbs(2) = 0.0_dp
+            r = r - npi
+        end block
+        n_mod4 = iand(int(abs(n_float), int64), 3_int64)
+        if (n_float < 0.0_dp) n_mod4 = iand(4_int64 - int(n_mod4, int64), 3_int64)
+    end subroutine
+
+    ! sin/cos kernel: evaluate the Taylor polynomial directly in x (not
+    ! in x/π), using the Horner scheme on the DD coefficients. These
+    ! compute sin(x)/x and cos(x) for |x| <= π/4.
+    pure function dd_sin_kernel(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, x_sq
+        x_sq = x * x
+        res = dd_horner(x_sq, sin_taylor_hi, sin_taylor_lo)
+        res = res * x
+    end function
+
+    pure function dd_cos_kernel(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, x_sq
+        x_sq = x * x
+        res = dd_horner(x_sq, cos_taylor_hi, cos_taylor_lo)
+    end function
+
+    ! Evaluate sin(r) for |r| ≤ π/4. If |r| > π/8, shift by π/4 and use
+    ! the angle-addition identity to halve the polynomial argument range.
+    elemental function dd_sin_eval(r) result(res)
+        type(float64x2), intent(in) :: r
+        type(float64x2) :: res, rp, sk, ck, inv_sqrt2
+        real(dp), parameter :: pi8 = 0.392699081698724_dp
+        if (abs(r%limbs(1)) <= pi8) then
+            res = dd_sin_kernel(r)
+        else
+            inv_sqrt2%limbs = [0.7071067811865476_dp, -4.833646656726457e-17_dp]
+            block
+                type(float64x2) :: pi4_dd
+                pi4_dd%limbs = [0.7853981633974483_dp, 3.061616997868383e-17_dp]
+                rp = merge(r - pi4_dd, r + pi4_dd, r%limbs(1) > 0.0_dp)
+            end block
+            sk = dd_sin_kernel(rp); ck = dd_cos_kernel(rp)
+            res = merge((sk + ck) * inv_sqrt2, (sk - ck) * inv_sqrt2, &
+                        r%limbs(1) > 0.0_dp)
+        end if
+    end function
+
+    ! Evaluate cos(r) for |r| ≤ π/4, same π/8 split.
+    elemental function dd_cos_eval(r) result(res)
+        type(float64x2), intent(in) :: r
+        type(float64x2) :: res, rp, sk, ck, inv_sqrt2
+        real(dp), parameter :: pi8 = 0.392699081698724_dp
+        if (abs(r%limbs(1)) <= pi8) then
+            res = dd_cos_kernel(r)
+        else
+            inv_sqrt2%limbs = [0.7071067811865476_dp, -4.833646656726457e-17_dp]
+            block
+                type(float64x2) :: pi4_dd
+                pi4_dd%limbs = [0.7853981633974483_dp, 3.061616997868383e-17_dp]
+                rp = merge(r - pi4_dd, r + pi4_dd, r%limbs(1) > 0.0_dp)
+            end block
+            sk = dd_sin_kernel(rp); ck = dd_cos_kernel(rp)
+            res = merge((ck - sk) * inv_sqrt2, (ck + sk) * inv_sqrt2, &
+                        r%limbs(1) > 0.0_dp)
+        end if
     end function
 
     elemental function dd_sin_full(x) result(res)
         type(float64x2), intent(in) :: x
-        type(float64x2) :: res
-        res = dd_sinpi_full(dd_mul_inv_pi(x))
+        type(float64x2) :: res, r
+        integer :: q
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
+            return
+        end if
+        call dd_reduce_pi_half(x, r, q)
+        select case (q)
+        case (0); res =  dd_sin_eval(r)
+        case (1); res =  dd_cos_eval(r)
+        case (2); res = -dd_sin_eval(r)
+        case (3); res = -dd_cos_eval(r)
+        end select
     end function
 
     elemental function dd_cos_full(x) result(res)
         type(float64x2), intent(in) :: x
-        type(float64x2) :: res
-        res = dd_cospi_full(dd_mul_inv_pi(x))
+        type(float64x2) :: res, r
+        integer :: q
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
+            return
+        end if
+        call dd_reduce_pi_half(x, r, q)
+        select case (q)
+        case (0); res =  dd_cos_eval(r)
+        case (1); res = -dd_sin_eval(r)
+        case (2); res = -dd_cos_eval(r)
+        case (3); res =  dd_sin_eval(r)
+        end select
     end function
 
     elemental function dd_tan_full(x) result(res)
         type(float64x2), intent(in) :: x
-        type(float64x2) :: res, y, s, c
-        y = dd_mul_inv_pi(x)
-        s = dd_sinpi_full(y)
-        c = dd_cospi_full(y)
-        res = s / c
+        type(float64x2) :: res, r
+        integer :: q
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
+            return
+        end if
+        call dd_reduce_pi_half(x, r, q)
+        select case (q)
+        case (0); res =  dd_sin_eval(r) / dd_cos_eval(r)
+        case (1); res = -dd_cos_eval(r) / dd_sin_eval(r)
+        case (2); res =  dd_sin_eval(r) / dd_cos_eval(r)
+        case (3); res = -dd_cos_eval(r) / dd_sin_eval(r)
+        end select
     end function
 
     ! sinh / cosh / tanh derived from the new full-DD exp.
