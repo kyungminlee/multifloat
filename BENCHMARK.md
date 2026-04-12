@@ -99,15 +99,15 @@ values > 1× mean multifloats is faster.
 
 | op | speedup | max\_rel | precision | approach |
 |---|---|---|---|---|
-| sin | **2.7×** | 4.7e-25 | near-DD | Julia: sinpi/cospi Horner polynomial (full DD) + 3-part 1/π Cody–Waite reduction (precision limited by reduction, not polynomial) |
-| cos | **2.7×** | 3.4e-25 | near-DD | Julia: sinpi/cospi Horner polynomial (full DD) + 3-part 1/π Cody–Waite reduction (precision limited by reduction, not polynomial) |
-| sinpi | **3.5×** | 4.9e-27 | full DD | Julia: sinpi Horner polynomial, direct (no 1/π reduction needed) |
-| cospi | **3.5×** | 8.2e-27 | full DD | Julia: cospi Horner polynomial, direct (no 1/π reduction needed) |
-| tan | 1.3× | 4.7e-25 | near-DD | Julia: sinpi/cospi kernels + DD divide; precision limited by 1/π reduction |
-| asin | **2.0×** | 3.4e-32 | full DD | original: Newton step on sin, seeded by libm asin(hi) |
-| acos | 1.9× | 2.6e-32 | full DD | original: Newton step on cos, seeded by libm acos(hi) |
-| atan | 1.2× | 9.8e-23 | deriv-corrected | original: Newton step on tan, seeded by libm atan(hi) |
-| atan2 | 1.2× | 4.3e-32 | full DD | original: Newton step on atan, with quadrant correction |
+| sin | **2.5×** | 5.3e-27 | near-full DD | original: 10-term Taylor Horner + 3-part Cody–Waite π/2 reduction (DD arithmetic) + π/8 argument split |
+| cos | **2.5×** | 5.3e-27 | near-full DD | original: 10-term Taylor Horner + 3-part Cody–Waite π/2 reduction (DD arithmetic) + π/8 argument split |
+| sinpi | **3.6×** | 4.9e-27 | full DD | Julia: sinpi Horner polynomial, direct (no range reduction needed) |
+| cospi | **3.6×** | 8.2e-27 | full DD | Julia: cospi Horner polynomial, direct (no range reduction needed) |
+| tan | 1.2× | 3.2e-27 | near-full DD | original: sin/cos Taylor kernels + DD divide |
+| asin | 1.8× | 5.7e-27 | near-full DD | original: Newton step on sin, seeded by libm asin(hi); limited by sin kernel precision |
+| acos | 1.9× | 3.6e-27 | near-full DD | original: Newton step on cos, seeded by libm acos(hi); limited by cos kernel precision |
+| atan | 1.1× | 8.2e-23 | deriv-corrected | original: Newton step on tan, seeded by libm atan(hi) |
+| atan2 | 1.0× | 4.4e-28 | near-full DD | original: Newton step on atan, with quadrant correction |
 
 ### Hyperbolic
 
@@ -278,9 +278,11 @@ algorithms), so only speedup is shown.
   `~10^(log10(quotient) - 31)` for large quotients, which is the inherent DD
   precision limit.
 
-- **Trig range reduction** uses a 3-part 1/π constant (~161 bits) via
-  Cody–Waite reduction. This keeps sin/cos/tan accurate to ~1e-25 for
-  |x| < 1e6 (the fuzz test range). For larger arguments, a Payne–Hanek
+- **Trig range reduction** uses a 3-part π/2 constant (~161 bits) via
+  Cody–Waite subtraction with DD arithmetic (FMA-captured product errors).
+  Combined with the π/8 argument split (which halves the polynomial
+  evaluation range from x² ≤ 0.616 to x² ≤ 0.154), this gives near-full
+  DD precision (~5e-27) for sin/cos/tan. For |x| > ~1e15, a Payne–Hanek
   reduction with a multi-word 2/π table would be needed.
 
 - **Single-double precision** functions (gamma, bessel, erfc\_scaled, etc.)
