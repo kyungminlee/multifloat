@@ -2583,13 +2583,12 @@ contains
             end if
         end block
 #:elif func == 'mod'
-        ! Iterative reduction: for large exponent gaps, reduce by
-        ! floor(r / shifted_y) * shifted_y to close the gap by ~50 bits
-        ! per iteration. For small gaps, use floor(r / y) * y directly.
-        ! Adapted from external/float64x2-sample.cpp.
+        ! Fast iterative reduction for exponent gaps ≤ 53 (quotients
+        ! up to ~2^53). For larger gaps, fall back to the divide-based
+        ! path which computes trunc(x/y) without iterative cancellation.
         block
             logical :: x_neg
-            type(float64x2) :: ax, ay, r, sy
+            type(float64x2) :: ax, ay, r
             real(dp) :: q
             integer :: ex, ey, diff
             x_neg = (x%limbs(1) < 0.0_dp)
@@ -2606,36 +2605,31 @@ contains
             if (ax < ay) then
                 res = x
             else
-                r = ax
+                ex = exponent(ax%limbs(1))
                 ey = exponent(ay%limbs(1))
-                do while (r >= ay)
-                    ex = exponent(r%limbs(1))
-                    diff = ex - ey
-                    if (diff > 50) then
-                        ! Large gap: scale y up, reduce by floor multiple.
-                        ! Use mf_mul_dp (DD × dp) to avoid mf_from_dp overhead.
-                        sy%limbs(1) = scale(ay%limbs(1), diff - 50)
-                        sy%limbs(2) = scale(ay%limbs(2), diff - 50)
-                        q = floor(r%limbs(1) / sy%limbs(1))
-                        r = r - mf_mul_dp(sy, q)
-                    else
-                        ! Small gap: reduce by floor(r/y) * y directly.
+                diff = ex - ey
+                if (diff > 53) then
+                    ! Large gap: full DD divide path (correct for any range)
+                    res = x - dd_trunc(x / y) * y
+                else
+                    ! Small gap: floor-multiple reduction (no DD divide).
+                    r = ax
+                    do while (r >= ay)
                         q = floor(r%limbs(1) / ay%limbs(1))
                         if (q <= 1.0_dp) then
                             r = r - ay
                         else
                             r = r - mf_mul_dp(ay, q)
                         end if
+                        if (r%limbs(1) < 0.0_dp) r = r + ay
+                        if (r%limbs(1) == 0.0_dp .and. r%limbs(2) == 0.0_dp) exit
+                    end do
+                    if (x_neg) then
+                        res%limbs(1) = -r%limbs(1)
+                        res%limbs(2) = -r%limbs(2)
+                    else
+                        res = r
                     end if
-                    ! Fix if rounding made r slightly negative
-                    if (r%limbs(1) < 0.0_dp) r = r + ay
-                    if (r%limbs(1) == 0.0_dp .and. r%limbs(2) == 0.0_dp) exit
-                end do
-                if (x_neg) then
-                    res%limbs(1) = -r%limbs(1)
-                    res%limbs(2) = -r%limbs(2)
-                else
-                    res = r
                 end if
             end if
         end block
