@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <type_traits>
 
 namespace multifloats {
 
@@ -479,7 +480,31 @@ constexpr MultiFloat<T, N> fma(MultiFloat<T, N> const &x,
 
 template <typename T, std::size_t N>
 MultiFloat<T, N> fmod(MultiFloat<T, N> const &x, MultiFloat<T, N> const &y) {
-  return x - trunc(x / y) * y;
+  // For small quotients (exponent gap <= 53): floor-multiple reduction
+  // without DD divide. For large quotients: divide-based path.
+  bool x_neg = x._limbs[0] < T(0);
+  MultiFloat<T, N> ax = x_neg ? -x : x;
+  MultiFloat<T, N> ay = (y._limbs[0] < T(0)) ? -y : y;
+
+  if (ax < ay) return x;
+
+  int diff = std::ilogb(ax._limbs[0]) - std::ilogb(ay._limbs[0]);
+  MultiFloat<T, N> r;
+
+  if (diff > 53) {
+    r = ax - trunc(ax / ay) * ay;
+  } else {
+    T q = std::floor(ax._limbs[0] / ay._limbs[0]);
+    if (q <= T(1)) {
+      r = ax - ay;
+    } else {
+      r = ax - ay * MultiFloat<T, N>(q);
+    }
+    if (r._limbs[0] < T(0)) r = r + ay;
+    if (!(r < ay)) r = r - ay;
+  }
+
+  return x_neg ? -r : r;
 }
 
 template <typename T, std::size_t N>
@@ -503,9 +528,717 @@ constexpr MultiFloat<T, N> fdim(MultiFloat<T, N> const &x,
 }
 
 // =============================================================================
+// detail:: full-DD math kernels for MultiFloat<double, 2>
+//
+// These kernels mirror the Fortran implementation in fsrc/multifloats.fypp.
+// The constant tables are the same hex-literal coefficients ported from
+// MultiFloats.jl (see external/MultiFloats.jl/src/{exp,log,trig}.jl).
+// =============================================================================
+
+// Forward declaration so detail kernels below can use multifloats::sqrt via ADL.
+template <typename T, std::size_t N>
+MultiFloat<T, N> sqrt(MultiFloat<T, N> const &x);
+
+namespace detail {
+
+using MFD2 = MultiFloat<double, 2>;
+
+// ---- exp2 polynomial (14 coefs) -------------------------------------------
+inline constexpr double exp2_coefs_hi[14] = {
+    1.0,                       0.6931471805599453,
+    0.2402265069591007,        5.5504108664821576e-02,
+    9.618129107628477e-03,     1.3333558146428443e-03,
+    1.5403530393381606e-04,    1.5252733804059840e-05,
+    1.3215486790144305e-06,    1.0178086009239699e-07,
+    7.0549116207971280e-09,    4.4455382718708807e-10,
+    2.5678435993488194e-11,    1.3691488882450392e-12};
+inline constexpr double exp2_coefs_lo[14] = {
+    1.4286718760277223e-34,    2.319046813846301e-17,
+    -9.396402954935143e-18,    -1.7580652375606938e-18,
+    7.183164273073679e-20,     5.5605293410651576e-21,
+    1.5044974304523385e-21,    -8.040605991629947e-22,
+    -8.522826592655892e-23,    0.0,
+    0.0,                       0.0,
+    0.0,                       0.0};
+inline constexpr double exp2_min_d = -1022.0;
+inline constexpr double exp2_max_d = 1023.9999999999998;
+
+// ---- conversion constants -------------------------------------------------
+inline constexpr double log2_e_hi = 1.4426950408889634;
+inline constexpr double log2_e_lo = 2.0355273740931033e-17;
+inline constexpr double ln_2_hi = 0.6931471805599453;
+inline constexpr double ln_2_lo = 2.319046813846301e-17;
+inline constexpr double log10_2_hi = 0.3010299956639812;
+inline constexpr double log10_2_lo = -2.8037281277851704e-18;
+
+// ---- log2 polynomial: narrow (table path) ---------------------------------
+inline constexpr double log2_narrow_hi[7] = {
+    2.8853900817779268,    0.96179669392597557,
+    0.57707801635558505,   0.41219858311113063,
+    0.32192809488736207,   0.26261650020366453,
+    0.22240777068641438};
+inline constexpr double log2_narrow_lo[7] = {
+    4.638031132243375e-17,    5.034626202368297e-17,
+    5.288948275806925e-17,    1.0855475812016272e-18,
+    0.0,                      0.0,
+    0.0};
+
+// ---- log2 polynomial: wide (direct path for x in [15/16, 17/16]) ----------
+inline constexpr double log2_wide_hi[9] = {
+    2.8853900817779268,     0.96179669392597557,
+    0.57707801635558505,    0.41219858311113063,
+    0.32192808510751845,    0.26206322127714287,
+    0.22146410039507162,    0.19222806650807846,
+    0.17031629527116502};
+inline constexpr double log2_wide_lo[9] = {
+    4.638031132243375e-17,    5.0346244164533024e-17,
+    5.272175706110187e-17,    1.3727669404801418e-18,
+    -1.0901881027318003e-18,  1.4691558006816344e-18,
+    0.0,                      0.0,
+    0.0};
+
+// ---- log2 lookup table (32 entries) ---------------------------------------
+inline constexpr double log2_centers[32] = {
+    1.015625, 1.046875, 1.078125, 1.109375,
+    1.140625, 1.171875, 1.203125, 1.234375,
+    1.265625, 1.296875, 1.328125, 1.359375,
+    1.390625, 1.421875, 1.453125, 1.484375,
+    1.515625, 1.546875, 1.578125, 1.609375,
+    1.640625, 1.671875, 1.703125, 1.734375,
+    1.765625, 1.796875, 1.828125, 1.859375,
+    1.890625, 1.921875, 1.953125, 1.984375};
+inline constexpr double log2_values_hi[32] = {
+    0.02236781302845451,  0.06608919045777244,
+    0.10852445677816905,  0.14974711950468206,
+    0.18982455888001723,  0.22881869049588088,
+    0.2667865406949014,   0.30378074817710293,
+    0.33985000288462475,  0.37503943134692475,
+    0.4093909361377018,   0.4429434958487283,
+    0.47573343096639775,  0.5077946401986962,
+    0.5391588111080314,   0.5698556083309478,
+    0.5999128421871277,   0.6293566200796096,
+    0.6582114827517948,   0.6865005271832184,
+    0.7142455176661227,   0.7414669864011469,
+    0.7681843247769263,   0.794415866350106,
+    0.8201789624151877,   0.8454900509443752,
+    0.8703647195834046,   0.8948177633079435,
+    0.9188632372745945,   0.9425145053392399,
+    0.965784284662087,    0.9886846867721658};
+inline constexpr double log2_values_lo[32] = {
+    -1.593366605276194e-18,    -4.130247852756734e-18,
+     5.4046572138033075e-18,    3.3957331682262494e-18,
+    -2.362617117852667e-19,    -5.967894054218645e-18,
+    -1.148454798555715e-17,    -8.333787019748188e-18,
+    -2.0897960245560436e-17,   1.099000777384843e-17,
+    -2.1361956385051908e-17,   2.7429379563921325e-17,
+     2.6712179058256416e-18,   2.2368792763711565e-17,
+    -4.246405680857825e-17,    3.494516357745965e-18,
+    -2.4103897311490816e-17,   4.468163526988311e-17,
+    -1.4783628552133162e-17,   -3.0880950164975563e-17,
+    -1.670020420476703e-17,    4.3007535189465375e-18,
+     2.7943000056050083e-17,   -6.972291600506703e-18,
+    -2.0610765990304212e-17,   -1.7498130336849765e-17,
+    -3.248732644336383e-17,    2.3416884695657537e-17,
+    -7.610716771889941e-19,    1.3760330846314947e-17,
+     5.439604524201502e-17,    4.274898271281587e-17};
+
+// ---- 1/pi as DD (for sin/cos via sinpi) -----------------------------------
+inline constexpr double inv_pi_hi = 0.3183098861837907;
+inline constexpr double inv_pi_lo = -1.9678676675182486e-17;
+
+// ---- sinpi polynomial (15 coefs, c[n] = -(-1)^n * pi^(2n-1)/(2n-1)!) ------
+inline constexpr double sinpi_coefs_hi[15] = {
+    3.141592653589793,        -5.16771278004997,
+    2.5501640398773455,       -0.5992645293207921,
+    0.08214588661112823,      -0.0073704309457143504,
+    0.00046630280576761255,   -2.1915353447830217e-05,
+    7.952054001475513e-07,    -2.2948428997269873e-08,
+    5.392664662608129e-10,    -1.0518471716932065e-11,
+    1.7302192458361107e-13,   -2.432561179993389e-15,
+    2.9567015428549106e-17};
+inline constexpr double sinpi_coefs_lo[15] = {
+    1.2246467991473532e-16,   2.2665622825789447e-16,
+    -7.931006345326556e-17,   2.845026112698218e-17,
+    -3.847292805297656e-18,   -3.328281165603432e-19,
+    1.0704561733683463e-20,   1.4648526682685598e-21,
+    1.736540361519021e-23,    -7.376346207041088e-26,
+    -4.6231664587063263e-26,  6.607471301444785e-28,
+    4.02155341316903e-30,     1.1975701997015738e-31,
+    -2.093244907518996e-34};
+
+// ---- cospi polynomial -----------------------------------------------------
+inline constexpr double cospi_coefs_hi[15] = {
+    1.0,                      -4.934802200544679,
+    4.0587121264167685,       -1.3352627688545895,
+    0.2353306303588932,       -0.02580689139001406,
+    0.0019295743094039231,    -0.0001046381049248457,
+    4.303069587032947e-06,    -1.3878952462213771e-07,
+    3.604730797462501e-09,    -7.700707130601354e-11,
+    1.3768647280377414e-12,   -2.0906323353147685e-14,
+    2.729327261598196e-16};
+inline constexpr double cospi_coefs_lo[15] = {
+    0.0,                      -3.1326477543698557e-16,
+    -2.6602000824298645e-16,  3.1815237892149862e-18,
+    -1.2583065576724427e-18,  1.170191067939226e-18,
+    -9.669517939986956e-20,   -2.421206183964864e-21,
+    -2.864010082936791e-22,   -7.479362090417238e-24,
+    -1.833556774402799e-25,   4.7314468253686385e-27,
+    -1.6034234137163717e-29,  -4.965817957054884e-32,
+    -1.0546803731213643e-32};
+
+// ---- sinh Taylor (9 coefs, n=0..8 → x, x³/6, ..., x¹⁷/17!) ----------------
+inline constexpr double sinh_taylor_hi[9] = {
+    1.0,                      0.16666666666666666,
+    0.008333333333333333,     0.0001984126984126984,
+    2.7557319223985893e-06,   2.505210838544172e-08,
+    1.6059043836821613e-10,   7.647163731819816e-13,
+    2.8114572543455206e-15};
+inline constexpr double sinh_taylor_lo[9] = {
+    0.0,                      9.25185853854297e-18,
+    1.1564823173178714e-19,   1.7209558293420705e-22,
+    -1.858393274046472e-22,   -1.448814070935912e-24,
+    1.2585294588752098e-26,   7.03872877733453e-30,
+    1.6508842730861433e-31};
+
+// ---- asinh Taylor (15 coefs) ----------------------------------------------
+inline constexpr double asinh_taylor_hi[15] = {
+    1.0,                       -0.16666666666666666,
+    0.075,                     -0.044642857142857144,
+    0.030381944444444444,      -0.022372159090909092,
+    0.017352764423076924,      -0.01396484375,
+    0.011551800896139705,      -0.009761609529194078,
+    0.008390335809616815,      -0.0073125258735988454,
+    0.006447210311889649,      -0.005740037670841924,
+    0.005153309682319905};
+inline constexpr double asinh_taylor_lo[15] = {
+    0.0,                       -9.25185853854297e-18,
+    2.7755575615628915e-18,    9.912705577010326e-19,
+    3.854941057726238e-19,     9.462128050782583e-19,
+    -8.006416042969879e-19,    6.938893903907229e-19,
+    8.163404592832033e-19,     -5.478074134663601e-19,
+    4.130293990420969e-19,     3.394024192128536e-19,
+    -3.1225022567582527e-19,   1.2849803525754126e-19,
+    -3.888173308223878e-19};
+
+// ---- atanh Taylor (15 coefs, c[n] = 1/(2n+1)) -----------------------------
+inline constexpr double atanh_taylor_hi[15] = {
+    1.0,                       0.3333333333333333,
+    0.2,                       0.14285714285714285,
+    0.1111111111111111,        0.09090909090909091,
+    0.07692307692307693,       0.06666666666666667,
+    0.058823529411764705,      0.05263157894736842,
+    0.047619047619047616,      0.043478260869565216,
+    0.04,                      0.037037037037037035,
+    0.034482758620689655};
+inline constexpr double atanh_taylor_lo[15] = {
+    0.0,                       1.850371707708594e-17,
+    -1.1102230246251566e-17,   7.93016446160826e-18,
+    6.1679056923619804e-18,    -2.523234146875356e-18,
+    -4.270088556250602e-18,    9.251858538542971e-19,
+    8.163404592832033e-19,     2.921639538487254e-18,
+    2.64338815386942e-18,      1.206764157201257e-18,
+    -8.326672684688674e-19,    2.05596856412066e-18,
+    4.785444071660157e-19};
+
+// ---- erf Taylor (50 coefs, c[n] = (2/sqrt(pi))*(-1)^n/(n!*(2n+1))) -------
+inline constexpr double erf_coefs_hi[50] = {
+    1.1283791670955126,       -0.37612638903183754,
+    0.11283791670955126,      -0.026866170645131252,
+    0.005223977625442188,     -0.0008548327023450853,
+    0.00012055332981789664,   -1.492565035840625e-05,
+    1.6462114365889248e-06,   -1.6365844691234924e-07,
+    1.4807192815879218e-08,   -1.2290555301717928e-09,
+    9.422759064650411e-11,    -6.7113668551641105e-12,
+    4.4632242632864775e-13,   -2.7835162072109215e-14,
+    1.6342614095367152e-15,   -9.063970842808673e-17,
+    4.763348040515068e-18,    -2.3784598852774293e-19,
+    1.131218725924631e-20,    -5.136209054585811e-22,
+    2.2308786802746453e-23,   -9.28672901131906e-25,
+    3.71153285316323e-26,     -1.4263930180784176e-27,
+    5.279103332510834e-29,    -1.8841244217042036e-30,
+    6.492909974544561e-32,    -2.1630383901171243e-33,
+    6.973730328792914e-35,    -2.1781748594796097e-36,
+    6.597356545539203e-38,    -1.9395213725013487e-39,
+    5.539127534424142e-41,    -1.538027363683162e-42,
+    4.1552489658106737e-44,   -1.0930925207357809e-45,
+    2.801843440026779e-47,    -7.002335114640117e-49,
+    1.7073594878289175e-50,   -4.0639470618319806e-52,
+    9.448392328628975e-54,    -2.1467878854142287e-55,
+    4.769421502324767e-57,    -1.0365775670498273e-58,
+    2.2049686442621386e-60,   -4.59265585479012e-62,
+    9.370753999249602e-64,    -1.8737644566629794e-65};
+inline constexpr double erf_coefs_lo[50] = {
+    1.533545961316588e-17,    1.3391897206030649e-17,
+    -4.017569161809194e-18,   4.6092880729453e-19,
+    -8.962504586282528e-20,   5.0148896786169737e-20,
+    6.480246840070509e-21,    -6.248427055364001e-22,
+    -1.0547266132407653e-22,  1.5075323135139275e-24,
+    -3.254656350443331e-25,   9.976105519856072e-26,
+    -2.8231273253303265e-27,  1.0441838553137576e-28,
+    -1.415652238799887e-29,   1.4189660114017355e-30,
+    -1.159587670993415e-32,   3.004743561097066e-33,
+    -1.856680962530252e-34,   -1.5875374697145176e-35,
+    7.245880865990418e-38,    -1.4537189752115876e-38,
+    -4.7283897669065125e-40,  -2.2114070452037343e-41,
+    -2.864576959470938e-42,   -3.298130029636975e-44,
+    2.3921205704042427e-45,   -1.106406475814513e-47,
+    1.2592869837235584e-48,   -1.2253141605940307e-49,
+    4.242571852198481e-51,    -1.3045967020940556e-52,
+    4.177193607879865e-55,    5.869824242611732e-56,
+    -2.1631332158779208e-57,  3.262876687823446e-60,
+    -5.5037931014990846e-61,  5.540458322951681e-62,
+    9.259808565197577e-64,    1.3200652030502501e-65,
+    -9.490441382723132e-67,   -3.3631583324243266e-68,
+    2.7994711326647915e-70,   1.7816791770026858e-71,
+    1.5216055227045837e-74,   5.5040127417898383e-76,
+    -1.3741888831536437e-76,  -1.6966388960870593e-78,
+    -2.28824162542219e-80,    -7.09889581208805e-82};
+
+// ---- helper: build a DD pair from two doubles ------------------------------
+inline MFD2 dd_pair(double hi, double lo) {
+  MFD2 r;
+  r._limbs[0] = hi;
+  r._limbs[1] = lo;
+  return r;
+}
+
+// ---- Horner polynomial evaluation in DD ------------------------------------
+inline MFD2 dd_horner(MFD2 const &y, double const *hi, double const *lo,
+                       int n) {
+  MFD2 p = dd_pair(hi[n - 1], lo[n - 1]);
+  for (int i = n - 2; i >= 0; --i) {
+    p = p * y + dd_pair(hi[i], lo[i]);
+  }
+  return p;
+}
+
+// ---- exp2 / exp / log2 / log / log10 ---------------------------------------
+inline MFD2 dd_exp2_kernel(MFD2 const &x) {
+  // n = nearest integer to x.hi, y = (x - n)/8
+  double n_float = std::nearbyint(x._limbs[0]);
+  MFD2 y = x + dd_pair(-n_float, 0.0);
+  y._limbs[0] = std::ldexp(y._limbs[0], -3);
+  y._limbs[1] = std::ldexp(y._limbs[1], -3);
+  // poly(y) then cube via three squarings (to undo the /8)
+  MFD2 p = dd_horner(y, exp2_coefs_hi, exp2_coefs_lo, 14);
+  p = p * p;
+  p = p * p;
+  p = p * p;
+  // multiply by 2^n via two ldexps (split to keep intermediates in range)
+  int n = static_cast<int>(n_float);
+  int half_n = n / 2;
+  MFD2 r;
+  r._limbs[0] = std::ldexp(p._limbs[0], half_n);
+  r._limbs[1] = std::ldexp(p._limbs[1], half_n);
+  r._limbs[0] = std::ldexp(r._limbs[0], n - half_n);
+  r._limbs[1] = std::ldexp(r._limbs[1], n - half_n);
+  return r;
+}
+
+inline MFD2 dd_exp2_full(MFD2 const &x) {
+  MFD2 r;
+  if (!std::isfinite(x._limbs[0])) {
+    if (x._limbs[0] > 0.0) r._limbs[0] = x._limbs[0]; // +inf
+    else if (x._limbs[0] < 0.0) r._limbs[0] = 0.0;    // -inf → 0
+    else r._limbs[0] = x._limbs[0];                    // NaN
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (x._limbs[0] < exp2_min_d) return MFD2();
+  if (x._limbs[0] > exp2_max_d) {
+    r._limbs[0] = std::numeric_limits<double>::infinity();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  return dd_exp2_kernel(x);
+}
+
+inline MFD2 dd_exp_full(MFD2 const &x) {
+  return dd_exp2_full(x * dd_pair(log2_e_hi, log2_e_lo));
+}
+
+inline MFD2 dd_log2_kernel(MFD2 const &x) {
+  double hi = x._limbs[0];
+  if (hi > 15.0 / 16.0 && hi < 17.0 / 16.0) {
+    // direct path: t = (x - 1) / (x + 1)
+    MFD2 num = x - MFD2(1.0);
+    MFD2 den = x + MFD2(1.0);
+    MFD2 t = num / den;
+    MFD2 t_sq = t * t;
+    MFD2 p = dd_horner(t_sq, log2_wide_hi, log2_wide_lo, 9);
+    return t * p;
+  }
+  // table path
+  int e = std::ilogb(hi); // matches Julia/IEEE convention (mantissa in [1,2))
+  MFD2 m;
+  m._limbs[0] = std::ldexp(x._limbs[0], -e);
+  m._limbs[1] = std::ldexp(x._limbs[1], -e);
+  int idx = static_cast<int>((m._limbs[0] - 1.0) * 32.0);
+  if (idx < 0) idx = 0;
+  if (idx > 31) idx = 31;
+  MFD2 c = dd_pair(log2_centers[idx], 0.0);
+  MFD2 v = dd_pair(log2_values_hi[idx], log2_values_lo[idx]);
+  MFD2 num = m - c;
+  MFD2 den = m + c;
+  MFD2 t = num / den;
+  MFD2 t_sq = t * t;
+  MFD2 p = dd_horner(t_sq, log2_narrow_hi, log2_narrow_lo, 7);
+  return dd_pair(static_cast<double>(e), 0.0) + v + t * p;
+}
+
+inline MFD2 dd_log2_full(MFD2 const &x) {
+  MFD2 r;
+  if (std::isnan(x._limbs[0]) || x._limbs[0] < 0.0) {
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (x._limbs[0] == 0.0) {
+    r._limbs[0] = -std::numeric_limits<double>::infinity();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (!std::isfinite(x._limbs[0])) {
+    r._limbs[0] = std::numeric_limits<double>::infinity();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  return dd_log2_kernel(x);
+}
+
+inline MFD2 dd_log_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::log(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  return dd_log2_full(x) * dd_pair(ln_2_hi, ln_2_lo);
+}
+
+inline MFD2 dd_log10_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::log10(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  return dd_log2_full(x) * dd_pair(log10_2_hi, log10_2_lo);
+}
+
+// ---- sinpi / cospi / sin / cos / tan ---------------------------------------
+inline MFD2 dd_sinpi_kernel(MFD2 const &x) {
+  return x * dd_horner(x * x, sinpi_coefs_hi, sinpi_coefs_lo, 15);
+}
+inline MFD2 dd_cospi_kernel(MFD2 const &x) {
+  return dd_horner(x * x, cospi_coefs_hi, cospi_coefs_lo, 15);
+}
+
+inline MFD2 dd_sinpi_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  bool sign = x._limbs[0] < 0.0;
+  MFD2 ax = sign ? -x : x;
+  double n_float = std::nearbyint(2.0 * ax._limbs[0]);
+  MFD2 rx = ax + dd_pair(-0.5 * n_float, 0.0);
+  long long n_mod = static_cast<long long>(n_float) & 3LL;
+  MFD2 res;
+  switch (n_mod) {
+  case 0: res = dd_sinpi_kernel(rx); break;
+  case 1: res = dd_cospi_kernel(rx); break;
+  case 2: res = -dd_sinpi_kernel(rx); break;
+  default: res = -dd_cospi_kernel(rx); break;
+  }
+  return sign ? -res : res;
+}
+
+inline MFD2 dd_cospi_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 ax = (x._limbs[0] < 0.0) ? -x : x;
+  double n_float = std::nearbyint(2.0 * ax._limbs[0]);
+  MFD2 rx = ax + dd_pair(-0.5 * n_float, 0.0);
+  long long n_mod = static_cast<long long>(n_float) & 3LL;
+  switch (n_mod) {
+  case 0: return dd_cospi_kernel(rx);
+  case 1: return -dd_sinpi_kernel(rx);
+  case 2: return -dd_cospi_kernel(rx);
+  default: return dd_sinpi_kernel(rx);
+  }
+}
+
+inline MFD2 dd_sin_full(MFD2 const &x) {
+  return dd_sinpi_full(x * dd_pair(inv_pi_hi, inv_pi_lo));
+}
+inline MFD2 dd_cos_full(MFD2 const &x) {
+  return dd_cospi_full(x * dd_pair(inv_pi_hi, inv_pi_lo));
+}
+inline MFD2 dd_tan_full(MFD2 const &x) {
+  MFD2 y = x * dd_pair(inv_pi_hi, inv_pi_lo);
+  return dd_sinpi_full(y) / dd_cospi_full(y);
+}
+
+// ---- sinh / cosh / tanh ----------------------------------------------------
+inline MFD2 dd_sinh_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::sinh(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (std::abs(x._limbs[0]) < 0.1) {
+    // 9-term Taylor: x * (1 + x²/6 + x⁴/120 + ...)
+    return x * dd_horner(x * x, sinh_taylor_hi, sinh_taylor_lo, 9);
+  }
+  MFD2 e = dd_exp_full(x);
+  MFD2 ei = dd_exp_full(-x);
+  return (e - ei) * dd_pair(0.5, 0.0);
+}
+
+inline MFD2 dd_cosh_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::cosh(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 e = dd_exp_full(x);
+  MFD2 ei = dd_exp_full(-x);
+  return (e + ei) * dd_pair(0.5, 0.0);
+}
+
+inline MFD2 dd_tanh_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::tanh(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (x._limbs[0] > 20.0) return MFD2(1.0);
+  if (x._limbs[0] < -20.0) return MFD2(-1.0);
+  if (std::abs(x._limbs[0]) < 0.5) {
+    return dd_sinh_full(x) / dd_cosh_full(x);
+  }
+  // tanh(|x|) = 1 - 2/(e^(2|x|) + 1) — overflow-safe near ±1
+  bool sign = x._limbs[0] < 0.0;
+  MFD2 ax = sign ? -x : x;
+  MFD2 two_ax = ax + ax;
+  MFD2 e2 = dd_exp_full(two_ax);
+  MFD2 res = MFD2(1.0) - dd_pair(2.0, 0.0) / (e2 + MFD2(1.0));
+  return sign ? -res : res;
+}
+
+// ---- pow -------------------------------------------------------------------
+inline MFD2 dd_pow_full(MFD2 const &x, MFD2 const &y) {
+  if (x._limbs[0] == 0.0 && y._limbs[0] == 0.0) return MFD2(1.0);
+  return dd_exp_full(y * dd_log_full(x));
+}
+
+// ---- asin / acos / atan / atan2 (Newton on full-DD forward) ---------------
+inline MFD2 dd_asin_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::asin(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (std::abs(x._limbs[0]) > 1.0) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 y0 = dd_pair(std::asin(x._limbs[0]), 0.0);
+  MFD2 sy = dd_sin_full(y0);
+  MFD2 cy = dd_cos_full(y0);
+  if (std::abs(cy._limbs[0]) < 1e-15) return y0;
+  return y0 + (x - sy) / cy;
+}
+
+inline MFD2 dd_acos_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::acos(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (std::abs(x._limbs[0]) > 1.0) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 y0 = dd_pair(std::acos(x._limbs[0]), 0.0);
+  MFD2 sy = dd_sin_full(y0);
+  MFD2 cy = dd_cos_full(y0);
+  if (std::abs(sy._limbs[0]) < 1e-15) return y0;
+  return y0 - (x - cy) / sy;
+}
+
+inline MFD2 dd_atan_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::atan(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 y0 = dd_pair(std::atan(x._limbs[0]), 0.0);
+  MFD2 sy = dd_sin_full(y0);
+  MFD2 cy = dd_cos_full(y0);
+  if (std::abs(cy._limbs[0]) < 1e-15) return y0;
+  MFD2 t = sy / cy;
+  MFD2 c2 = cy * cy;
+  return y0 + c2 * (x - t);
+}
+
+inline MFD2 dd_atan2_full(MFD2 const &y, MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0]) || !std::isfinite(y._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::atan2(y._limbs[0], x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (x._limbs[0] == 0.0 && y._limbs[0] == 0.0) {
+    MFD2 r;
+    r._limbs[0] = std::atan2(y._limbs[0], x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 pi_dd = dd_pair(3.141592653589793, 1.2246467991473532e-16);
+  MFD2 pi_half_dd = dd_pair(1.5707963267948966, 6.123233995736766e-17);
+  MFD2 res;
+  if (std::abs(x._limbs[0]) >= std::abs(y._limbs[0])) {
+    res = dd_atan_full(y / x);
+    if (x._limbs[0] < 0.0) {
+      if (y._limbs[0] >= 0.0) res = res + pi_dd;
+      else res = res - pi_dd;
+    }
+  } else {
+    res = dd_atan_full(x / y);
+    if (y._limbs[0] > 0.0) res = pi_half_dd - res;
+    else res = -pi_half_dd - res;
+  }
+  return res;
+}
+
+// ---- asinh / acosh / atanh -------------------------------------------------
+inline MFD2 dd_asinh_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::asinh(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (std::abs(x._limbs[0]) < 0.01) {
+    return x * dd_horner(x * x, asinh_taylor_hi, asinh_taylor_lo, 15);
+  }
+  bool sign = x._limbs[0] < 0.0;
+  MFD2 ax = sign ? -x : x;
+  if (ax._limbs[0] > 1e150) {
+    // log(2|x|) asymptotic to avoid x² overflow
+    MFD2 r = dd_log_full(ax) + dd_pair(ln_2_hi, ln_2_lo);
+    return sign ? -r : r;
+  }
+  MFD2 root = sqrt(ax * ax + MFD2(1.0));
+  MFD2 res = dd_log_full(ax + root);
+  return sign ? -res : res;
+}
+
+inline MFD2 dd_acosh_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::acosh(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (x._limbs[0] < 1.0) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (x._limbs[0] > 1e150) {
+    return dd_log_full(x) + dd_pair(ln_2_hi, ln_2_lo);
+  }
+  MFD2 root = sqrt(x * x - MFD2(1.0));
+  return dd_log_full(x + root);
+}
+
+inline MFD2 dd_atanh_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::atanh(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (std::abs(x._limbs[0]) > 1.0) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (std::abs(x._limbs[0]) < 0.01) {
+    return x * dd_horner(x * x, atanh_taylor_hi, atanh_taylor_lo, 15);
+  }
+  MFD2 num = MFD2(1.0) + x;
+  MFD2 den = MFD2(1.0) - x;
+  return dd_pair(0.5, 0.0) * dd_log_full(num / den);
+}
+
+// ---- erf / erfc ------------------------------------------------------------
+inline MFD2 dd_erf_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::erf(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  bool sign = x._limbs[0] < 0.0;
+  MFD2 ax = sign ? -x : x;
+  MFD2 res;
+  if (ax._limbs[0] < 2.0) {
+    // 50-term Taylor
+    res = ax * dd_horner(ax * ax, erf_coefs_hi, erf_coefs_lo, 50);
+  } else {
+    // 1 - libm_erfc(x) — DD subtraction preserves the lo limb
+    res = MFD2(1.0) - dd_pair(std::erfc(ax._limbs[0]), 0.0);
+  }
+  return sign ? -res : res;
+}
+
+inline MFD2 dd_erfc_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::erfc(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (x._limbs[0] >= 6.0) {
+    MFD2 r;
+    r._limbs[0] = std::erfc(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  return MFD2(1.0) - dd_erf_full(x);
+}
+
+} // namespace detail
+
+// =============================================================================
 // Power, exponential and logarithm
 //
-// For N == 2 these use a single first-order Newton/derivative correction
+// For T == double && N == 2 these use the same polynomial / table-based
+// kernels as the Fortran module (ported from MultiFloats.jl). Other (T, N)
+// combinations fall back to the leading-limb std:: call (N == 1) or a
+// derivative-corrected approach (N == 2 with non-double T).
 // against the leading-limb std:: implementation, which yields ~2x the
 // precision of double but does not necessarily reach the full ~106-bit
 // double-double precision.
@@ -560,8 +1293,9 @@ MultiFloat<T, N> exp(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::exp(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_exp_full(x);
   } else {
-    // exp(hi + lo) = exp(hi) * (1 + lo + lo^2/2 + ...)
     T e = std::exp(x._limbs[0]);
     MultiFloat<T, N> e_dd(e);
     return e_dd + e_dd * MultiFloat<T, N>(x._limbs[1]);
@@ -574,11 +1308,12 @@ MultiFloat<T, N> exp2(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::exp2(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_exp2_full(x);
   } else {
     T e = std::exp2(x._limbs[0]);
     const T ln2 = std::log(T(2));
     MultiFloat<T, N> e_dd(e);
-    // d/dx 2^x = 2^x * ln(2)
     return e_dd + e_dd * MultiFloat<T, N>(x._limbs[1] * ln2);
   }
 }
@@ -600,8 +1335,9 @@ MultiFloat<T, N> log(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::log(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_log_full(x);
   } else {
-    // log(hi + lo) = log(hi) + log(1 + lo/hi) ≈ log(hi) + lo/hi
     T l = std::log(x._limbs[0]);
     return MultiFloat<T, N>(l) +
            MultiFloat<T, N>(x._limbs[1] / x._limbs[0]);
@@ -614,6 +1350,8 @@ MultiFloat<T, N> log10(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::log10(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_log10_full(x);
   } else {
     const T inv_ln10 = T(1) / std::log(T(10));
     return log(x) * MultiFloat<T, N>(inv_ln10);
@@ -626,6 +1364,8 @@ MultiFloat<T, N> log2(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::log2(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_log2_full(x);
   } else {
     const T inv_ln2 = T(1) / std::log(T(2));
     return log(x) * MultiFloat<T, N>(inv_ln2);
@@ -649,6 +1389,8 @@ MultiFloat<T, N> pow(MultiFloat<T, N> const &x, MultiFloat<T, N> const &y) {
   if constexpr (N == 1) {
     r._limbs[0] = std::pow(x._limbs[0], y._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_pow_full(x, y);
   } else {
     if (x._limbs[0] == T(0) && y._limbs[0] == T(0)) {
       return MultiFloat<T, N>(T(1));
@@ -667,8 +1409,9 @@ MultiFloat<T, N> sin(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::sin(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_sin_full(x);
   } else {
-    // sin(hi + lo) ≈ sin(hi) + cos(hi) * lo
     T s = std::sin(x._limbs[0]);
     T c = std::cos(x._limbs[0]);
     return MultiFloat<T, N>(s) +
@@ -682,6 +1425,8 @@ MultiFloat<T, N> cos(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::cos(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_cos_full(x);
   } else {
     T s = std::sin(x._limbs[0]);
     T c = std::cos(x._limbs[0]);
@@ -696,6 +1441,8 @@ MultiFloat<T, N> tan(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::tan(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_tan_full(x);
   } else {
     return sin(x) / cos(x);
   }
@@ -707,8 +1454,9 @@ MultiFloat<T, N> asin(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::asin(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_asin_full(x);
   } else {
-    // d/dx asin(x) = 1/sqrt(1 - x^2)
     T a = std::asin(x._limbs[0]);
     MultiFloat<T, N> denom = sqrt(MultiFloat<T, N>(T(1)) - x * x);
     return MultiFloat<T, N>(a) + MultiFloat<T, N>(x._limbs[1]) / denom;
@@ -721,8 +1469,9 @@ MultiFloat<T, N> acos(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::acos(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_acos_full(x);
   } else {
-    // d/dx acos(x) = -1/sqrt(1 - x^2)
     T a = std::acos(x._limbs[0]);
     MultiFloat<T, N> denom = sqrt(MultiFloat<T, N>(T(1)) - x * x);
     return MultiFloat<T, N>(a) - MultiFloat<T, N>(x._limbs[1]) / denom;
@@ -735,8 +1484,9 @@ MultiFloat<T, N> atan(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::atan(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_atan_full(x);
   } else {
-    // d/dx atan(x) = 1/(1 + x^2)
     T a = std::atan(x._limbs[0]);
     MultiFloat<T, N> denom = MultiFloat<T, N>(T(1)) + x * x;
     return MultiFloat<T, N>(a) + MultiFloat<T, N>(x._limbs[1]) / denom;
@@ -749,8 +1499,9 @@ MultiFloat<T, N> atan2(MultiFloat<T, N> const &y, MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::atan2(y._limbs[0], x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_atan2_full(y, x);
   } else {
-    // d atan2(y, x) = (x*dy - y*dx) / (x^2 + y^2)
     T a = std::atan2(y._limbs[0], x._limbs[0]);
     MultiFloat<T, N> num = x * MultiFloat<T, N>(y._limbs[1]) -
                            y * MultiFloat<T, N>(x._limbs[1]);
@@ -769,6 +1520,8 @@ MultiFloat<T, N> sinh(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::sinh(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_sinh_full(x);
   } else {
     T s = std::sinh(x._limbs[0]);
     T c = std::cosh(x._limbs[0]);
@@ -783,6 +1536,8 @@ MultiFloat<T, N> cosh(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::cosh(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_cosh_full(x);
   } else {
     T s = std::sinh(x._limbs[0]);
     T c = std::cosh(x._limbs[0]);
@@ -797,6 +1552,8 @@ MultiFloat<T, N> tanh(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::tanh(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_tanh_full(x);
   } else {
     return sinh(x) / cosh(x);
   }
@@ -808,6 +1565,8 @@ MultiFloat<T, N> asinh(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::asinh(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_asinh_full(x);
   } else {
     // d/dx asinh(x) = 1/sqrt(1 + x^2)
     T a = std::asinh(x._limbs[0]);
@@ -822,6 +1581,8 @@ MultiFloat<T, N> acosh(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::acosh(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_acosh_full(x);
   } else {
     // d/dx acosh(x) = 1/sqrt(x^2 - 1)
     T a = std::acosh(x._limbs[0]);
@@ -836,6 +1597,8 @@ MultiFloat<T, N> atanh(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::atanh(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_atanh_full(x);
   } else {
     // d/dx atanh(x) = 1/(1 - x^2)
     T a = std::atanh(x._limbs[0]);
@@ -854,6 +1617,8 @@ MultiFloat<T, N> erf(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::erf(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_erf_full(x);
   } else {
     // d/dx erf(x) = 2/sqrt(pi) * exp(-x^2)
     const T two_over_sqrt_pi = T(2) / std::sqrt(std::acos(T(-1)));
@@ -870,6 +1635,8 @@ MultiFloat<T, N> erfc(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::erfc(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::dd_erfc_full(x);
   } else {
     const T two_over_sqrt_pi = T(2) / std::sqrt(std::acos(T(-1)));
     T e = std::erfc(x._limbs[0]);
