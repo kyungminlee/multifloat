@@ -108,7 +108,7 @@ values > 1× mean multifloats is faster.
 |---|---|---|---|
 | sinh | **2.3×** | 4.9e-30 | full DD |
 | cosh | 1.6× | 4.9e-30 | full DD |
-| tanh | **2.7×** | 1.5e-18 | deriv-corrected |
+| tanh | **2.7×** | 8.2e-31 | full DD |
 | asinh | **6.1×** | 2.4e-30 | full DD |
 | acosh | **5.6×** | 3.5e-32 | full DD |
 | atanh | **5.1×** | 1.1e-30 | full DD |
