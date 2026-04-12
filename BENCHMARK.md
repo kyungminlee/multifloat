@@ -6,7 +6,12 @@ implementations use explicit two-limb error-free transformations (EFTs)
 on pairs of `double` values, achieving ~106 bits of significand — close
 to quad precision's 113 bits — at a fraction of the cost.
 
-## System
+## Systems
+
+Two systems are benchmarked to show ARM64 vs x86-64 behaviour. Numbers
+from both are reported in separate tables further down.
+
+### Apple M1 Max (ARM64)
 
 | | |
 |---|---|
@@ -16,6 +21,24 @@ to quad precision's 113 bits — at a fraction of the cost.
 | **Fortran** | GNU Fortran (Homebrew GCC 15.2.0\_1) 15.2.0 |
 | **C++** | g++-15 (Homebrew GCC 15.2.0\_1) 15.2.0 |
 | **Build** | CMake 4.3.1, `-O3 -flto`, OBJECT library (not STATIC — macOS `ar` strips GIMPLE from Mach-O, breaking LTO through `.a` archives) |
+
+### Intel Skylake-SP (x86-64)
+
+| | |
+|---|---|
+| **CPU** | Intel Xeon, family 6 model 85 (Skylake-SP / Cascade Lake), 2.8 GHz, 16 cores, AVX-512 (KVM-virtualized) |
+| **RAM** | 22 GB |
+| **OS** | Ubuntu 24.04.4 LTS (Linux 4.4.0 kernel) |
+| **Fortran** | GNU Fortran (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0 |
+| **C++** | g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0 |
+| **Build** | CMake 3.28.3, `-O3 -flto`, OBJECT library (gfortran LTO works through `.a` on Linux, but OBJECT is retained for ABI parity with the macOS build) |
+
+The speedups differ substantially between the two targets because the
+quad-precision reference (`real(16)` / `__float128`) on x86-64 uses
+gfortran's software `libquadmath`, which is 2–5× slower per operation
+than Apple's ARM64 path. That inflates the multifloats speedup numbers
+on x86-64 relative to M1 even though the DD kernel itself runs at
+similar speed on both machines.
 
 ## Precision key
 
@@ -40,7 +63,7 @@ Each kernel's origin and algorithm are noted in the "approach" column:
 | **original** | Developed for this project |
 | **sample** | Adapted from `external/float64x2-sample.cpp` |
 
-## Fortran: `float64x2` vs `real(16)`
+## Fortran: `float64x2` vs `real(16)` — Apple M1 Max
 
 Each operation is timed over 1024 elements × 400 repetitions (fast ops)
 or fewer reps (transcendentals), with a NOINLINE drain after each rep to
@@ -99,15 +122,24 @@ values > 1× mean multifloats is faster.
 
 | op | speedup | max\_rel | precision | approach |
 |---|---|---|---|---|
-| sin | **2.5×** | 5.3e-27 | near-full DD | original: 10-term Taylor Horner + 3-part Cody–Waite π/2 reduction (DD arithmetic) + π/8 argument split |
-| cos | **2.5×** | 5.3e-27 | near-full DD | original: 10-term Taylor Horner + 3-part Cody–Waite π/2 reduction (DD arithmetic) + π/8 argument split |
+| sin | **2.5×** | 5.3e-27 † | near-full DD † | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 reduction (DD arithmetic) + π/8 argument split |
+| cos | **2.5×** | 5.3e-27 † | near-full DD † | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 reduction (DD arithmetic) + π/8 argument split |
 | sinpi | **3.6×** | 4.9e-27 | full DD | Julia: sinpi Horner polynomial, direct (no range reduction needed) |
 | cospi | **3.6×** | 8.2e-27 | full DD | Julia: cospi Horner polynomial, direct (no range reduction needed) |
-| tan | 1.2× | 3.2e-27 | near-full DD | original: sin/cos Taylor kernels + DD divide |
-| asin | 1.8× | 5.7e-27 | near-full DD | original: Newton step on sin, seeded by libm asin(hi); limited by sin kernel precision |
-| acos | 1.9× | 3.6e-27 | near-full DD | original: Newton step on cos, seeded by libm acos(hi); limited by cos kernel precision |
-| atan | 1.1× | 8.2e-23 | deriv-corrected | original: Newton step on tan, seeded by libm atan(hi) |
-| atan2 | 1.0× | 4.4e-28 | near-full DD | original: Newton step on atan, with quadrant correction |
+| tan | 1.2× | 3.2e-27 † | near-full DD † | original: sin/cos Taylor kernels + DD divide |
+| asin | 1.8× | 5.7e-27 † | near-full DD † | original: Newton step on sin, seeded by libm asin(hi); limited by sin kernel precision |
+| acos | 1.9× | 3.6e-27 † | near-full DD † | original: Newton step on cos, seeded by libm acos(hi); limited by cos kernel precision |
+| atan | 1.1× | 8.2e-23 † | deriv-corrected † | original: Newton step on tan, seeded by libm atan(hi), with `atan(x)=π/2−atan(1/x)` for |x|>1 |
+| atan2 | 1.0× | 4.4e-28 † | near-full DD † | original: Newton step on atan, with quadrant correction |
+
+† The `max_rel` and "precision" columns for sin/cos/tan/asin/acos/atan/atan2
+were measured on Apple M1 **before** the Taylor extension and `atan`
+reciprocal-identity fixes landed. The kernels themselves have been
+updated and the x86-64 table (below) shows the post-fix precision
+(~4e-32 = full DD). The Apple M1 speedup numbers should be essentially
+unchanged (three extra Horner iterations add <1% overhead), but the
+precision figures will match the x86-64 post-fix values when the
+Apple M1 build is re-benchmarked.
 
 ### Hyperbolic
 
@@ -179,7 +211,7 @@ values > 1× mean multifloats is faster.
 | arr\_norm2 (n=8) | **5.6×** | 5.4e-32 | full DD | original: sqrt(dot(x,x)) |
 | arr\_matmul (8×8\*8) | **2.1×** | 1.9e-30 | full DD | original: fused multiply-accumulate with periodic renormalization |
 
-## C++: `MultiFloat<double,2>` vs `__float128`
+## C++: `MultiFloat<double,2>` vs `__float128` — Apple M1 Max
 
 Header-only — all kernels inline into the call site. No LTO needed.
 Precision characteristics are the same as the Fortran version (same
@@ -267,6 +299,241 @@ algorithms), so only speedup is shown.
 | tgamma | **105×** |
 | lgamma | **71×** |
 
+## Fortran: `float64x2` vs `real(16)` — Intel Skylake-SP (x86-64)
+
+Same harness as the Apple M1 run (1024 elements × 400 reps). The
+`max_rel` column is from the `fortran_fuzz` 1M-input precision report
+on the same build. Where Apple M1 and x86-64 max\_rel diverge, it's
+typically because the libm seed for the Newton-corrected functions
+(asin/acos/atan/atan2) has different precision between Apple's Accelerate
+framework and glibc.
+
+### Arithmetic
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| add | **3.6×** | 1.5e-32 | full DD |
+| sub | **3.1×** | 6.2e-33 | full DD |
+| mul | **5.9×** | 3.1e-32 | full DD |
+| div | **3.2×** | 6.1e-32 | full DD |
+| sqrt | **17×** | 5.4e-32 | full DD |
+| add (mf+dp) | **4.3×** | exact | full DD |
+| mul (dp\*mf) | **6.1×** | 3.1e-32 | full DD |
+
+### Unary
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| abs | **2.4×** | exact | exact |
+| neg | **4.4×** | exact | exact |
+| aint | 1.4× | exact | exact |
+| anint | **2.5×** | exact | exact |
+| fraction | 1.3× | exact | exact |
+| scale | **3.5×** | exact | exact |
+| set\_exponent | **3.3×** | exact | exact |
+
+### Binary
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| min | **4.2×** | 5.9e-33 | full DD |
+| max | **4.3×** | 6.0e-33 | full DD |
+| min3 | **6.9×** | 5.8e-33 | full DD |
+| max3 | **6.4×** | 5.7e-33 | full DD |
+| sign | **2.3×** | exact | exact |
+| dim | **4.3×** | 5.9e-33 | full DD |
+| hypot | **5.4×** | 7.2e-32 | full DD |
+| mod | 1.1× | 3.2e-32 | full DD |
+| modulo | **1.6×** | 3.2e-32 | full DD |
+
+### Exponential / logarithmic
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| exp | **2.7×** | 2.8e-30 | full DD |
+| log | **3.8×** | 3.0e-32 | full DD |
+| log10 | **4.9×** | 3.4e-32 | full DD |
+| pow | **4.1×** | 2.2e-30 | full DD |
+| pow\_int | **5.6×** | 2.2e-32 | full DD |
+
+### Trigonometric
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| sin | **1.5×** | 3.8e-32 | full DD |
+| cos | **1.5×** | 4.2e-32 | full DD |
+| sinpi | **2.8×** | 4.9e-27 | full DD |
+| cospi | **2.6×** | 8.2e-27 | full DD |
+| tan | 0.8× | 6.7e-32 | full DD |
+| asin | 1.2× | 4.3e-32 | full DD |
+| acos | 1.2× | 5.4e-32 | full DD |
+| atan | 0.7× | 4.2e-32 | full DD |
+| atan2 | 0.8× | 3.0e-32 | full DD |
+
+The Fortran trig `max_rel` values are at the DD floor (~5e-32) thanks
+to the 13-term Taylor kernels and the `atan(x) = π/2 - atan(1/x)`
+identity for |x| > 1 (both landed on this branch, see git log). The
+earlier 10-term kernels bottomed out at ~1e-27 on this x86-64 build
+because gfortran's x86-64 libm `sin`/`cos`/`atan` seeds have slightly
+different precision characteristics than Apple's Accelerate.
+
+### Hyperbolic
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| sinh | **1.9×** | 3.7e-30 | full DD |
+| cosh | **1.6×** | 3.7e-30 | full DD |
+| tanh | **2.3×** | 1.2e-30 | full DD |
+| asinh | **5.8×** | 2.7e-30 | full DD |
+| acosh | **4.9×** | 4.1e-32 | full DD |
+| atanh | **4.3×** | 1.2e-30 | full DD |
+
+### Error / special functions
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| erf | **5.4×** | 7.8e-19 | deriv-corrected |
+| erfc | **5.5×** | 2.5e-16 | deriv-corrected |
+| erfc\_scaled | **148×** | 5.7e-16 | single-double |
+| gamma | **42×** | 4.1e-16 | single-double |
+| log\_gamma | **40×** | 2.1e-16 | single-double |
+| bessel\_j0 | **68×** | 8.2e-16 | single-double |
+| bessel\_j1 | **69×** | 1.7e-13 | single-double |
+| bessel\_jn(3,.) | **67×** | 7.4e-15 | single-double |
+| bessel\_y0 | **75×** | 4.9e-16 | single-double |
+| bessel\_y1 | **71×** | 1.7e-15 | single-double |
+| bessel\_yn(3,.) | **75×** | 1.3e-14 | single-double |
+
+### Complex arithmetic
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| cx\_add | **3.6×** | 1.3e-32 | full DD |
+| cx\_sub | **3.4×** | 5.8e-33 | full DD |
+| cx\_mul | **4.0×** | 2.0e-32 | full DD |
+| cx\_div | **4.1×** | 4.6e-32 (re) / 1.1e-16 (im) | full DD / deriv |
+| cx\_conjg | **3.5×** | exact | exact |
+| cx\_abs | **4.9×** | 6.6e-32 | full DD |
+
+### Complex transcendentals
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| cx\_sqrt | **4.6×** | 6.4e-32 | full DD |
+| cx\_exp | 1.5× | 7.8e-31 | full DD |
+| cx\_log | 1.8× | 2.0e-29 (re) / 2.8e-32 (im) | full DD |
+| cx\_sin | 1.4× | 4.9e-31 | full DD |
+| cx\_cos | 1.4× | 4.9e-31 | full DD |
+| cx\_tan | 0.7× | 3.1e-30 | full DD |
+| cx\_sinh | 1.5× | 1.2e-30 | full DD |
+| cx\_cosh | 1.5× | 1.2e-30 | full DD |
+| cx\_tanh | 0.8× | 1.1e-30 | full DD |
+| cx\_asin | **2.4×** | 2.8e-23 (re) / 8.4e-31 (im) | deriv / full DD |
+| cx\_acos | **2.4×** | 2.9e-32 (re) / 8.4e-31 (im) | full DD |
+| cx\_atan | 1.4× | 3.8e-32 (re) / 4.8e-31 (im) | full DD |
+| cx\_asinh | **2.2×** | 6.7e-22 (re) / 6.6e-32 (im) | deriv / full DD |
+| cx\_acosh | **2.0×** | 7.2e-31 (re) / 2.9e-32 (im) | full DD |
+| cx\_atanh | 1.5× | 7.2e-23 (re) / 6.7e-32 (im) | deriv / full DD |
+
+### Array reductions
+
+| op | speedup | max\_rel | precision |
+|---|---|---|---|
+| arr\_sum (n=8) | 1.4× | 2.5e-31 | full DD |
+| arr\_product (n=8) | **2.2×** | 4.3e-49 | full DD |
+| arr\_maxval (n=8) | **5.8×** | 6.1e-33 | full DD |
+| arr\_minval (n=8) | **5.2×** | 6.0e-33 | full DD |
+| arr\_dot (n=8) | **4.6×** | 1.0e-31 | full DD |
+| arr\_norm2 (n=8) | **6.8×** | 6.4e-32 | full DD |
+| arr\_matmul (8×8\*8) | 0.8× | 8.8e-30 | full DD |
+
+## C++: `MultiFloat<double,2>` vs `__float128` — Intel Skylake-SP (x86-64)
+
+Same header-only path as the Apple M1 run; precision characteristics
+are identical to the Fortran version (shared algorithms).
+
+### Arithmetic
+
+| op | speedup |
+|---|---|
+| add | **4.1×** |
+| sub | **4.2×** |
+| mul | **7.7×** |
+| div | **2.6×** |
+| sqrt | **29×** |
+| cbrt | **13×** |
+| fma | **69×** |
+| abs | **5.1×** |
+| neg | **3.6×** |
+
+### Rounding
+
+| op | speedup |
+|---|---|
+| floor | **4.2×** |
+| ceil | **3.9×** |
+| trunc | **3.2×** |
+| round | 1.0× |
+| rint | **11×** |
+| nearbyint | **65×** |
+
+### Binary
+
+| op | speedup |
+|---|---|
+| fmin | **9.8×** |
+| fmax | **13×** |
+| fdim | **6.9×** |
+| copysign | **5.2×** |
+| fmod | 0.76× |
+| hypot | **20×** |
+| ldexp(.,5) | **2.4×** |
+
+### Exponential / logarithmic
+
+| op | speedup |
+|---|---|
+| exp | **2.7×** |
+| exp2 | **3.1×** |
+| expm1 | **3.3×** |
+| log | **4.0×** |
+| log10 | **5.1×** |
+| log2 | **4.7×** |
+| log1p | **4.3×** |
+| pow | **4.1×** |
+
+### Trigonometric
+
+| op | speedup |
+|---|---|
+| sin | **2.3×** |
+| cos | **2.3×** |
+| tan | 1.1× |
+| asin | 1.7× |
+| acos | 1.7× |
+| atan | 1.0× |
+| atan2 | 1.1× |
+
+### Hyperbolic
+
+| op | speedup |
+|---|---|
+| sinh | 1.9× |
+| cosh | 1.5× |
+| tanh | **2.2×** |
+| asinh | **6.0×** |
+| acosh | **5.5×** |
+| atanh | **4.4×** |
+
+### Error / special functions
+
+| op | speedup |
+|---|---|
+| erf | **5.7×** |
+| erfc | **5.5×** |
+| tgamma | **59×** |
+| lgamma | **46×** |
+
 ## Notes
 
 - **`mod` / `fmod`** is the only operation where quad precision is
@@ -281,9 +548,28 @@ algorithms), so only speedup is shown.
 - **Trig range reduction** uses a 3-part π/2 constant (~161 bits) via
   Cody–Waite subtraction with DD arithmetic (FMA-captured product errors).
   Combined with the π/8 argument split (which halves the polynomial
-  evaluation range from x² ≤ 0.616 to x² ≤ 0.154), this gives near-full
-  DD precision (~5e-27) for sin/cos/tan. For |x| > ~1e15, a Payne–Hanek
-  reduction with a multi-word 2/π table would be needed.
+  evaluation range from x² ≤ 0.616 to x² ≤ 0.154), this gives full DD
+  precision (~4e-32) for sin/cos/tan with the current 13-term Taylor
+  kernels. The earlier 10-term kernels truncated at ~1e-23 at the boundary,
+  which was below libm noise on Apple M1 but surfaced as ~1e-27 sin/cos
+  max\_rel on x86-64; extending to 13 terms brings both targets to the
+  DD floor. For |x| > ~1e15, a Payne–Hanek reduction with a multi-word
+  2/π table would be needed.
+
+- **x86-64 specifics.** On the Skylake-SP + glibc run, three issues that
+  are masked on Apple M1 needed fixes to reach full DD precision:
+  (1) `mod` used `floor` which returns default INTEGER and saturates for
+  quotients > 2³¹, making the reduction loop run `|x/y|` iterations
+  instead of one — one `mod(6.57e11, -44.65)` call was taking ~5 minutes.
+  Fix: switch to `aint` (real-returning). (2) The 10-term sin/cos Taylor
+  truncated at ~1e-23 at x² ≈ (π/8)², capping Newton-seeded asin/acos
+  at ~1e-26. Fix: extend to 13 terms (Apple M1 was silently at ~5e-27 for
+  the same reason but within the documented "near-DD" tolerance).
+  (3) `atan(x)` for |x|>1 had ~log₂(x) bits of cancellation in the
+  `x − tan(y₀)` Newton residual, giving ~1e-17 at |x|=10¹⁵. Fix: use
+  `atan(x) = sign(x)·π/2 − atan(1/x)` so the Newton argument stays
+  in [−1, 1]. All three fixes are in both the Fortran and C++ codebases
+  and benefit both platforms.
 
 - **Single-double precision** functions (gamma, bessel, erfc\_scaled, etc.)
   achieve 60–165× speedup by evaluating `f(hi)` via the leading-limb libm
