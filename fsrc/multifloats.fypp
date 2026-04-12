@@ -1817,22 +1817,46 @@ contains
 
     elemental function dd_atan_full(x) result(res)
         type(float64x2), intent(in) :: x
-        type(float64x2) :: res, y0, sy, cy, t, c2
+        type(float64x2) :: res, y0, sy, cy, t, c2, arg, pi_half_dd, one_dd
+        logical :: use_recip
         if (.not. ieee_is_finite(x%limbs(1))) then
             res%limbs = [atan(x%limbs(1)), 0.0_dp]
             return
         end if
-        y0%limbs = [atan(x%limbs(1)), 0.0_dp]
-        ! Newton: y' = y + cos²(y) * (x - tan(y))
+        ! For |x| > 1 the Newton residual (x - tan(y0)) cancels to
+        ! ~ulp(x), capping precision at ~log2(x) bits lost. Apply the
+        ! identity atan(x) = sign(x)·π/2 - atan(1/x) to keep the Newton
+        ! argument in [-1, 1], where the residual stays well-scaled.
+        use_recip = abs(x%limbs(1)) > 1.0_dp
+        if (use_recip) then
+            one_dd%limbs = [1.0_dp, 0.0_dp]
+            arg = one_dd / x
+        else
+            arg = x
+        end if
+        y0%limbs = [atan(arg%limbs(1)), 0.0_dp]
+        ! Newton: y' = y + cos²(y) * (arg - tan(y))
         sy = dd_sin_full(y0)
         cy = dd_cos_full(y0)
         if (abs(cy%limbs(1)) < 1.0e-15_dp) then
             res = y0
-            return
+        else
+            t = sy / cy
+            c2 = cy * cy
+            res = y0 + c2 * (arg - t)
         end if
-        t = sy / cy
-        c2 = cy * cy
-        res = y0 + c2 * (x - t)
+        if (use_recip) then
+            pi_half_dd%limbs = [1.5707963267948966_dp, 6.123233995736766e-17_dp]
+            if (x%limbs(1) > 0.0_dp) then
+                res = pi_half_dd - res
+            else
+                ! atan(x) = -π/2 - atan(1/x), but 1/x < 0 here so
+                ! computed `res` is negative; add to reach -π/2 + (-|res|).
+                res%limbs(1) = -res%limbs(1)
+                res%limbs(2) = -res%limbs(2)
+                res = res - pi_half_dd
+            end if
+        end if
     end function
 
     elemental function dd_atan2_full(y, x) result(res)
