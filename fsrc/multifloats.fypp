@@ -1940,37 +1940,43 @@ contains
 
     elemental function dd_tanh_full(x) result(res)
         type(float64x2), intent(in) :: x
-        type(float64x2) :: res, two_ax, e2, ax, two
+        type(float64x2) :: res, ax, neg_two_ax, em2, two
         if (.not. ieee_is_finite(x%limbs(1))) then
             res%limbs = [tanh(x%limbs(1)), 0.0_dp]
             return
         end if
-        ! For |x| > ~20, exp(2x) overflows but tanh(x) → ±1.
-        if (x%limbs(1) > 20.0_dp) then
+        ! For |x| > 37, exp(-2|x|) < 2^-106 (below DD epsilon relative
+        ! to 1.0), so tanh(x) = ±1 to full DD precision.
+        if (x%limbs(1) > 37.0_dp) then
             res%limbs = [1.0_dp, 0.0_dp]
             return
         end if
-        if (x%limbs(1) < -20.0_dp) then
+        if (x%limbs(1) < -37.0_dp) then
             res%limbs = [-1.0_dp, 0.0_dp]
             return
         end if
-        ! Small |x|: sinh / cosh keeps cancellation away.
+        ! Small |x|: sinh / cosh avoids the 1-small cancellation.
         if (abs(x%limbs(1)) < 0.5_dp) then
             res = dd_sinh_full(x) / dd_cosh_full(x)
             return
         end if
-        ! General case: tanh(|x|) = 1 - 2/(e^(2|x|) + 1). This form
-        ! avoids the cancellation in (e^(2x) - 1)/(e^(2x) + 1) when
-        ! tanh is close to ±1.
+        ! General case: tanh(|x|) = 1 - 2·exp(-2|x|) / (1 + exp(-2|x|)).
+        ! Using exp(-2|x|) (which is small for |x| > 0.5) avoids the
+        ! cancellation in the old "1 - 2/(e^(2|x|)+1)" form — there,
+        ! 2/(e^(2|x|)+1) ≈ 2·exp(-2|x|) which is close to 0, so
+        ! subtracting it from 1 lost ~2|x|/ln(10) digits.
         if (x%limbs(1) < 0.0_dp) then
-            ax%limbs = -x%limbs
+            ax%limbs = [-x%limbs(1), -x%limbs(2)]
         else
             ax = x
         end if
-        two_ax%limbs = [2.0_dp * ax%limbs(1), 2.0_dp * ax%limbs(2)]
-        e2 = dd_exp_full(two_ax)
+        neg_two_ax%limbs = [-2.0_dp * ax%limbs(1), -2.0_dp * ax%limbs(2)]
+        em2 = dd_exp_full(neg_two_ax)   ! exp(-2|x|), small for |x| > 0.5
         two%limbs = [2.0_dp, 0.0_dp]
-        res = MF_ONE - two / (e2 + MF_ONE)
+        ! tanh(|x|) = 1 - 2·em2 / (1 + em2)
+        ! = (1 + em2 - 2·em2) / (1 + em2)
+        ! = (1 - em2) / (1 + em2)
+        res = (MF_ONE - em2) / (MF_ONE + em2)
         if (x%limbs(1) < 0.0_dp) res%limbs = -res%limbs
     end function
 
