@@ -2583,11 +2583,67 @@ contains
             end if
         end block
 #:elif func == 'mod'
-        ! mod(a, b) = a - aint(a/b) * b
-        res = x - dd_trunc(x / y) * y
+        ! Shift-and-subtract remainder: repeatedly subtract the largest
+        ! power-of-2-scaled |y| that fits into r, removing the leading
+        ! quotient bits each iteration. No DD divide needed. O(exp_diff)
+        ! iterations — fast for small quotients, falls back to the
+        ! divide-based path for exponent differences > 64.
+        block
+            logical :: x_neg
+            type(float64x2) :: ax, ay, r, sy
+            integer :: ex, ey, diff
+            x_neg = (x%limbs(1) < 0.0_dp)
+            if (x_neg) then
+                ax%limbs(1) = -x%limbs(1); ax%limbs(2) = -x%limbs(2)
+            else
+                ax = x
+            end if
+            if (y%limbs(1) < 0.0_dp) then
+                ay%limbs(1) = -y%limbs(1); ay%limbs(2) = -y%limbs(2)
+            else
+                ay = y
+            end if
+            if (ax < ay) then
+                res = x
+            else
+                ex = exponent(ax%limbs(1))
+                ey = exponent(ay%limbs(1))
+                diff = ex - ey
+                if (diff > 64) then
+                    ! Large exponent gap: fall back to divide-based path
+                    res = x - dd_trunc(x / y) * y
+                else
+                    r = ax
+                    do while (r >= ay)
+                        ex = exponent(r%limbs(1))
+                        diff = ex - ey
+                        sy%limbs(1) = scale(ay%limbs(1), diff)
+                        sy%limbs(2) = scale(ay%limbs(2), diff)
+                        if (sy > r) then
+                            sy%limbs(1) = scale(ay%limbs(1), diff - 1)
+                            sy%limbs(2) = scale(ay%limbs(2), diff - 1)
+                        end if
+                        r = r - sy
+                        if (r%limbs(1) == 0.0_dp) exit
+                    end do
+                    if (x_neg) then
+                        res%limbs(1) = -r%limbs(1)
+                        res%limbs(2) = -r%limbs(2)
+                    else
+                        res = r
+                    end if
+                end if
+            end if
+        end block
 #:elif func == 'modulo'
-        ! modulo(a, b) = a - floor(a/b) * b
-        res = x - dd_floor(x / y) * y
+        ! modulo via mod + sign adjustment
+        res = ${n1}$_mod_${n2}$(a, b)
+        if (res%limbs(1) /= 0.0_dp) then
+            if ((res%limbs(1) > 0.0_dp .and. y%limbs(1) < 0.0_dp) .or. &
+                (res%limbs(1) < 0.0_dp .and. y%limbs(1) > 0.0_dp)) then
+                res = res + y
+            end if
+        end if
 #:elif func == 'dim'
         if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(y%limbs(1)))) then
             ! Defer to the dp intrinsic so NaN/Inf propagation matches.
