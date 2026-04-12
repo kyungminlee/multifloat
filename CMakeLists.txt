@@ -89,3 +89,21 @@ add_test(NAME cpp_fuzz COMMAND cpp_fuzz)
 add_executable(cpp_bench ./test/bench.cc)
 target_compile_options(cpp_bench PRIVATE -fext-numeric-literals)
 target_link_libraries(cpp_bench PRIVATE quadmath)
+
+# C-ABI wrapper library (compiled as C++ with full inlining, exposed as
+# extern "C"). Used by bench_c to compare gfortran's derived-type ABI
+# against the platform C calling convention for the same DD kernels.
+add_library(multifloat-c STATIC ./src/multifloats_c.cc)
+target_include_directories(multifloat-c PRIVATE src)
+target_compile_options(multifloat-c PRIVATE -O3)
+
+add_executable(fortran_bench_c ./test/bench_c.f90)
+target_link_libraries(fortran_bench_c PRIVATE multifloat-fortran multifloat-c)
+
+add_library(dd-bindc OBJECT ./test/dd_bindc.f90)
+target_compile_options(dd-bindc PRIVATE -O3)
+set_target_properties(dd-bindc PROPERTIES
+    Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/modules)
+
+add_executable(fortran_bench_abi ./test/bench_abi.f90)
+target_link_libraries(fortran_bench_abi PRIVATE multifloat-fortran multifloat-c dd-bindc)

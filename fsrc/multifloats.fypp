@@ -8,6 +8,34 @@
 #! The interface for float64x2 mirrors REAL(KIND=16) as closely as possible:
 #! all mixed-type arithmetic, comparisons, and assignments with real(dp),
 #! real(sp), integer, complex(dp), and complex(sp) are supported.
+#!
+#! =====================================================================
+#! Performance note: Fortran ABI overhead (2025-04)
+#! =====================================================================
+#!
+#! The DD kernels (add, mul, div, sqrt, ...) use `elemental` functions
+#! on a `sequence` derived type. This design is intentional — it gives
+#! automatic whole-array operations and EQUIVALENCE compatibility (needed
+#! by some LAPACK routines) — but it carries an inherent ABI cost:
+#!
+#!   - gfortran passes/returns derived types via hidden pointers (not in
+#!     FP registers), adding ~3-7× call overhead vs the C ABI.
+#!   - With LTO (OBJECT library + -flto), gfortran inlines the kernels
+#!     and eliminates most of this overhead, but its SROA pass does not
+#!     fully promote the hidden result pointer to registers, leaving a
+#!     ~1.5× residual gap vs C++ on the cheapest ops (add, mul).
+#!
+#! Benchmarking confirmed that switching to `bind(c)` + `value` args on
+#! a `bind(c)` type closes the gap entirely (fc/cw ≈ 1.0× for add, mul,
+#! div, sqrt), proving the gap is purely ABI, not codegen. However,
+#! `bind(c)` is incompatible with `elemental` and `sequence`, so we keep
+#! the current design and accept the ~1.5× overhead on basic arithmetic
+#! (which is already 2-10× faster than libquadmath quad precision).
+#!
+#! To get the fastest possible DD arithmetic from Fortran without LTO,
+#! call the C-ABI wrappers in src/multifloats_c.h directly via
+#! iso_c_binding interfaces (see test/bench_abi.f90 for an example).
+#! =====================================================================
 
 #! =====================================================================
 #! Type system metadata
