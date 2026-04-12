@@ -138,6 +138,20 @@ template <typename T, std::size_t N> struct MultiFloat {
     if constexpr (N == 1) {
       out._limbs[0] = _limbs[0] + rhs._limbs[0];
     } else { // N == 2
+      T s = _limbs[0] + rhs._limbs[0];
+      // Non-finite: the EFT below would propagate NaN into limbs[1];
+      // short-circuit and let IEEE produce the correct leading limb.
+      if (!std::isfinite(s)) {
+        out._limbs[0] = s;
+        return out;
+      }
+      // When both hi limbs are zero, two_sum loses the -0 sign
+      // (IEEE 754: -0 + +0 = +0 in round-to-nearest).
+      if (_limbs[0] == T(0) && rhs._limbs[0] == T(0)) {
+        out._limbs[0] = s;
+        out._limbs[1] = _limbs[1] + rhs._limbs[1];
+        return out;
+      }
       T a, b, c, d;
       detail::two_sum(_limbs[0], rhs._limbs[0], a, b);
       detail::two_sum(_limbs[1], rhs._limbs[1], c, d);
@@ -175,6 +189,20 @@ template <typename T, std::size_t N> struct MultiFloat {
       out._limbs[0] = _limbs[0] / rhs._limbs[0];
       return out;
     } else { // N == 2 — single Newton refinement
+      T s = _limbs[0] / rhs._limbs[0];
+      // Non-finite quotient: y=0, 0/0, inf/finite, NaN.
+      if (!std::isfinite(s)) {
+        MultiFloat out;
+        out._limbs[0] = s;
+        return out;
+      }
+      // Infinite divisor: quotient is ±0 (already in s). The Newton
+      // refinement would compute 0*inf = NaN; short-circuit.
+      if (!std::isfinite(rhs._limbs[0])) {
+        MultiFloat out;
+        out._limbs[0] = s;
+        return out;
+      }
       MultiFloat u;
       u._limbs[0] = T(1) / rhs._limbs[0];
       MultiFloat quotient = (*this) * u;

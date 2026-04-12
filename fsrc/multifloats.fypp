@@ -3911,6 +3911,15 @@ $:mf_minmax_body(func, n)
             res%limbs(2) = 0.0_dp
             return
         end if
+        ! When both hi limbs are zero, the two_sum EFT produces a
+        ! spurious +0 from mixed-sign zero arithmetic (IEEE 754:
+        ! -0 + +0 = +0 in round-to-nearest). Short-circuit so the
+        ! correct IEEE sign of s is preserved.
+        if (x0 == 0.0_dp .and. y0 == 0.0_dp) then
+            res%limbs(1) = s
+            res%limbs(2) = x1 + y1
+            return
+        end if
         aprime = s - y0
         bprime = s - aprime
         aerr = x0 - aprime
@@ -3946,11 +3955,19 @@ $:mf_minmax_body(func, n)
         bprime = res%limbs(1) - p00
         res%limbs(2) = e00 - bprime
 #:else
-        ! Newton-refined DD division. The single guard tests the leading
+        ! Newton-refined DD division. The first guard tests the leading
         ! quotient s; if it is non-finite, every IEEE edge case (y=0,
-        ! 0/0, inf/finite, finite/inf, NaN) collapses to the same path.
+        ! 0/0, inf/finite, NaN) collapses to the same path. The second
+        ! guard catches finite/inf (s=0 but refinement hits 0*inf=NaN).
         s = x0 / y0
         if (.not. ieee_is_finite(s)) then
+            res%limbs(1) = s
+            res%limbs(2) = 0.0_dp
+            return
+        end if
+        if (.not. ieee_is_finite(y0)) then
+            ! y is ±inf: quotient is ±0 (already in s). The Newton
+            ! refinement would compute 0*inf = NaN; short-circuit.
             res%limbs(1) = s
             res%limbs(2) = 0.0_dp
             return
