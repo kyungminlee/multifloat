@@ -99,9 +99,9 @@ values > 1× mean multifloats is faster.
 
 | op | speedup | max\_rel | precision | approach |
 |---|---|---|---|---|
-| sin | **2.7×** | 4.7e-25 | near-DD | Julia: sinpi polynomial (Horner) + 3-part 1/π Cody–Waite reduction |
-| cos | **2.7×** | 3.4e-25 | near-DD | Julia: cospi polynomial (Horner) + 3-part 1/π Cody–Waite reduction |
-| tan | 1.3× | 4.7e-25 | near-DD | Julia: sinpi/cospi + DD divide |
+| sin | **2.7×** | 4.7e-25 | near-DD | Julia: sinpi/cospi Horner polynomial (full DD) + 3-part 1/π Cody–Waite reduction (precision limited by reduction, not polynomial) |
+| cos | **2.7×** | 3.4e-25 | near-DD | Julia: sinpi/cospi Horner polynomial (full DD) + 3-part 1/π Cody–Waite reduction (precision limited by reduction, not polynomial) |
+| tan | 1.3× | 4.7e-25 | near-DD | Julia: sinpi/cospi kernels + DD divide; precision limited by 1/π reduction |
 | asin | **2.0×** | 3.4e-32 | full DD | original: Newton step on sin, seeded by libm asin(hi) |
 | acos | 1.9× | 2.6e-32 | full DD | original: Newton step on cos, seeded by libm acos(hi) |
 | atan | 1.2× | 9.8e-23 | deriv-corrected | original: Newton step on tan, seeded by libm atan(hi) |
