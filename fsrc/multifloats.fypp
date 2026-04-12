@@ -1955,22 +1955,68 @@ contains
         end if
 #:elif func == 'sqrt'
         ! Karp/Markstein DD sqrt — port of Julia mfsqrt for N == 2.
-        ! Start from a single-double reciprocal sqrt seed and refine.
+        ! Inlined into scalar dp so the kernel never goes through a
+        ! float64x2 operator dispatch in the hot path.
         block
-            real(dp) :: u, half_u
-            type(float64x2) :: root, residual, correction, half_u_dd
-            if (.not. (x%limbs(1) > 0.0_dp .and. ieee_is_finite(x%limbs(1)))) then
+            real(dp) :: x0, x1, u, half_u, leading
+            real(dp) :: r0, r1, p00, e00, bprime, s, c, t, e
+            real(dp) :: aprime, aerr, berr
+            x0 = x%limbs(1)
+            x1 = x%limbs(2)
+            leading = sqrt(x0)
+            if (.not. (x0 > 0.0_dp .and. ieee_is_finite(leading))) then
                 ! 0, -0, negative, NaN, or +Inf — leading-limb sqrt handles
                 ! every IEEE special case naturally.
-                res%limbs = [sqrt(x%limbs(1)), 0.0_dp]
+                res%limbs(1) = leading
+                res%limbs(2) = 0.0_dp
             else
-                u = 1.0_dp / sqrt(x%limbs(1))
+                u = 1.0_dp / leading
                 half_u = 0.5_dp * u
-                root = x * mf_from_dp(u)               ! ≈ sqrt(x)
-                residual = root * root - x             ! ≈ 0
-                half_u_dd = mf_from_dp(half_u)
-                correction = residual * half_u_dd
-                res = root - correction
+                ! root = x * u  (DD * dp), inlined.
+                p00 = x0 * u
+                e00 = ieee_fma(x0, u, -p00) + x1 * u
+                r0 = p00 + e00
+                bprime = r0 - p00
+                r1 = e00 - bprime
+                ! residual = root * root - x  (DD multiply, then DD subtract).
+                p00 = r0 * r0
+                e00 = ieee_fma(r0, r0, -p00) + 2.0_dp * (r0 * r1)
+                ! root*root as DD: limbs (s_hi, s_lo)
+                s = p00 + e00
+                bprime = s - p00
+                c = e00 - bprime    ! lo limb of root*root
+                ! Subtract x: (s, c) - (x0, x1)
+                t = s + (-x0)
+                aprime = t - (-x0)
+                bprime = t - aprime
+                aerr = s - aprime
+                berr = (-x0) - bprime
+                e = aerr + berr
+                e = e + (c - x1)
+                p00 = t + e         ! residual%limbs(1)
+                bprime = p00 - t
+                e00 = e - bprime    ! residual%limbs(2)
+                ! correction = residual * half_u  (DD * dp).
+                s = p00 * half_u
+                c = ieee_fma(p00, half_u, -s) + e00 * half_u
+                p00 = s + c
+                bprime = p00 - s
+                e00 = c - bprime
+                ! res = root - correction.
+                s = r0 + (-p00)
+                aprime = s - (-p00)
+                bprime = s - aprime
+                aerr = r0 - aprime
+                berr = (-p00) - bprime
+                e = aerr + berr
+                c = r1 + (-e00)
+                t = s + c
+                bprime = t - s
+                c = c - bprime
+                e = e + c
+                res%limbs(1) = t + e
+                bprime = res%limbs(1) - t
+                res%limbs(2) = e - bprime
             end if
         end block
 #:elif func == 'aint'
@@ -3431,47 +3477,58 @@ $:mf_minmax_body(func, n)
         ${d2}$, intent(in) :: b
         ${'type(complex128x2)' if rc else 'type(float64x2)'}$ :: res
 #:if not rc
-        type(float64x2) :: x, y, q, residual, correction, u
+        ! Hot fast path uses scalar dp locals (no float64x2 copies, no
+        ! generic mf_from_dp call). The single non-finite guard runs
+        ! after the leading-limb op so a single test catches every IEEE
+        ! special case.
+        real(dp) :: x0, x1, y0, y1
         real(dp) :: s, e, t, aprime, bprime, aerr, berr
         real(dp) :: p00, e00, p01, p10, c, d
-        x = ${MFCONV[n1].format('a')}$
-        y = ${MFCONV[n2].format('b')}$
-#:if opname == 'add' or opname == 'sub'
-#:if opname == 'sub'
-        y%limbs = -y%limbs
+        real(dp) :: ux, uy, q0, q1_lo, r0, r1, q_y0, q_y1
+#:if n1 == 'mf'
+        x0 = a%limbs(1)
+        x1 = a%limbs(2)
+#:elif n1 == 'sp' or n1 == 'int'
+        x0 = real(a, dp)
+        x1 = 0.0_dp
+#:else
+        x0 = a
+        x1 = 0.0_dp
 #:endif
-        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(y%limbs(1)))) then
-            ! IEEE handles inf/nan correctly on the leading limbs; the
-            ! EFT kernel below would otherwise contaminate them with NaN.
-            res%limbs(1) = x%limbs(1) + y%limbs(1)
-            res%limbs(2) = 0.0_dp
-            return
-        end if
-        if (x%limbs(1) == 0.0_dp .and. y%limbs(1) == 0.0_dp) then
-            ! Pure-zero case: rely on IEEE so signed-zero rules apply
-            ! (the EFT kernel would otherwise lose the sign of zero).
-            res%limbs(1) = x%limbs(1) + y%limbs(1)
-            res%limbs(2) = x%limbs(2) + y%limbs(2)
-            return
-        end if
-        s = x%limbs(1) + y%limbs(1)
+#:if n2 == 'mf'
+        y0 = b%limbs(1)
+        y1 = b%limbs(2)
+#:elif n2 == 'sp' or n2 == 'int'
+        y0 = real(b, dp)
+        y1 = 0.0_dp
+#:else
+        y0 = b
+        y1 = 0.0_dp
+#:endif
+#:if opname == 'sub'
+        y0 = -y0
+        y1 = -y1
+#:endif
+#:if opname == 'add' or opname == 'sub'
+        s = x0 + y0
         if (.not. ieee_is_finite(s)) then
-            ! The sum itself overflowed; the rest of the EFT would
-            ! propagate NaN through the limbs. Hand off the inf to dp.
+            ! Any non-finite input or overflow makes s non-finite. The
+            ! EFT below would propagate NaN to limbs(2); short-circuit
+            ! and let IEEE produce the correct leading limb.
             res%limbs(1) = s
             res%limbs(2) = 0.0_dp
             return
         end if
-        aprime = s - y%limbs(1)
+        aprime = s - y0
         bprime = s - aprime
-        aerr = x%limbs(1) - aprime
-        berr = y%limbs(1) - bprime
+        aerr = x0 - aprime
+        berr = y0 - bprime
         e = aerr + berr
-        c = x%limbs(2) + y%limbs(2)
-        aprime = c - y%limbs(2)
+        c = x1 + y1
+        aprime = c - y1
         bprime = c - aprime
-        aerr = x%limbs(2) - aprime
-        berr = y%limbs(2) - bprime
+        aerr = x1 - aprime
+        berr = y1 - bprime
         d = aerr + berr
         t = s + c
         bprime = t - s
@@ -3481,53 +3538,76 @@ $:mf_minmax_body(func, n)
         bprime = res%limbs(1) - t
         res%limbs(2) = e - bprime
 #:elif opname == 'mul'
-        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(y%limbs(1)))) then
-            res%limbs(1) = x%limbs(1) * y%limbs(1)
-            res%limbs(2) = 0.0_dp
-            return
-        end if
-        p00 = x%limbs(1) * y%limbs(1)
+        p00 = x0 * y0
         if (.not. ieee_is_finite(p00)) then
-            ! The product itself overflowed; ieee_fma(x, y, -inf) would
-            ! return NaN. Hand off the inf result to the dp leading limb.
+            ! Any non-finite input, 0*inf, or overflow lands here in one
+            ! test (no separate ieee_is_finite on x0/y0).
             res%limbs(1) = p00
             res%limbs(2) = 0.0_dp
             return
         end if
-        e00 = ieee_fma(x%limbs(1), y%limbs(1), -p00)
-        p01 = x%limbs(1) * y%limbs(2)
-        p10 = x%limbs(2) * y%limbs(1)
+        e00 = ieee_fma(x0, y0, -p00)
+        p01 = x0 * y1
+        p10 = x1 * y0
         e00 = e00 + (p01 + p10)
         res%limbs(1) = p00 + e00
         bprime = res%limbs(1) - p00
         res%limbs(2) = e00 - bprime
 #:else
-        if (.not. (ieee_is_finite(x%limbs(1)) .and. ieee_is_finite(y%limbs(1))) &
-     &      .or. y%limbs(1) == 0.0_dp) then
-            res%limbs(1) = x%limbs(1) / y%limbs(1)
+        ! Newton-refined DD division. The single guard tests the leading
+        ! quotient s; if it is non-finite, every IEEE edge case (y=0,
+        ! 0/0, inf/finite, finite/inf, NaN) collapses to the same path.
+        s = x0 / y0
+        if (.not. ieee_is_finite(s)) then
+            res%limbs(1) = s
             res%limbs(2) = 0.0_dp
             return
         end if
-        u = mf_from_dp(1.0_dp / y%limbs(1))
-        p00 = x%limbs(1) * u%limbs(1)
-        e00 = ieee_fma(x%limbs(1), u%limbs(1), -p00) + x%limbs(1) * u%limbs(2) + x%limbs(2) * u%limbs(1)
-        q%limbs(1) = p00 + e00
-        bprime = q%limbs(1) - p00
-        q%limbs(2) = e00 - bprime
-        p00 = q%limbs(1) * y%limbs(1)
-        e00 = ieee_fma(q%limbs(1), y%limbs(1), -p00) + q%limbs(1) * y%limbs(2) + q%limbs(2) * y%limbs(1)
-        correction%limbs(1) = p00 + e00
-        bprime = correction%limbs(1) - p00
-        correction%limbs(2) = e00 - bprime
-        ! residual = q*y - x  (sign chosen so that the final step is q - residual*u,
-        ! matching the Newton update q' = q + (x - q*y)*u).
-        residual = correction - x
-        p00 = residual%limbs(1) * u%limbs(1)
-        e00 = ieee_fma(residual%limbs(1), u%limbs(1), -p00) + residual%limbs(1) * u%limbs(2) + residual%limbs(2) * u%limbs(1)
-        correction%limbs(1) = p00 + e00
-        bprime = correction%limbs(1) - p00
-        correction%limbs(2) = e00 - bprime
-        res = q - correction
+        ux = 1.0_dp / y0
+        p00 = x0 * ux
+        e00 = ieee_fma(x0, ux, -p00) + x1 * ux
+        q0 = p00 + e00
+        bprime = q0 - p00
+        q1_lo = e00 - bprime
+        p00 = q0 * y0
+        e00 = ieee_fma(q0, y0, -p00) + q0 * y1 + q1_lo * y0
+        q_y0 = p00 + e00
+        bprime = q_y0 - p00
+        q_y1 = e00 - bprime
+        ! residual = q*y - x; final step is q - residual * (1/y0).
+        ! Inline the (q*y - x) DD subtract since we already have x0/x1.
+        s = q_y0 + (-x0)
+        aprime = s - (-x0)
+        bprime = s - aprime
+        aerr = q_y0 - aprime
+        berr = (-x0) - bprime
+        e = aerr + berr
+        c = q_y1 + (-x1)
+        t = s + c
+        bprime = t - s
+        c = c - bprime
+        e = e + c
+        r0 = t + e
+        bprime = r0 - t
+        r1 = e - bprime
+        ! correction = residual * u  (u ≈ 1/y0, single dp value)
+        p00 = r0 * ux
+        e00 = ieee_fma(r0, ux, -p00) + r1 * ux
+        ! res = q - correction
+        s = q0 + (-p00)
+        aprime = s - (-p00)
+        bprime = s - aprime
+        aerr = q0 - aprime
+        berr = (-p00) - bprime
+        e = aerr + berr
+        c = q1_lo + (-e00)
+        t = s + c
+        bprime = t - s
+        c = c - bprime
+        e = e + c
+        res%limbs(1) = t + e
+        bprime = res%limbs(1) - t
+        res%limbs(2) = e - bprime
 #:endif
 #:else
         ! Complex result: use native DD complex arithmetic. Lift any

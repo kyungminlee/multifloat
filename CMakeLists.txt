@@ -39,11 +39,20 @@ add_custom_command(
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/fsrc/multifloats.fypp
     VERBATIM)
 
-add_library(multifloat-fortran ${MULTIFLOATS_GENERATED_SRC})
+add_library(multifloat-fortran OBJECT ${MULTIFLOATS_GENERATED_SRC})
 set_target_properties(multifloat-fortran PROPERTIES
     Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/modules)
 target_include_directories(multifloat-fortran PUBLIC
     ${CMAKE_BINARY_DIR}/modules)
+# Enable LTO for the Fortran path so the small DD kernels (mf_add_mf,
+# mf_mul_mf, mf_sqrt, ...) actually inline into call sites in other
+# translation units. On macOS, LTO fails through .a archives (ar strips
+# GIMPLE sections from Mach-O objects), so multifloat-fortran is an
+# OBJECT library instead of STATIC — the .o file is linked directly.
+if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "")
+    target_compile_options(multifloat-fortran PUBLIC -flto)
+    target_link_options(multifloat-fortran PUBLIC -flto)
+endif()
 
 add_executable(fortran_precision ./test/precision.f90)
 target_link_libraries(fortran_precision PRIVATE multifloat-fortran)
@@ -62,6 +71,9 @@ add_executable(fortran_test ./test/test.f90)
 target_link_libraries(fortran_test PRIVATE multifloat-fortran)
 add_test(NAME fortran_test COMMAND fortran_test)
 
+add_executable(fortran_bench ./test/bench.f90)
+target_link_libraries(fortran_bench PRIVATE multifloat-fortran)
+
 # C++ tests for src/multifloats.hh — use __float128 / libquadmath as a
 # high-precision reference (provided by GCC, not Apple Clang).
 add_executable(cpp_test ./test/test.cc)
@@ -73,3 +85,7 @@ add_executable(cpp_fuzz ./test/fuzz.cc)
 target_compile_options(cpp_fuzz PRIVATE -fext-numeric-literals)
 target_link_libraries(cpp_fuzz PRIVATE quadmath)
 add_test(NAME cpp_fuzz COMMAND cpp_fuzz)
+
+add_executable(cpp_bench ./test/bench.cc)
+target_compile_options(cpp_bench PRIVATE -fext-numeric-literals)
+target_link_libraries(cpp_bench PRIVATE quadmath)
