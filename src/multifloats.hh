@@ -138,6 +138,20 @@ template <typename T, std::size_t N> struct MultiFloat {
     if constexpr (N == 1) {
       out._limbs[0] = _limbs[0] + rhs._limbs[0];
     } else { // N == 2
+      T s = _limbs[0] + rhs._limbs[0];
+      // Non-finite: the EFT below would propagate NaN into limbs[1];
+      // short-circuit and let IEEE produce the correct leading limb.
+      if (!std::isfinite(s)) {
+        out._limbs[0] = s;
+        return out;
+      }
+      // When both hi limbs are zero, two_sum loses the -0 sign
+      // (IEEE 754: -0 + +0 = +0 in round-to-nearest).
+      if (_limbs[0] == T(0) && rhs._limbs[0] == T(0)) {
+        out._limbs[0] = s;
+        out._limbs[1] = _limbs[1] + rhs._limbs[1];
+        return out;
+      }
       T a, b, c, d;
       detail::two_sum(_limbs[0], rhs._limbs[0], a, b);
       detail::two_sum(_limbs[1], rhs._limbs[1], c, d);
@@ -175,6 +189,20 @@ template <typename T, std::size_t N> struct MultiFloat {
       out._limbs[0] = _limbs[0] / rhs._limbs[0];
       return out;
     } else { // N == 2 — single Newton refinement
+      T s = _limbs[0] / rhs._limbs[0];
+      // Non-finite quotient: y=0, 0/0, inf/finite, NaN.
+      if (!std::isfinite(s)) {
+        MultiFloat out;
+        out._limbs[0] = s;
+        return out;
+      }
+      // Infinite divisor: quotient is ±0 (already in s). The Newton
+      // refinement would compute 0*inf = NaN; short-circuit.
+      if (!std::isfinite(rhs._limbs[0])) {
+        MultiFloat out;
+        out._limbs[0] = s;
+        return out;
+      }
       MultiFloat u;
       u._limbs[0] = T(1) / rhs._limbs[0];
       MultiFloat quotient = (*this) * u;
@@ -1090,13 +1118,35 @@ inline MFD2 dd_atan_full(MFD2 const &x) {
     r._limbs[1] = 0.0;
     return r;
   }
-  MFD2 y0 = dd_pair(std::atan(x._limbs[0]), 0.0);
+  // For |x| > 1 the Newton residual (x - tan(y0)) cancels to ~ulp(x),
+  // capping precision at ~log2(x) bits lost. Apply the identity
+  // atan(x) = sign(x)·π/2 - atan(1/x) to keep the Newton argument in
+  // [-1, 1], where the residual stays well-scaled.
+  bool use_recip = std::abs(x._limbs[0]) > 1.0;
+  MFD2 arg = use_recip ? (dd_pair(1.0, 0.0) / x) : x;
+  MFD2 y0 = dd_pair(std::atan(arg._limbs[0]), 0.0);
   MFD2 sy = dd_sin_full(y0);
   MFD2 cy = dd_cos_full(y0);
-  if (std::abs(cy._limbs[0]) < 1e-15) return y0;
-  MFD2 t = sy / cy;
-  MFD2 c2 = cy * cy;
-  return y0 + c2 * (x - t);
+  MFD2 res;
+  if (std::abs(cy._limbs[0]) < 1e-15) {
+    res = y0;
+  } else {
+    MFD2 t = sy / cy;
+    MFD2 c2 = cy * cy;
+    res = y0 + c2 * (arg - t);
+  }
+  if (use_recip) {
+    MFD2 pi_half_dd = dd_pair(1.5707963267948966, 6.123233995736766e-17);
+    if (x._limbs[0] > 0.0) {
+      res = pi_half_dd - res;
+    } else {
+      // atan(x) = -π/2 - atan(1/x), with 1/x < 0 giving res < 0.
+      res._limbs[0] = -res._limbs[0];
+      res._limbs[1] = -res._limbs[1];
+      res = res - pi_half_dd;
+    }
+  }
+  return res;
 }
 
 inline MFD2 dd_atan2_full(MFD2 const &y, MFD2 const &x) {
