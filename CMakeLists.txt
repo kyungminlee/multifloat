@@ -43,7 +43,8 @@ add_library(multifloat-fortran OBJECT ${MULTIFLOATS_GENERATED_SRC})
 set_target_properties(multifloat-fortran PROPERTIES
     Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/modules)
 target_include_directories(multifloat-fortran PUBLIC
-    ${CMAKE_BINARY_DIR}/modules)
+    ${CMAKE_BINARY_DIR}/modules
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # Enable LTO for the Fortran path so the small DD kernels (mf_add_mf,
 # mf_mul_mf, mf_sqrt, ...) actually inline into call sites in other
 # translation units. On macOS, LTO fails through .a archives (ar strips

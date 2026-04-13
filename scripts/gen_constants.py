@@ -4,429 +4,367 @@
 Single source of truth for all polynomial and conversion constants used
 by both src/multifloats.hh (C++) and fsrc/multifloats.fypp (Fortran).
 
+Writes:
+    src/dd_constants.hh      — C++ inline constexpr arrays
+    src/dd_constants.f90.inc — Fortran real(dp), parameter arrays
+
 Usage:
-    python3 scripts/gen_constants.py          # print to stdout
-    python3 scripts/gen_constants.py --check  # verify against source files
+    python3 scripts/gen_constants.py          # generate both files
+    python3 scripts/gen_constants.py --check  # verify without writing
 
 Requirements: mpmath (pip install mpmath)
 """
 
-import struct
+import os
 import sys
-from mpmath import mp, mpf, log, log10, factorial, pi, euler as euler_gamma
+from mpmath import mp, mpf, log, log10, factorial, pi
 from mpmath import bernoulli, sqrt
 
 mp.dps = 60  # 60 decimal digits — well above DD's ~32
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+CPP_OUT = os.path.join(PROJECT_DIR, "src", "dd_constants.hh")
+F90_OUT = os.path.join(PROJECT_DIR, "src", "dd_constants.f90.inc")
+
 
 # =============================================================================
-# Utility: split a high-precision value into a DD pair (hi, lo)
+# Utility
 # =============================================================================
 
 def to_dd(value):
-    """Split an mpf value into (hi, lo) where hi = float(value), lo = float(value - hi)."""
+    """Split an mpf value into (hi, lo) double-double pair."""
     hi = float(value)
     lo = float(value - mpf(hi))
     return hi, lo
 
 
-def verify_dd(value, hi, lo, name="", tol=1e-31):
-    """Verify |value - (hi+lo)| / |value| < tol."""
+def verify_dd(value, hi, lo, name=""):
+    """Verify |value - (hi+lo)| / |value| < tol. Returns relative error."""
     dd = mpf(hi) + mpf(lo)
     if value == 0:
-        err = abs(dd)
-    else:
-        err = float(abs((dd - value) / value))
-    if err > tol:
-        print(f"  WARNING: {name} rel_err={err:.3e} > {tol:.0e}", file=sys.stderr)
-    return err
+        return abs(float(dd))
+    return float(abs((dd - value) / value))
 
 
 # =============================================================================
 # Constant definitions
 # =============================================================================
 
-def gen_conversion_constants():
-    """log2(e), ln(2), log10(2), 1/pi, pi, etc."""
-    consts = {}
-    consts['log2_e'] = log(mpf(2))**(-1)  # 1/ln(2) = log2(e)
-    consts['ln_2'] = log(mpf(2))
-    consts['log10_2'] = log10(mpf(2))
-    consts['inv_pi'] = 1 / pi
-    consts['pi_dd'] = pi
-    consts['half_log_2pi'] = log(2 * pi) / 2
-    consts['log_pi'] = log(pi)
-    return consts
-
-
 def gen_exp2_coefs(n=14):
-    """exp2 polynomial: c[k] = (ln2)^k / k!"""
+    """c[k] = (ln2)^k / k!"""
     ln2 = log(mpf(2))
-    coefs = []
-    for k in range(n):
-        coefs.append(ln2**k / factorial(k))
-    return coefs
+    return [ln2**k / factorial(k) for k in range(n)]
 
 
-def gen_log2_narrow_coefs(n=7):
-    """log2 narrow-path polynomial.
-
-    For the table-lookup path, we approximate log2(1+s) where s is small.
-    The polynomial is in terms of t = s/(2+s) (argument reduction).
-    Coefficients: c[k] = 2/(2k+1) * (1/ln2), evaluated at odd powers of t.
-    c[k] = 2 / ((2k+1) * ln(2))
-    """
+def gen_log2_coefs(n):
+    """c[k] = 2/((2k+1)*ln2)"""
     ln2 = log(mpf(2))
-    coefs = []
-    for k in range(n):
-        coefs.append(mpf(2) / ((2*k + 1) * ln2))
-    return coefs
-
-
-def gen_log2_wide_coefs(n=9):
-    """log2 wide-path polynomial (same formula, more terms)."""
-    return gen_log2_narrow_coefs(n)
+    return [mpf(2) / ((2*k + 1) * ln2) for k in range(n)]
 
 
 def gen_log2_table(n=32):
-    """log2 lookup table: centers and log2(center) values."""
-    centers = []
-    values = []
-    for i in range(n):
-        c = 1.0 + (2*i + 1) / 64.0
-        centers.append(c)
-        values.append(log(mpf(c)) / log(mpf(2)))
+    """log2 lookup: centers[i] = 1 + (2i+1)/64, values[i] = log2(centers[i])."""
+    centers = [1.0 + (2*i + 1) / 64.0 for i in range(n)]
+    values = [log(mpf(c)) / log(mpf(2)) for c in centers]
     return centers, values
 
 
 def gen_sin_taylor(n=13):
     """sin(x)/x Taylor: c[k] = (-1)^k / (2k+1)!"""
-    coefs = []
-    for k in range(n):
-        coefs.append((-1)**k / factorial(2*k + 1))
-    return coefs
+    return [(-1)**k / factorial(2*k + 1) for k in range(n)]
 
 
 def gen_cos_taylor(n=13):
     """cos(x) Taylor: c[k] = (-1)^k / (2k)!"""
-    coefs = []
-    for k in range(n):
-        coefs.append((-1)**k / factorial(2*k))
-    return coefs
+    return [(-1)**k / factorial(2*k) for k in range(n)]
 
 
 def gen_sinpi_coefs(n=15):
-    """sinpi(x) = x * P(x^2) where P coefficients are (-1)^k * pi^(2k+1) / (2k+1)!
-    Actually: sinpi(x) = sin(pi*x), and we want c[k] for the Horner in x^2.
-    c[k] = (-1)^k * pi^(2k+1) / (2k+1)!  ... but sign convention may differ.
-    Let me compute: sin(pi*x) = sum_{k=0} (-1)^k (pi*x)^{2k+1} / (2k+1)!
-                               = x * sum_{k=0} (-1)^k pi^{2k+1} x^{2k} / (2k+1)!
-    So c[k] = (-1)^k * pi^(2k+1) / (2k+1)!
-    """
-    coefs = []
-    for k in range(n):
-        coefs.append((-1)**k * pi**(2*k + 1) / factorial(2*k + 1))
-    return coefs
+    """c[k] = (-1)^k * pi^(2k+1) / (2k+1)!"""
+    return [(-1)**k * pi**(2*k + 1) / factorial(2*k + 1) for k in range(n)]
 
 
 def gen_cospi_coefs(n=15):
-    """cospi(x) = cos(pi*x) = sum_{k=0} (-1)^k (pi*x)^{2k} / (2k)!
-    c[k] = (-1)^k * pi^{2k} / (2k)!
-    """
-    coefs = []
-    for k in range(n):
-        coefs.append((-1)**k * pi**(2*k) / factorial(2*k))
-    return coefs
+    """c[k] = (-1)^k * pi^(2k) / (2k)!"""
+    return [(-1)**k * pi**(2*k) / factorial(2*k) for k in range(n)]
 
 
 def gen_sinh_taylor(n=9):
     """sinh(x)/x Taylor: c[k] = 1 / (2k+1)!"""
-    coefs = []
-    for k in range(n):
-        coefs.append(mpf(1) / factorial(2*k + 1))
-    return coefs
+    return [mpf(1) / factorial(2*k + 1) for k in range(n)]
 
 
 def gen_asinh_taylor(n=15):
-    """asinh(x)/x Taylor: c[k] = (-1)^k (2k)! / (4^k (k!)^2 (2k+1))"""
-    coefs = []
-    for k in range(n):
-        coefs.append((-1)**k * factorial(2*k) / (4**k * factorial(k)**2 * (2*k + 1)))
-    return coefs
+    """c[k] = (-1)^k (2k)! / (4^k (k!)^2 (2k+1))"""
+    return [(-1)**k * factorial(2*k) / (4**k * factorial(k)**2 * (2*k + 1))
+            for k in range(n)]
 
 
 def gen_atanh_taylor(n=15):
-    """atanh(x)/x Taylor: c[k] = 1/(2k+1)"""
-    coefs = []
-    for k in range(n):
-        coefs.append(mpf(1) / (2*k + 1))
-    return coefs
+    """c[k] = 1/(2k+1)"""
+    return [mpf(1) / (2*k + 1) for k in range(n)]
 
 
 def gen_stirling_coefs(n=13):
-    """Stirling series: c[k] = B_{2k} / (2k * (2k-1)), k=1..n"""
-    coefs = []
-    for k in range(1, n + 1):
-        b2k = bernoulli(2*k)
-        coefs.append(b2k / (2*k * (2*k - 1)))
-    return coefs
+    """c[k] = B_{2k} / (2k*(2k-1)), k=1..n"""
+    return [bernoulli(2*k) / (2*k * (2*k - 1)) for k in range(1, n + 1)]
 
 
-def gen_pi_half_cw():
-    """pi/2 as 3-part Cody-Waite constant (~161 bits).
-    Split pi/2 into three parts where each successive part captures
-    the rounding error of the sum of previous parts.
+# =============================================================================
+# Collect all constants
+# =============================================================================
+
+def collect_all():
+    """Return ordered list of constant groups. Each is a dict with:
+       kind: 'scalar' | 'array' | 'cw3' | 'dp_array'
+       name, comment, and value data.
     """
+    groups = []
+
+    def scalar(name, value, comment):
+        hi, lo = to_dd(value)
+        groups.append(dict(kind='scalar', name=name, hi=hi, lo=lo,
+                           exact=value, comment=comment))
+
+    def array(name, values, comment):
+        pairs = [to_dd(v) for v in values]
+        groups.append(dict(kind='array', name=name,
+                           hi=[p[0] for p in pairs],
+                           lo=[p[1] for p in pairs],
+                           exact=values, comment=comment))
+
+    def dp_array(name, values, comment):
+        """Single-precision (dp only) array — no lo part."""
+        groups.append(dict(kind='dp_array', name=name,
+                           values=values, comment=comment))
+
+    # --- Conversion constants ---
+    scalar('log2_e',       1 / log(mpf(2)),        'log2(e)')
+    scalar('ln_2',         log(mpf(2)),            'ln(2)')
+    scalar('log10_2',      log10(mpf(2)),          'log10(2)')
+    scalar('inv_pi',       1 / pi,                 '1/pi')
+    scalar('pi_dd',        pi,                     'pi')
+    scalar('half_log_2pi', log(2 * pi) / 2,        '(1/2)*log(2*pi)')
+    scalar('log_pi',       log(pi),                'log(pi)')
+
+    # pi/2 Cody-Waite 3-part
     p = pi / 2
     cw1 = float(p)
     cw2 = float(p - mpf(cw1))
     cw3 = float(p - mpf(cw1) - mpf(cw2))
-    return cw1, cw2, cw3
+    groups.append(dict(kind='cw3', name='pi_half_cw',
+                       v1=cw1, v2=cw2, v3=cw3,
+                       comment='pi/2 Cody-Waite 3-part (~161 bits)'))
 
+    # erf efx
+    scalar('erf_efx', 2 / sqrt(pi) - 1, '2/sqrt(pi) - 1')
+    # erf(1) — this is intentionally just a hi part (rounded to exact dp)
+    groups.append(dict(kind='scalar', name='erf_const',
+                       hi=0.845062911510467529296875, lo=0.0,
+                       exact=mpf('0.845062911510467529296875'),
+                       comment='erf(1) rounded to exact dp'))
 
-def gen_erf_efx():
-    """2/sqrt(pi) - 1"""
-    return 2 / sqrt(pi) - 1
+    # --- exp2 ---
+    array('exp2_coefs', gen_exp2_coefs(14), 'exp2: c[k] = (ln2)^k / k!')
+    groups.append(dict(kind='exp2_clamp', comment='exp2 input clamps'))
 
-
-# =============================================================================
-# Output formatting
-# =============================================================================
-
-def fmt_cpp_array(name, values_hi, values_lo, comment=""):
-    """Format as C++ inline constexpr double arrays."""
-    n = len(values_hi)
-    lines = []
-    if comment:
-        lines.append(f"// ---- {comment}")
-    lines.append(f"inline constexpr double {name}_hi[{n}] = {{")
-    for i in range(0, n, 2):
-        if i + 1 < n:
-            lines.append(f"    {values_hi[i]:23.17e}, {values_hi[i+1]:23.17e},")
-        else:
-            lines.append(f"    {values_hi[i]:23.17e}}};")
-    if n % 2 == 0:
-        lines[-1] = lines[-1].rstrip(',') + '};'
-    lines.append(f"inline constexpr double {name}_lo[{n}] = {{")
-    for i in range(0, n, 2):
-        if i + 1 < n:
-            lines.append(f"    {values_lo[i]:23.17e}, {values_lo[i+1]:23.17e},")
-        else:
-            lines.append(f"    {values_lo[i]:23.17e}}};")
-    if n % 2 == 0:
-        lines[-1] = lines[-1].rstrip(',') + '};'
-    return '\n'.join(lines)
-
-
-def fmt_cpp_scalar(name, hi, lo, comment=""):
-    """Format as C++ inline constexpr double pair."""
-    lines = []
-    if comment:
-        lines.append(f"// {comment}")
-    lines.append(f"inline constexpr double {name}_hi = {hi:23.17e};")
-    lines.append(f"inline constexpr double {name}_lo = {lo:23.17e};")
-    return '\n'.join(lines)
-
-
-def fmt_fortran_array(name, values_hi, values_lo, comment=""):
-    """Format as Fortran real(dp), parameter arrays."""
-    n = len(values_hi)
-    lines = []
-    if comment:
-        lines.append(f"    ! {comment}")
-    lines.append(f"    real(dp), parameter :: {name}_hi({n}) = [ &")
-    for i in range(0, n, 2):
-        if i + 1 < n:
-            end = " ]" if i + 2 >= n else ", &"
-            lines.append(f"        {values_hi[i]:23.17e}_dp, {values_hi[i+1]:23.17e}_dp{end}")
-        else:
-            lines.append(f"        {values_hi[i]:23.17e}_dp ]")
-    lines.append(f"    real(dp), parameter :: {name}_lo({n}) = [ &")
-    for i in range(0, n, 2):
-        if i + 1 < n:
-            end = " ]" if i + 2 >= n else ", &"
-            lines.append(f"        {values_lo[i]:23.17e}_dp, {values_lo[i+1]:23.17e}_dp{end}")
-        else:
-            lines.append(f"        {values_lo[i]:23.17e}_dp ]")
-    return '\n'.join(lines)
-
-
-# =============================================================================
-# Main: generate and verify all constants
-# =============================================================================
-
-def generate_all():
-    """Generate all constants, verify precision, and print."""
-    all_groups = []
-    max_err = 0.0
-
-    def add_array(name, exact_values, comment=""):
-        nonlocal max_err
-        hi_vals, lo_vals = [], []
-        for i, v in enumerate(exact_values):
-            hi, lo = to_dd(v)
-            err = verify_dd(v, hi, lo, f"{name}[{i}]")
-            max_err = max(max_err, err)
-            hi_vals.append(hi)
-            lo_vals.append(lo)
-        all_groups.append(('array', name, hi_vals, lo_vals, comment))
-        return hi_vals, lo_vals
-
-    def add_scalar(name, exact_value, comment=""):
-        nonlocal max_err
-        hi, lo = to_dd(exact_value)
-        err = verify_dd(exact_value, hi, lo, name)
-        max_err = max(max_err, err)
-        all_groups.append(('scalar', name, hi, lo, comment))
-        return hi, lo
-
-    # --- Conversion constants ---
-    consts = gen_conversion_constants()
-    add_scalar('log2_e', consts['log2_e'], 'log2(e)')
-    add_scalar('ln_2', consts['ln_2'], 'ln(2)')
-    add_scalar('log10_2', consts['log10_2'], 'log10(2)')
-    add_scalar('inv_pi', consts['inv_pi'], '1/pi')
-    add_scalar('pi_dd', consts['pi_dd'], 'pi')
-    add_scalar('half_log_2pi', consts['half_log_2pi'], '(1/2)*log(2*pi)')
-    add_scalar('log_pi', consts['log_pi'], 'log(pi)')
-
-    # pi/2 Cody-Waite (3-part, not DD)
-    cw1, cw2, cw3 = gen_pi_half_cw()
-    all_groups.append(('cw3', 'pi_half_cw', cw1, cw2, cw3, 'pi/2 Cody-Waite 3-part'))
-
-    # erf efx = 2/sqrt(pi) - 1
-    add_scalar('erf_efx', gen_erf_efx(), '2/sqrt(pi) - 1')
-
-    # --- Polynomial arrays ---
-    add_array('exp2_coefs', gen_exp2_coefs(14),
-              'exp2 polynomial: c[k] = (ln2)^k / k!')
-    add_array('log2_narrow', gen_log2_narrow_coefs(7),
-              'log2 narrow polynomial: c[k] = 2/((2k+1)*ln2)')
-    add_array('log2_wide', gen_log2_wide_coefs(9),
-              'log2 wide polynomial: c[k] = 2/((2k+1)*ln2)')
+    # --- log2 ---
+    array('log2_narrow', gen_log2_coefs(7),
+          'log2 narrow: c[k] = 2/((2k+1)*ln2)')
+    array('log2_wide', gen_log2_coefs(9),
+          'log2 wide: c[k] = 2/((2k+1)*ln2)')
 
     # log2 table
     centers, values = gen_log2_table(32)
-    add_array('log2_values', values, 'log2 lookup table values')
-    all_groups.append(('centers', 'log2_centers', centers, 'log2 lookup table centers'))
+    dp_array('log2_centers', centers, 'log2 lookup centers')
+    array('log2_values', values, 'log2 lookup values')
 
-    add_array('sin_taylor', gen_sin_taylor(13),
-              'sin(x)/x Taylor: c[k] = (-1)^k / (2k+1)!')
-    add_array('cos_taylor', gen_cos_taylor(13),
-              'cos(x) Taylor: c[k] = (-1)^k / (2k)!')
-    add_array('sinpi_coefs', gen_sinpi_coefs(15),
-              'sinpi polynomial: c[k] = (-1)^k * pi^(2k+1) / (2k+1)!')
-    add_array('cospi_coefs', gen_cospi_coefs(15),
-              'cospi polynomial: c[k] = (-1)^k * pi^(2k) / (2k)!')
-    add_array('sinh_taylor', gen_sinh_taylor(9),
-              'sinh(x)/x Taylor: c[k] = 1 / (2k+1)!')
-    add_array('asinh_taylor', gen_asinh_taylor(15),
-              'asinh(x)/x Taylor: c[k] = (-1)^k (2k)! / (4^k (k!)^2 (2k+1))')
-    add_array('atanh_taylor', gen_atanh_taylor(15),
-              'atanh(x)/x Taylor: c[k] = 1/(2k+1)')
-    add_array('stirling_coefs', gen_stirling_coefs(13),
-              'Stirling series: c[k] = B_{2k} / (2k*(2k-1)), k=1..13')
+    # --- trig ---
+    array('sin_taylor', gen_sin_taylor(13),
+          'sin(x)/x Taylor: c[k] = (-1)^k / (2k+1)!')
+    array('cos_taylor', gen_cos_taylor(13),
+          'cos(x) Taylor: c[k] = (-1)^k / (2k)!')
+    array('sinpi_coefs', gen_sinpi_coefs(15),
+          'sinpi: c[k] = (-1)^k * pi^(2k+1) / (2k+1)!')
+    array('cospi_coefs', gen_cospi_coefs(15),
+          'cospi: c[k] = (-1)^k * pi^(2k) / (2k)!')
 
-    # --- Print ---
-    print("// =============================================================================")
-    print("// AUTO-GENERATED by scripts/gen_constants.py — do not edit manually")
-    print("// =============================================================================")
-    print()
+    # --- hyperbolic ---
+    array('sinh_taylor', gen_sinh_taylor(9),
+          'sinh(x)/x Taylor: c[k] = 1/(2k+1)!')
+    array('asinh_taylor', gen_asinh_taylor(15),
+          'asinh(x)/x Taylor: c[k] = (-1)^k(2k)!/(4^k(k!)^2(2k+1))')
+    array('atanh_taylor', gen_atanh_taylor(15),
+          'atanh(x)/x Taylor: c[k] = 1/(2k+1)')
 
-    for group in all_groups:
-        if group[0] == 'array':
-            _, name, hi, lo, comment = group
-            print(fmt_cpp_array(name, hi, lo, comment))
-            print()
-        elif group[0] == 'scalar':
-            _, name, hi, lo, comment = group
-            print(fmt_cpp_scalar(name, hi, lo, comment))
-            print()
-        elif group[0] == 'cw3':
-            _, name, cw1, cw2, cw3, comment = group
-            print(f"// {comment}")
-            print(f"inline constexpr double {name}1 = {cw1:.17e};")
-            print(f"inline constexpr double {name}2 = {cw2:.17e};")
-            print(f"inline constexpr double {name}3 = {cw3:.17e};")
-            print()
-        elif group[0] == 'centers':
-            _, name, vals, comment = group
-            print(f"// {comment}")
-            print(f"inline constexpr double {name}[{len(vals)}] = {{")
-            for i in range(0, len(vals), 4):
-                chunk = vals[i:i+4]
-                line = ', '.join(f'{v}' for v in chunk)
-                end = '};' if i + 4 >= len(vals) else ','
-                print(f"    {line}{end}")
-            print()
+    # --- gamma ---
+    array('stirling_coefs', gen_stirling_coefs(13),
+          'Stirling: c[k] = B_{2k}/(2k*(2k-1)), k=1..13')
 
-    print()
-    print("// =============================================================================")
-    print("// Fortran versions")
-    print("// =============================================================================")
-    print()
+    return groups
 
-    for group in all_groups:
-        if group[0] == 'array':
-            _, name, hi, lo, comment = group
-            print(fmt_fortran_array(name, hi, lo, comment))
-            print()
-        elif group[0] == 'scalar':
-            _, name, hi, lo, comment = group
-            print(f"    ! {comment}")
-            print(f"    real(dp), parameter :: {name}_hi = {hi:23.17e}_dp")
-            print(f"    real(dp), parameter :: {name}_lo = {lo:23.17e}_dp")
-            print()
 
-    print(f"\n// Maximum DD conversion error across all constants: {max_err:.3e}",
+# =============================================================================
+# Output: C++
+# =============================================================================
+
+def write_cpp(groups, f):
+    f.write("// ==========================================================================\n")
+    f.write("// AUTO-GENERATED by scripts/gen_constants.py — do not edit manually.\n")
+    f.write("// Regenerate: python3 scripts/gen_constants.py\n")
+    f.write("// ==========================================================================\n")
+    f.write("#pragma once\n\n")
+
+    for g in groups:
+        kind = g['kind']
+        if kind == 'scalar':
+            f.write(f"// {g['comment']}\n")
+            f.write(f"inline constexpr double {g['name']}_hi = {g['hi']:23.17e};\n")
+            f.write(f"inline constexpr double {g['name']}_lo = {g['lo']:23.17e};\n\n")
+
+        elif kind == 'cw3':
+            f.write(f"// {g['comment']}\n")
+            f.write(f"inline constexpr double {g['name']}1 = {g['v1']:23.17e};\n")
+            f.write(f"inline constexpr double {g['name']}2 = {g['v2']:23.17e};\n")
+            f.write(f"inline constexpr double {g['name']}3 = {g['v3']:23.17e};\n\n")
+
+        elif kind == 'exp2_clamp':
+            f.write("// exp2 input clamps\n")
+            f.write("inline constexpr double exp2_min_d = -1022.0;\n")
+            f.write("inline constexpr double exp2_max_d = 1023.9999999999998;\n\n")
+
+        elif kind == 'array':
+            n = len(g['hi'])
+            f.write(f"// {g['comment']}\n")
+            f.write(f"inline constexpr double {g['name']}_hi[{n}] = {{\n")
+            for i in range(0, n, 2):
+                vals = [f"{g['hi'][j]:23.17e}" for j in range(i, min(i+2, n))]
+                end = "};" if i + 2 >= n else ","
+                f.write(f"    {', '.join(vals)}{end}\n")
+            f.write(f"inline constexpr double {g['name']}_lo[{n}] = {{\n")
+            for i in range(0, n, 2):
+                vals = [f"{g['lo'][j]:23.17e}" for j in range(i, min(i+2, n))]
+                end = "};" if i + 2 >= n else ","
+                f.write(f"    {', '.join(vals)}{end}\n")
+            f.write("\n")
+
+        elif kind == 'dp_array':
+            vals = g['values']
+            n = len(vals)
+            f.write(f"// {g['comment']}\n")
+            f.write(f"inline constexpr double {g['name']}[{n}] = {{\n")
+            for i in range(0, n, 4):
+                chunk = [str(v) for v in vals[i:i+4]]
+                end = "};" if i + 4 >= n else ","
+                f.write(f"    {', '.join(chunk)}{end}\n")
+            f.write("\n")
+
+
+# =============================================================================
+# Output: Fortran
+# =============================================================================
+
+def write_f90(groups, f):
+    f.write("    ! ======================================================================\n")
+    f.write("    ! AUTO-GENERATED by scripts/gen_constants.py — do not edit manually.\n")
+    f.write("    ! Regenerate: python3 scripts/gen_constants.py\n")
+    f.write("    ! ======================================================================\n\n")
+
+    for g in groups:
+        kind = g['kind']
+        if kind == 'scalar':
+            f.write(f"    ! {g['comment']}\n")
+            f.write(f"    real(dp), parameter :: {g['name']}_hi = {g['hi']:23.17e}_dp\n")
+            f.write(f"    real(dp), parameter :: {g['name']}_lo = {g['lo']:23.17e}_dp\n\n")
+
+        elif kind == 'cw3':
+            f.write(f"    ! {g['comment']}\n")
+            f.write(f"    real(dp), parameter :: {g['name']}1 = {g['v1']:23.17e}_dp\n")
+            f.write(f"    real(dp), parameter :: {g['name']}2 = {g['v2']:23.17e}_dp\n")
+            f.write(f"    real(dp), parameter :: {g['name']}3 = {g['v3']:23.17e}_dp\n\n")
+
+        elif kind == 'exp2_clamp':
+            f.write("    ! exp2 input clamps\n")
+            f.write("    real(dp), parameter :: exp2_min = -1022.0_dp\n")
+            f.write("    real(dp), parameter :: exp2_max = 1023.9999999999998_dp\n\n")
+
+        elif kind == 'array':
+            n = len(g['hi'])
+            f.write(f"    ! {g['comment']}\n")
+            f.write(f"    real(dp), parameter :: {g['name']}_hi({n}) = [ &\n")
+            for i in range(0, n, 2):
+                vals = [f"{g['hi'][j]:23.17e}_dp" for j in range(i, min(i+2, n))]
+                end = " ]" if i + 2 >= n else ", &"
+                f.write(f"        {', '.join(vals)}{end}\n")
+            f.write(f"    real(dp), parameter :: {g['name']}_lo({n}) = [ &\n")
+            for i in range(0, n, 2):
+                vals = [f"{g['lo'][j]:23.17e}_dp" for j in range(i, min(i+2, n))]
+                end = " ]" if i + 2 >= n else ", &"
+                f.write(f"        {', '.join(vals)}{end}\n")
+            f.write("\n")
+
+        elif kind == 'dp_array':
+            vals = g['values']
+            n = len(vals)
+            f.write(f"    ! {g['comment']}\n")
+            f.write(f"    real(dp), parameter :: {g['name']}({n}) = [ &\n")
+            for i in range(0, n, 4):
+                chunk = [f"{v}_dp" for v in vals[i:i+4]]
+                end = " ]" if i + 4 >= n else ", &"
+                f.write(f"        {', '.join(chunk)}{end}\n")
+            f.write("\n")
+
+
+# =============================================================================
+# Verification
+# =============================================================================
+
+def verify_all(groups):
+    max_err = 0.0
+    n_checked = 0
+    for g in groups:
+        if g['kind'] == 'scalar':
+            err = verify_dd(g['exact'], g['hi'], g['lo'], g['name'])
+            max_err = max(max_err, err)
+            n_checked += 1
+        elif g['kind'] == 'array':
+            for i in range(len(g['hi'])):
+                err = verify_dd(g['exact'][i], g['hi'][i], g['lo'][i],
+                                f"{g['name']}[{i}]")
+                max_err = max(max_err, err)
+                n_checked += 1
+    return max_err, n_checked
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def main():
+    check_only = '--check' in sys.argv
+
+    groups = collect_all()
+    max_err, n_checked = verify_all(groups)
+
+    print(f"Verified {n_checked} constants, max DD conversion error: {max_err:.3e}",
           file=sys.stderr)
+
     if max_err > 1e-31:
-        print("// WARNING: some constants exceed 1e-31 relative error", file=sys.stderr)
-    else:
-        print("// All constants verified to < 1e-31 relative error", file=sys.stderr)
+        print("WARNING: some constants exceed 1e-31 relative error", file=sys.stderr)
 
+    if check_only:
+        print("Check-only mode, not writing files.", file=sys.stderr)
+        return
 
-def check_against_source():
-    """Compare generated values against what's currently in the source files."""
-    print("Checking generated constants against source files...")
-    print()
+    with open(CPP_OUT, 'w') as f:
+        write_cpp(groups, f)
+    print(f"Wrote {CPP_OUT}", file=sys.stderr)
 
-    # Check exp2 as representative example
-    exp2 = gen_exp2_coefs(14)
-    print("exp2_coefs (c[k] = (ln2)^k / k!):")
-    for k, v in enumerate(exp2):
-        hi, lo = to_dd(v)
-        err = verify_dd(v, hi, lo, f"c[{k}]")
-        print(f"  c[{k:2d}]: hi={hi:23.17e}  lo={lo:23.17e}  err={err:.3e}")
-
-    print()
-    # Check log2 narrow
-    log2n = gen_log2_narrow_coefs(7)
-    print("log2_narrow (c[k] = 2/((2k+1)*ln2)):")
-    for k, v in enumerate(log2n):
-        hi, lo = to_dd(v)
-        err = verify_dd(v, hi, lo, f"c[{k}]")
-        print(f"  c[{k}]: hi={hi:23.17e}  lo={lo:23.17e}  err={err:.3e}")
-
-    print()
-    log2w = gen_log2_wide_coefs(9)
-    print("log2_wide (c[k] = 2/((2k+1)*ln2)):")
-    for k, v in enumerate(log2w):
-        hi, lo = to_dd(v)
-        err = verify_dd(v, hi, lo, f"c[{k}]")
-        print(f"  c[{k}]: hi={hi:23.17e}  lo={lo:23.17e}  err={err:.3e}")
-
-    print()
-    stirling = gen_stirling_coefs(13)
-    print("stirling_coefs (c[k] = B_{2k}/(2k*(2k-1))):")
-    for k, v in enumerate(stirling):
-        hi, lo = to_dd(v)
-        err = verify_dd(v, hi, lo, f"c[{k}]")
-        print(f"  c[{k:2d}]: hi={hi:23.17e}  lo={lo:23.17e}  err={err:.3e}")
+    with open(F90_OUT, 'w') as f:
+        write_f90(groups, f)
+    print(f"Wrote {F90_OUT}", file=sys.stderr)
 
 
 if __name__ == '__main__':
-    if '--check' in sys.argv:
-        check_against_source()
-    else:
-        generate_all()
+    main()
