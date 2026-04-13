@@ -130,16 +130,16 @@ static void update_stat(char const *op, double rel) {
 // =============================================================================
 
 // Full-DD tier: kernels that should deliver ~106 bits of precision end-to-end.
-// exp/log/hyperbolic/pow now hit full DD via the native polynomial kernels.
-// sin/cos/tan still lag (inv_pi reduction is only DD-accurate) and fmod is
-// excluded because its large-quotient subtraction loses precision through
-// catastrophic cancellation once |x/y| grows.
+// exp/log/trig/hyperbolic/pow hit full DD via the native polynomial kernels.
+// fmod is excluded because its large-quotient subtraction loses precision
+// through catastrophic cancellation once |x/y| grows.
 static bool is_full_dd(char const *op) {
   static char const *kList[] = {
       "add", "sub", "mul", "div", "sqrt", "abs", "neg",
       "add_fd", "mul_df", "fmin", "fmax", "copysign", "fdim",
       "hypot", "trunc", "round", "scalbn", "min3", "max3",
       "exp", "log", "log10", "pow", "pow_md", "pow_dm", "pow_int",
+      "sin", "cos", "tan",
       "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
       "asin", "acos", "atan", "atan2",
       nullptr};

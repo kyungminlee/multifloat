@@ -205,15 +205,16 @@ mirror the Fortran split (`fortran_fuzz` / `fortran_bench`):
   between the qp and mf legs.
 
 **Precision parity with Fortran.** The C++ header now hits full DD on
-exp / log / pow and the whole hyperbolic family. Earlier measurements
-showed ~1e-15 to ~1e-19 for these ops; the root cause was stale
-`exp2_coefs` / `log2_narrow` / `log2_wide` polynomial tables in
-`src/multifloats.hh` that had drifted from the Fortran reference, plus
-a cancelling `1 − 2/(e^(2|x|)+1)` tanh formulation. Fixing both recovers
-full DD uniformly. Remaining gaps: tgamma / lgamma still run off the
-libm seed, and sin/cos/tan still reduce argument via a DD `inv_pi`
-rather than Cody–Waite, so both trig and erf/erfc are tracked
-separately.
+exp / log / pow, sin / cos / tan, and the whole hyperbolic family.
+Earlier measurements showed ~1e-15 to ~1e-24 for these ops. Three
+independent fixes landed together: stale `exp2_coefs` / `log2_narrow` /
+`log2_wide` polynomial tables were resynced with the Fortran reference;
+`dd_tanh_full` was rewritten to use the cancellation-free
+`(1 − em2)/(1 + em2)` form; and `dd_sin_full` / `dd_cos_full` /
+`dd_tan_full` now run 3-part Cody–Waite π/2 reduction with direct
+sin/cos Taylor kernels rather than `sinpi(x · inv_pi)`. Remaining gaps
+are tgamma / lgamma (libm seed, no DD correction) and erf / erfc
+(tracked separately).
 
 M1 Max err values marked with a dagger (†) were measured with an older
 bench.cc that had per-op input drift and should be remeasured on M1 Max
@@ -274,9 +275,9 @@ fuzz/bench split.
 
 | op | approach | M1 Max err | Raptor Lake err | M1 Max × | Skylake × | Raptor Lake × |
 |---|---|---|---|---|---|---|
-| sin | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split | 2.2e-25 | 2.2e-25 | **2.9×** | **2.3×** | **3.0×** |
-| cos | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split | 1.1e-24 | 1.1e-24 | **3.0×** | **2.3×** | **2.8×** |
-| tan | original: sin/cos Taylor kernels + DD divide | 1.1e-24 | 1.1e-24 | 1.3× | 1.1× | 1.4× |
+| sin | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split | 2.2e-25 | 3.6e-32 | **2.9×** | **2.3×** | **2.7×** |
+| cos | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split | 1.1e-24 | 4.4e-32 | **3.0×** | **2.3×** | **2.4×** |
+| tan | original: sin/cos Taylor kernels + DD divide | 1.1e-24 | 5.2e-32 | 1.3× | 1.1× | 1.1× |
 | asin | original: Newton step on sin, seeded by libm asin(hi) | 4.1e-32 | 4.1e-32 | 1.8× | 1.7× | **2.0×** |
 | acos | original: Newton step on cos, seeded by libm acos(hi) | 2.4e-32 | 2.4e-32 | 1.9× | 1.7× | **2.3×** |
 | atan | original: Newton on tan + atan(x)=π/2·sign(x)−atan(1/x) for \|x\|>1 | 5.5e-32 | 5.3e-32 | 1.0× | 1.0× | 1.2× |
@@ -288,7 +289,7 @@ fuzz/bench split.
 |---|---|---|---|---|---|---|
 | sinh | original: Taylor series (\|x\|<0.1) or (exp−exp⁻¹)/2 | 9.4e-19 | 5.4e-30 | **2.2×** | 1.9× | **2.3×** |
 | cosh | original: (exp+exp⁻¹)/2 | 8.8e-19 | 5.4e-30 | 1.7× | 1.5× | **2.1×** |
-| tanh | original: sinh/cosh (\|x\|<0.5) or (1−e⁻²ˣ)/(1+e⁻²ˣ) | 7.2e-18 | 4.7e-31 | **2.4×** | **2.2×** | 1.8× |
+| tanh | original: sinh/cosh (\|x\|<0.5) or (1−e⁻²ˣ)/(1+e⁻²ˣ) | 7.2e-18 | 4.7e-31 | **2.4×** | **2.2×** | **2.7×** |
 | asinh | original: Taylor series (\|x\|<0.01) or log(x+√(x²+1)) with Newton | 2.8e-16 | 1.0e-30 | **6.1×** | **6.0×** | **8.0×** |
 | acosh | original: log(x+√(x²−1)) with Newton correction | 5.6e-20 | 3.2e-32 | **5.7×** | **5.5×** | **7.5×** |
 | atanh | original: Taylor series (\|x\|<0.01) or ½·log((1+x)/(1−x)) | 5.0e-16 | 1.5e-30 | **4.5×** | **4.4×** | **5.6×** |

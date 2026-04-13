@@ -674,6 +674,47 @@ inline constexpr double log2_values_lo[32] = {
 inline constexpr double inv_pi_hi = 0.3183098861837907;
 inline constexpr double inv_pi_lo = -1.9678676675182486e-17;
 
+// ---- pi/2 as a 3-part constant for Cody-Waite range reduction (~161 bits) -
+inline constexpr double pi_half_cw1 = 1.5707963267948966;
+inline constexpr double pi_half_cw2 = 6.123233995736766e-17;
+inline constexpr double pi_half_cw3 = -1.4973849048591698e-33;
+
+// ---- sin(x)/x Taylor coefficients (13 terms, c[k] = (-1)^k / (2k+1)!) -----
+inline constexpr double sin_taylor_hi[13] = {
+    1.0,                       -0.16666666666666666,
+    0.008333333333333333,      -0.0001984126984126984,
+    2.7557319223985893e-06,    -2.505210838544172e-08,
+    1.6059043836821613e-10,    -7.647163731819816e-13,
+    2.8114572543455206e-15,    -8.22063524662433e-18,
+    1.9572941063391263e-20,    -3.868170170630684e-23,
+    6.446950284384474e-26};
+inline constexpr double sin_taylor_lo[13] = {
+    0.0,                       -9.25185853854297e-18,
+    1.1564823173178714e-19,    -1.7209558293420705e-22,
+    -1.858393274046472e-22,    1.448814070935912e-24,
+    1.2585294588752098e-26,    -7.03872877733453e-30,
+    1.6508842730861433e-31,    -2.2141894119604265e-34,
+    -1.3643503830087908e-36,   8.843177655482344e-40,
+    -1.9330404233703465e-42};
+
+// ---- cos(x) Taylor coefficients (13 terms, c[k] = (-1)^k / (2k)!) ---------
+inline constexpr double cos_taylor_hi[13] = {
+    1.0,                       -0.5,
+    0.041666666666666664,      -0.001388888888888889,
+    2.48015873015873e-05,      -2.755731922398589e-07,
+    2.08767569878681e-09,      -1.1470745597729725e-11,
+    4.779477332387385e-14,     -1.5619206968586225e-16,
+    4.110317623312165e-19,     -8.896791392450574e-22,
+    1.6117375710961184e-24};
+inline constexpr double cos_taylor_lo[13] = {
+    0.0,                       0.0,
+    2.3129646346357427e-18,    5.300543954373577e-20,
+    2.1511947866775882e-23,    -2.3767714622250297e-23,
+    -1.20734505911326e-25,     -2.0655512752830745e-28,
+    4.399205485834081e-31,     -1.1910679660273754e-32,
+    1.4412973378659527e-36,    7.911402614872376e-38,
+    -3.6846573564509766e-41};
+
 // ---- sinpi polynomial (15 coefs, c[n] = -(-1)^n * pi^(2n-1)/(2n-1)!) ------
 inline constexpr double sinpi_coefs_hi[15] = {
     3.141592653589793,        -5.16771278004997,
@@ -1003,15 +1044,120 @@ inline MFD2 dd_cospi_full(MFD2 const &x) {
   }
 }
 
+// ---- sin / cos / tan -------------------------------------------------------
+// Cody-Waite range reduction: n = nearest(x·2/π), r = x − n·(π/2) using a
+// 3-part π/2 constant (~161 bits). Each n·pi_half_cwK is an exact DD
+// product via FMA, then subtracted from r as full DD. This preserves ~106
+// bits through the reduction — the critical difference from the previous
+// sinpi(x·inv_pi) path, which lost the integer part of x/π for large |x|.
+inline void dd_reduce_pi_half(MFD2 const &x, MFD2 &r, int &n_mod4) {
+  double n_float = std::nearbyint(x._limbs[0] * 0.6366197723675814);
+  r = x;
+  MFD2 npi;
+  npi._limbs[0] = n_float * pi_half_cw1;
+  npi._limbs[1] = std::fma(n_float, pi_half_cw1, -npi._limbs[0]);
+  r = r - npi;
+  npi._limbs[0] = n_float * pi_half_cw2;
+  npi._limbs[1] = std::fma(n_float, pi_half_cw2, -npi._limbs[0]);
+  r = r - npi;
+  npi._limbs[0] = n_float * pi_half_cw3;
+  npi._limbs[1] = 0.0;
+  r = r - npi;
+  long long nn = static_cast<long long>(std::fabs(n_float)) & 3LL;
+  if (n_float < 0.0) nn = (4 - nn) & 3;
+  n_mod4 = static_cast<int>(nn);
+}
+
+// Taylor kernels for |x| ≤ π/8. sin evaluates as x·poly(x²) so the low
+// limb of x is preserved losslessly.
+inline MFD2 dd_sin_kernel(MFD2 const &x) {
+  MFD2 x2 = x * x;
+  return dd_horner(x2, sin_taylor_hi, sin_taylor_lo, 13) * x;
+}
+inline MFD2 dd_cos_kernel(MFD2 const &x) {
+  MFD2 x2 = x * x;
+  return dd_horner(x2, cos_taylor_hi, cos_taylor_lo, 13);
+}
+
+// Evaluate sin(r)/cos(r) for |r| ≤ π/4. For |r| > π/8 shift by π/4 and use
+// the angle-addition identity — this halves the polynomial argument range
+// (x² ≤ 0.154 vs 0.616) so the 13-term Taylor hits full DD at the boundary.
+inline MFD2 dd_sin_eval(MFD2 const &r) {
+  constexpr double pi8 = 0.392699081698724;
+  if (std::fabs(r._limbs[0]) <= pi8) return dd_sin_kernel(r);
+  MFD2 pi4_dd = dd_pair(0.7853981633974483, 3.061616997868383e-17);
+  MFD2 inv_sqrt2 = dd_pair(0.7071067811865476, -4.833646656726457e-17);
+  bool pos = r._limbs[0] > 0.0;
+  MFD2 rp = pos ? (r - pi4_dd) : (r + pi4_dd);
+  MFD2 sk = dd_sin_kernel(rp);
+  MFD2 ck = dd_cos_kernel(rp);
+  return pos ? (sk + ck) * inv_sqrt2 : (sk - ck) * inv_sqrt2;
+}
+
+inline MFD2 dd_cos_eval(MFD2 const &r) {
+  constexpr double pi8 = 0.392699081698724;
+  if (std::fabs(r._limbs[0]) <= pi8) return dd_cos_kernel(r);
+  MFD2 pi4_dd = dd_pair(0.7853981633974483, 3.061616997868383e-17);
+  MFD2 inv_sqrt2 = dd_pair(0.7071067811865476, -4.833646656726457e-17);
+  bool pos = r._limbs[0] > 0.0;
+  MFD2 rp = pos ? (r - pi4_dd) : (r + pi4_dd);
+  MFD2 sk = dd_sin_kernel(rp);
+  MFD2 ck = dd_cos_kernel(rp);
+  return pos ? (ck - sk) * inv_sqrt2 : (ck + sk) * inv_sqrt2;
+}
+
 inline MFD2 dd_sin_full(MFD2 const &x) {
-  return dd_sinpi_full(x * dd_pair(inv_pi_hi, inv_pi_lo));
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 r;
+  int q;
+  dd_reduce_pi_half(x, r, q);
+  switch (q) {
+  case 0: return dd_sin_eval(r);
+  case 1: return dd_cos_eval(r);
+  case 2: return -dd_sin_eval(r);
+  default: return -dd_cos_eval(r);
+  }
 }
+
 inline MFD2 dd_cos_full(MFD2 const &x) {
-  return dd_cospi_full(x * dd_pair(inv_pi_hi, inv_pi_lo));
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 r;
+  int q;
+  dd_reduce_pi_half(x, r, q);
+  switch (q) {
+  case 0: return dd_cos_eval(r);
+  case 1: return -dd_sin_eval(r);
+  case 2: return -dd_cos_eval(r);
+  default: return dd_sin_eval(r);
+  }
 }
+
 inline MFD2 dd_tan_full(MFD2 const &x) {
-  MFD2 y = x * dd_pair(inv_pi_hi, inv_pi_lo);
-  return dd_sinpi_full(y) / dd_cospi_full(y);
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 r;
+  int q;
+  dd_reduce_pi_half(x, r, q);
+  switch (q) {
+  case 0: return dd_sin_eval(r) / dd_cos_eval(r);
+  case 1: return -dd_cos_eval(r) / dd_sin_eval(r);
+  case 2: return dd_sin_eval(r) / dd_cos_eval(r);
+  default: return -dd_cos_eval(r) / dd_sin_eval(r);
+  }
 }
 
 // ---- sinh / cosh / tanh ----------------------------------------------------
