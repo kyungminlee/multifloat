@@ -615,18 +615,32 @@ module multifloats
     real(dp), parameter :: log10_2_lo = ${hex_dp('-0x1.9DC1DA994FD21p-0059')}$_dp
 
     ! log2 polynomial — narrow kernel (used with table lookup).
-    ! 7 coefficients; lo limb zero for entries 5..7.
+    ! c[k] = 2/((2k+1)*ln2), all 7 entries with full DD lo limbs.
     real(dp), parameter :: log2_narrow_hi(7) = [ &
-        ${hex_array(['+0x1.71547652B82FEp+0001', '+0x1.EC709DC3A03FDp-0001', '+0x1.2776C50EF9BFEp-0001', '+0x1.A61762A7ADED9p-0002', '+0x1.484B13D7C0C4Dp-0002', '+0x1.0C9A845FCF968p-0002', '+0x1.C6A48D52BA6C7p-0003'])}$ ]
+        2.88539008177792677e+00_dp, 9.61796693925975554e-01_dp, &
+        5.77078016355585310e-01_dp, 4.12198583111132388e-01_dp, &
+        3.20598897975325203e-01_dp, 2.62308189252538793e-01_dp, &
+        2.21953083213686675e-01_dp ]
     real(dp), parameter :: log2_narrow_lo(7) = [ &
-        ${hex_array_padded(['+0x1.777D0FFDA0D24p-0055', '+0x1.D27F055486A5Ap-0055', '+0x1.E4B2AE3DCBD87p-0055', '+0x1.90D60ECEBE07Fp-0057'], 7)}$ ]
+        4.07105474818620662e-17_dp, 5.05776166481259068e-17_dp, &
+        5.25510304813786749e-17_dp, 1.37459569590171276e-17_dp, &
+       -1.64451152771064035e-18_dp, 8.74742715573817183e-18_dp, &
+        3.13158057552785095e-18_dp ]
 
     ! log2 polynomial — wide kernel (direct path for x near 1).
-    ! 9 coefficients; lo limb zero for entries 7..9.
+    ! c[k] = 2/((2k+1)*ln2), all 9 entries with full DD lo limbs.
     real(dp), parameter :: log2_wide_hi(9) = [ &
-        ${hex_array(['+0x1.71547652B82FEp+0001', '+0x1.EC709DC3A03FDp-0001', '+0x1.2776C50EF9BFEp-0001', '+0x1.A61762A7ADED9p-0002', '+0x1.484B13D7C02AFp-0002', '+0x1.0C9A84993C2EEp-0002', '+0x1.C68F56BF8A8ACp-0003', '+0x1.89F2F69137330p-0003', '+0x1.5D108CD7E21EBp-0003'])}$ ]
+        2.88539008177792677e+00_dp, 9.61796693925975554e-01_dp, &
+        5.77078016355585310e-01_dp, 4.12198583111132388e-01_dp, &
+        3.20598897975325203e-01_dp, 2.62308189252538793e-01_dp, &
+        2.21953083213686675e-01_dp, 1.92359338785195122e-01_dp, &
+        1.69728828339878041e-01_dp ]
     real(dp), parameter :: log2_wide_lo(9) = [ &
-        ${hex_array_padded(['+0x1.777D0FFDA0D24p-0055', '+0x1.D27F055480ABFp-0055', '+0x1.E4B2A0D0290E2p-0055', '+0x1.F8B804528988Ap-0057', '-0x1.9282874496178p-0057', '+0x1.0E0FE2C5542A6p-0056'], 9)}$ ]
+        4.07105474818620662e-17_dp, 5.05776166481259068e-17_dp, &
+        5.25510304813786749e-17_dp, 1.37459569590171276e-17_dp, &
+       -1.64451152771064035e-18_dp, 8.74742715573817183e-18_dp, &
+        3.13158057552785095e-18_dp,-9.86706916626384246e-19_dp, &
+        7.29278084286757614e-18_dp ]
 
     ! 32-entry log2 lookup table. centers[i] = 1 + (2i-1)/64 (exact in dp,
     ! lo limb is zero). values[i] = log2(centers[i]) precomputed in
