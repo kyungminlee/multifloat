@@ -162,11 +162,15 @@ static double max_rel_err() {
 #define BENCH(NAME, REPS, QEXPR, MEXPR, QFB, MFB)                              \
   do {                                                                         \
     long n_ops = (long)N * (long)(REPS);                                       \
-    /* Precision: measure on fresh inputs before timing corrupts them */        \
+    /* Precision: reinitialise from the fixed seed so each op is measured on   \
+       clean inputs independent of prior benchmarks' drain feedback. */        \
+    init_data();                                                               \
     for (int i = 0; i < N; ++i) { qres[i] = (QEXPR); }                        \
     for (int i = 0; i < N; ++i) { fres[i] = (MEXPR); }                        \
     double _mrel = max_rel_err();                                              \
-    /* Timing */                                                               \
+    /* Timing: reinit before each leg so qp and mf start from identical        \
+       clean inputs — drain feedback only affects within-leg reps. */          \
+    init_data();                                                               \
     auto _t0 = clk::now();                                                     \
     for (int r = 0; r < (REPS); ++r) {                                         \
       for (int i = 0; i < N; ++i) {                                            \
@@ -175,6 +179,7 @@ static double max_rel_err() {
       qfeed(QFB);                                                              \
     }                                                                          \
     double tq = seconds_since(_t0);                                            \
+    init_data();                                                               \
     _t0 = clk::now();                                                          \
     for (int r = 0; r < (REPS); ++r) {                                         \
       for (int i = 0; i < N; ++i) {                                            \
