@@ -1,7 +1,7 @@
-// Benchmark every kernel category exposed by src/multifloats.hh,
-// comparing the multifloats MultiFloat<double, 2> implementation against
-// __float128 / libquadmath as a reference for the same operation. The
-// multifloats version is expected to be substantially faster.
+// Timing-only benchmark for every kernel category exposed by
+// src/multifloats.hh, comparing MultiFloat<double, 2> against
+// __float128 / libquadmath as a reference for the same operation.
+// Precision measurement lives in test/fuzz.cc — this file is timing-only.
 //
 // Anti–dead-code-elimination strategy:
 //   - Each rep computes the entire output array.
@@ -128,31 +128,10 @@ static double seconds_since(clk::time_point t0) {
   return std::chrono::duration<double>(clk::now() - t0).count();
 }
 
-static void report(const char *name, long n_ops, double tq, double tf,
-                   double max_rel) {
+static void report(const char *name, long n_ops, double tq, double tf) {
   double speed = (tf > 0.0) ? (tq / tf) : 0.0;
-  if (max_rel == 0.0) {
-    std::printf(" %-22s %12ld %10.4f %10.4f %9.2fx    exact\n", name, n_ops,
-                tq, tf, speed);
-  } else {
-    std::printf(" %-22s %12ld %10.4f %10.4f %9.2fx    %.1e\n", name, n_ops,
-                tq, tf, speed, max_rel);
-  }
-}
-
-// Compute max relative error between qres and fres arrays.
-static double max_rel_err() {
-  double worst = 0.0;
-  for (int i = 0; i < N; ++i) {
-    q_t got = (q_t)fres[i]._limbs[0] + (q_t)fres[i]._limbs[1];
-    q_t expected = qres[i];
-    if (expected == (q_t)0) continue;
-    q_t rel = (got - expected) / expected;
-    if (rel < 0) rel = -rel;
-    double d = (double)rel;
-    if (d > worst) worst = d;
-  }
-  return worst;
+  std::printf(" %-22s %12ld %10.4f %10.4f %9.2fx\n", name, n_ops, tq, tf,
+              speed);
 }
 
 // =============================================================================
@@ -168,14 +147,8 @@ static double max_rel_err() {
 #define BENCH(NAME, REPS, QEXPR, MEXPR, QFB, MFB)                              \
   do {                                                                         \
     long n_ops = (long)N * (long)(REPS);                                       \
-    /* Precision: reinitialise from the fixed seed so each op is measured on   \
-       clean inputs independent of prior benchmarks' drain feedback. */        \
-    init_data();                                                               \
-    for (int i = 0; i < N; ++i) { qres[i] = (QEXPR); }                        \
-    for (int i = 0; i < N; ++i) { fres[i] = (MEXPR); }                        \
-    double _mrel = max_rel_err();                                              \
-    /* Timing: reinit before each leg so qp and mf start from identical        \
-       clean inputs — drain feedback only affects within-leg reps. */          \
+    /* Reinit before each leg so qp and mf start from identical clean          \
+       inputs — drain feedback only affects within-leg reps. */                \
     init_data();                                                               \
     auto _t0 = clk::now();                                                     \
     for (int r = 0; r < (REPS); ++r) {                                         \
@@ -194,7 +167,7 @@ static double max_rel_err() {
       ffeed(MFB);                                                              \
     }                                                                          \
     double tf = seconds_since(_t0);                                            \
-    report(NAME, n_ops, tq, tf, _mrel);                                        \
+    report(NAME, n_ops, tq, tf);                                               \
   } while (0)
 
 // =============================================================================
@@ -291,8 +264,8 @@ int main() {
   std::printf("================================================================\n");
   std::printf(" multifloats C++ benchmark — N=%d elements per rep, batched\n", N);
   std::printf("================================================================\n\n");
-  std::printf(" %-22s %12s %10s %10s %10s %10s\n", "op", "n_ops", "qp [s]",
-              "mf [s]", "speedup", "max_rel");
+  std::printf(" %-22s %12s %10s %10s %10s\n", "op", "n_ops", "qp [s]",
+              "mf [s]", "speedup");
   std::printf(" ----------------------------------------------------------------\n");
 
   bench_arith();
