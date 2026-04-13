@@ -69,7 +69,7 @@ static MF2 to_mf2(q_t v) {
 }
 
 static void init_data() {
-  std::mt19937_64 rng(0xC0FFEEULL);
+  std::mt19937_64 rng(42ULL);
   std::uniform_real_distribution<double> u(0.0, 1.0);
   for (int i = 0; i < N; ++i) {
     double r1 = u(rng), r2 = u(rng), r3 = u(rng);
@@ -122,10 +122,31 @@ static double seconds_since(clk::time_point t0) {
   return std::chrono::duration<double>(clk::now() - t0).count();
 }
 
-static void report(const char *name, long n_ops, double tq, double tf) {
+static void report(const char *name, long n_ops, double tq, double tf,
+                   double max_rel) {
   double speed = (tf > 0.0) ? (tq / tf) : 0.0;
-  std::printf(" %-22s %12ld %10.4f %10.4f %9.2fx\n", name, n_ops, tq, tf,
-              speed);
+  if (max_rel == 0.0) {
+    std::printf(" %-22s %12ld %10.4f %10.4f %9.2fx    exact\n", name, n_ops,
+                tq, tf, speed);
+  } else {
+    std::printf(" %-22s %12ld %10.4f %10.4f %9.2fx    %.1e\n", name, n_ops,
+                tq, tf, speed, max_rel);
+  }
+}
+
+// Compute max relative error between qres and fres arrays.
+static double max_rel_err() {
+  double worst = 0.0;
+  for (int i = 0; i < N; ++i) {
+    q_t got = (q_t)fres[i]._limbs[0] + (q_t)fres[i]._limbs[1];
+    q_t expected = qres[i];
+    if (expected == (q_t)0) continue;
+    q_t rel = (got - expected) / expected;
+    if (rel < 0) rel = -rel;
+    double d = (double)rel;
+    if (d > worst) worst = d;
+  }
+  return worst;
 }
 
 // =============================================================================
@@ -141,6 +162,11 @@ static void report(const char *name, long n_ops, double tq, double tf) {
 #define BENCH(NAME, REPS, QEXPR, MEXPR, QFB, MFB)                              \
   do {                                                                         \
     long n_ops = (long)N * (long)(REPS);                                       \
+    /* Precision: measure on fresh inputs before timing corrupts them */        \
+    for (int i = 0; i < N; ++i) { qres[i] = (QEXPR); }                        \
+    for (int i = 0; i < N; ++i) { fres[i] = (MEXPR); }                        \
+    double _mrel = max_rel_err();                                              \
+    /* Timing */                                                               \
     auto _t0 = clk::now();                                                     \
     for (int r = 0; r < (REPS); ++r) {                                         \
       for (int i = 0; i < N; ++i) {                                            \
@@ -157,7 +183,7 @@ static void report(const char *name, long n_ops, double tq, double tf) {
       ffeed(MFB);                                                              \
     }                                                                          \
     double tf = seconds_since(_t0);                                            \
-    report(NAME, n_ops, tq, tf);                                               \
+    report(NAME, n_ops, tq, tf, _mrel);                                        \
   } while (0)
 
 // =============================================================================
@@ -254,8 +280,8 @@ int main() {
   std::printf("================================================================\n");
   std::printf(" multifloats C++ benchmark — N=%d elements per rep, batched\n", N);
   std::printf("================================================================\n\n");
-  std::printf(" %-22s %12s %10s %10s %10s\n", "op", "n_ops", "qp [s]", "mf [s]",
-              "speedup");
+  std::printf(" %-22s %12s %10s %10s %10s %10s\n", "op", "n_ops", "qp [s]",
+              "mf [s]", "speedup", "max_rel");
   std::printf(" ----------------------------------------------------------------\n");
 
   bench_arith();

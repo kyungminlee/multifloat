@@ -169,7 +169,7 @@ static void print_stats(char const *name, Stats const &s) {
 
 int main(int argc, char **argv) {
   long iterations = 100000;
-  uint64_t seed = 0xC0FFEEULL;
+  uint64_t seed = 42ULL;
   if (argc > 1) {
     iterations = std::atol(argv[1]);
   }
