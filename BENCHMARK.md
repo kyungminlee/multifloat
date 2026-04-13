@@ -350,18 +350,15 @@ fuzz/bench split.
   would be required (at significant implementation cost and reduced speedup).
 
 - **tgamma / lgamma** in C++ use a native double-double Stirling kernel
-  (`detail::gamma_v2`). `lgamma` evaluates the 13-term Stirling
-  asymptotic `(x−½)·log x − x + ½·log(2π) + Σ B_{2k}/(2k(2k−1)·x^{2k−1})`
-  in DD, after shifting the argument up to x ≥ 25 via a product
-  accumulator so a single `dd_log(prod)` absorbs the recurrence. Small
-  arguments (x < 0.5) use the reflection `log Γ(x) = log π − log|sin(πx)|
-  − log Γ(1−x)`. `tgamma` derives from `exp(lgamma)`, with
-  `π/(sin(πx)·Γ(1−x))` for negative x. Both deliver full DD precision
-  (max\_rel ~7e-30 / ~3e-28 on the 1M fuzz). The earlier route-1
-  `detail::gamma_v1` (libm seed + DD digamma correction) is kept in the
-  header so route 1 vs route 2 can still be compared head-to-head — it
-  runs somewhat faster but is capped at ~1e-16 by `std::tgamma(hi)`'s
-  own dp accuracy.
+  (`detail::dd_lgamma_full` / `detail::dd_tgamma_full`). `lgamma`
+  evaluates the 13-term Stirling asymptotic `(x−½)·log x − x +
+  ½·log(2π) + Σ B_{2k}/(2k(2k−1)·x^{2k−1})` in DD, after shifting the
+  argument up to x ≥ 25 via a product accumulator so a single
+  `dd_log(prod)` absorbs the recurrence. Small arguments (x < 0.5) use
+  the reflection `log Γ(x) = log π − log|sin(πx)| − log Γ(1−x)`.
+  `tgamma` derives from `exp(lgamma)`, with `π/(sin(πx)·Γ(1−x))` for
+  negative x. Both deliver full DD precision (max\_rel ~7e-30 / ~3e-28
+  on the 1M fuzz).
 
 - **Newton-corrected** functions (asin, acos, atan, atan2) compute a libm
   seed `f(hi)` and refine with one Newton step using the DD-accurate inverse

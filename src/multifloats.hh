@@ -1430,99 +1430,9 @@ inline MFD2 dd_erfc_full(MFD2 const &x) {
 }
 
 // ---- tgamma / lgamma -------------------------------------------------------
-// Route 1: derivative correction via a double-precision digamma.
-//     tgamma(hi + lo) ≈ tgamma(hi) · (1 + ψ(hi) · lo)
-//     lgamma(hi + lo) ≈ lgamma(hi) + ψ(hi) · lo
-// The leading-limb libm call + DD correction gives ~106 bits of precision
-// as long as ψ(hi) is good to ~1e-16 — which it is for the Stirling
-// asymptotic + recurrence + reflection pipeline below.
-//
-// This lives in its own sub-namespace so a future full-DD Stirling
-// implementation (route 2) can coexist and be benchmarked head-to-head.
-namespace gamma_v1 {
-
-// Double-precision digamma ψ(x) = d/dx ln Γ(x).
-//   - x ≥ 12: 6-term Stirling asymptotic in 1/x² reaches ~6e-17 relative.
-//   - 0 < x < 12: upward recurrence ψ(x) = ψ(x+1) − 1/x shifts into the
-//     asymptotic range, accumulating the correction sum as we go.
-//   - x < 0.5: reflection ψ(x) = ψ(1−x) − π·cot(π·x).
-// Near non-positive integer poles, tgamma/lgamma themselves return
-// inf/NaN, so the correction never runs there; we still guard `sin(πx)=0`.
-inline double digamma_dp(double x) {
-  if (x < 0.5) {
-    double s = std::sin(M_PI * x);
-    if (s == 0.0) return std::numeric_limits<double>::quiet_NaN();
-    double c = std::cos(M_PI * x);
-    return digamma_dp(1.0 - x) - M_PI * (c / s);
-  }
-  double result = 0.0;
-  while (x < 12.0) {
-    result -= 1.0 / x;
-    x += 1.0;
-  }
-  double inv_x = 1.0 / x;
-  double inv_x2 = inv_x * inv_x;
-  // Coefficients B_{2k}/(2k) for k=1..6:
-  //   1/12, -1/120, 1/252, -1/240, 1/132, -691/32760
-  // Series: -Σ c_k · inv_x^{2k}  (Horner on inv_x2, outermost negation
-  //         folds into the final subtraction).
-  constexpr double c1 =  1.0 / 12.0;
-  constexpr double c2 = -1.0 / 120.0;
-  constexpr double c3 =  1.0 / 252.0;
-  constexpr double c4 = -1.0 / 240.0;
-  constexpr double c5 =  1.0 / 132.0;
-  constexpr double c6 = -691.0 / 32760.0;
-  double asymp = inv_x2 *
-                 (c1 + inv_x2 *
-                           (c2 + inv_x2 *
-                                     (c3 + inv_x2 *
-                                               (c4 + inv_x2 *
-                                                         (c5 + inv_x2 * c6)))));
-  result += std::log(x) - 0.5 * inv_x - asymp;
-  return result;
-}
-
-inline MFD2 tgamma_full(MFD2 const &x) {
-  double fhi = std::tgamma(x._limbs[0]);
-  if (!std::isfinite(fhi) || !std::isfinite(x._limbs[0])) {
-    MFD2 r;
-    r._limbs[0] = fhi;
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  double psi = digamma_dp(x._limbs[0]);
-  double corr = fhi * psi * x._limbs[1];
-  double s = fhi + corr;
-  double bp = s - fhi;
-  MFD2 r;
-  r._limbs[0] = s;
-  r._limbs[1] = corr - bp;
-  return r;
-}
-
-inline MFD2 lgamma_full(MFD2 const &x) {
-  double fhi = std::lgamma(x._limbs[0]);
-  if (!std::isfinite(fhi) || !std::isfinite(x._limbs[0])) {
-    MFD2 r;
-    r._limbs[0] = fhi;
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  double psi = digamma_dp(x._limbs[0]);
-  double corr = psi * x._limbs[1];
-  double s = fhi + corr;
-  double bp = s - fhi;
-  MFD2 r;
-  r._limbs[0] = s;
-  r._limbs[1] = corr - bp;
-  return r;
-}
-
-} // namespace gamma_v1
-
-// Route 2: native DD Stirling asymptotic, reflection, and shift recurrence.
-// No dependency on libm's tgamma/lgamma — every operation is carried out
-// in double-double arithmetic so the full 106-bit result is achievable.
+// Native DD Stirling asymptotic with shift recurrence and reflection.
+// Every operation runs in double-double so no libm floor is imposed on
+// the result:
 //
 //   log Γ(x) = (x - 1/2)·log(x) - x + (1/2)·log(2π)
 //              + Σ_{k=1..13} c_k / x^{2k-1}
@@ -1532,7 +1442,6 @@ inline MFD2 lgamma_full(MFD2 const &x) {
 // Small-x paths: reflection for x < 1/2, upward shift recurrence
 // otherwise, accumulating the product x·(x+1)·...·(x+N-1) in DD and
 // subtracting a single dd_log_full(prod).
-namespace gamma_v2 {
 
 // Stirling coefficients c_k = B_{2k}/(2k(2k-1)) for k = 1..13, stored as
 // DD hi+lo pairs. Generated from rationals via __float128.
@@ -1563,7 +1472,7 @@ inline constexpr double pi_dd_lo        = 1.2246467991473532e-16;
 
 // Evaluate the Stirling series for log Γ(x). Assumes x is well into the
 // asymptotic range (x ≥ ~20) — callers shift first.
-inline MFD2 lgamma_stirling(MFD2 const &x) {
+inline MFD2 dd_lgamma_stirling(MFD2 const &x) {
   MFD2 inv_x = MFD2(1.0) / x;
   MFD2 inv_x2 = inv_x * inv_x;
   MFD2 poly =
@@ -1575,9 +1484,9 @@ inline MFD2 lgamma_stirling(MFD2 const &x) {
          dd_pair(half_log_2pi_hi, half_log_2pi_lo) + corr;
 }
 
-// Helper: shift x up to y = x+N so y._limbs[0] ≥ 25, then evaluate
+// Shift x up to y = x+N so y._limbs[0] ≥ 25, then evaluate
 // Stirling(y) − log(x·(x+1)·...·(x+N−1)). Assumes x._limbs[0] ≥ 0.5.
-inline MFD2 lgamma_stirling_shift(MFD2 const &x) {
+inline MFD2 dd_lgamma_stirling_shift(MFD2 const &x) {
   constexpr double shift_target = 25.0;
   MFD2 y = x;
   MFD2 prod = MFD2(1.0);
@@ -1587,12 +1496,12 @@ inline MFD2 lgamma_stirling_shift(MFD2 const &x) {
     y = y + MFD2(1.0);
     any = true;
   }
-  MFD2 stir = lgamma_stirling(y);
+  MFD2 stir = dd_lgamma_stirling(y);
   if (!any) return stir;
   return stir - dd_log_full(prod);
 }
 
-inline MFD2 lgamma_full(MFD2 const &x) {
+inline MFD2 dd_lgamma_full(MFD2 const &x) {
   MFD2 r;
   double hi = x._limbs[0];
   if (std::isnan(hi)) {
@@ -1619,13 +1528,13 @@ inline MFD2 lgamma_full(MFD2 const &x) {
       s._limbs[1] = -s._limbs[1];
     }
     MFD2 one_minus_x = MFD2(1.0) - x;
-    MFD2 lgam_1mx = lgamma_stirling_shift(one_minus_x);
+    MFD2 lgam_1mx = dd_lgamma_stirling_shift(one_minus_x);
     return dd_pair(log_pi_hi, log_pi_lo) - dd_log_full(s) - lgam_1mx;
   }
-  return lgamma_stirling_shift(x);
+  return dd_lgamma_stirling_shift(x);
 }
 
-inline MFD2 tgamma_full(MFD2 const &x) {
+inline MFD2 dd_tgamma_full(MFD2 const &x) {
   MFD2 r;
   double hi = x._limbs[0];
   if (std::isnan(hi)) {
@@ -1662,14 +1571,13 @@ inline MFD2 tgamma_full(MFD2 const &x) {
     MFD2 one_minus_x = MFD2(1.0) - x;
     // Use lgamma path for the (1-x) branch so we avoid a double tgamma
     // recursion and keep the large factor inside a log.
-    MFD2 lg = lgamma_stirling_shift(one_minus_x);
+    MFD2 lg = dd_lgamma_stirling_shift(one_minus_x);
     // Γ(1-x) = exp(lg). sin(πx) may be negative → track sign separately.
     bool neg = s._limbs[0] < 0.0;
     if (neg) {
       s._limbs[0] = -s._limbs[0];
       s._limbs[1] = -s._limbs[1];
     }
-    // π / (s · exp(lg)) = exp(log(π) − log(s) − lg); use the first form.
     MFD2 pi_dd = dd_pair(pi_dd_hi, pi_dd_lo);
     MFD2 g1mx = dd_exp_full(lg);
     MFD2 out = pi_dd / (s * g1mx);
@@ -1679,11 +1587,8 @@ inline MFD2 tgamma_full(MFD2 const &x) {
     }
     return out;
   }
-  // Moderate positive: Γ(x) = exp(Stirling(y)) / prod, where y = x + N.
-  return dd_exp_full(lgamma_stirling_shift(x));
+  return dd_exp_full(dd_lgamma_stirling_shift(x));
 }
-
-} // namespace gamma_v2
 
 } // namespace detail
 
@@ -2104,7 +2009,7 @@ MultiFloat<T, N> erfc(MultiFloat<T, N> const &x) {
 template <typename T, std::size_t N>
 MultiFloat<T, N> tgamma(MultiFloat<T, N> const &x) {
   if constexpr (N == 2 && std::is_same_v<T, double>) {
-    return detail::gamma_v2::tgamma_full(x);
+    return detail::dd_tgamma_full(x);
   } else {
     MultiFloat<T, N> r;
     r._limbs[0] = std::tgamma(x._limbs[0]);
@@ -2115,7 +2020,7 @@ MultiFloat<T, N> tgamma(MultiFloat<T, N> const &x) {
 template <typename T, std::size_t N>
 MultiFloat<T, N> lgamma(MultiFloat<T, N> const &x) {
   if constexpr (N == 2 && std::is_same_v<T, double>) {
-    return detail::gamma_v2::lgamma_full(x);
+    return detail::dd_lgamma_full(x);
   } else {
     MultiFloat<T, N> r;
     r._limbs[0] = std::lgamma(x._limbs[0]);
