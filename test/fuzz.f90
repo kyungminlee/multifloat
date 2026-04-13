@@ -32,6 +32,16 @@ program multifloat_fuzz
   inf_d = ieee_value(inf_d, ieee_positive_inf)
   nan_d = ieee_value(nan_d, ieee_quiet_nan)
 
+  ! Fixed seed for reproducible results across machines.
+  block
+    integer :: seed_size
+    integer, allocatable :: seed(:)
+    call random_seed(size=seed_size)
+    allocate(seed(seed_size))
+    seed = 42
+    call random_seed(put=seed)
+  end block
+
   print *, "Starting fuzz tests with", num_iterations, "iterations..."
 
   do i = 1, num_iterations
