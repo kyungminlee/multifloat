@@ -3,12 +3,21 @@ project(multifloatsf LANGUAGES Fortran)
 include(GNUInstallDirs)
 include(FortranCompiler)
 
-# Detect REAL(16) support: gfortran has it, flang on ARM64 does not.
+# Detect usable REAL(16) support. The test exercises real(v, 16),
+# ieee_is_finite, and arithmetic — flang may accept the type declaration
+# but reject intrinsics operating on it.
 include(CheckFortranSourceCompiles)
-check_fortran_source_compiles(
-    "program t; real(16) :: x; x = 1.0; end program"
-    FORTRAN_HAS_REAL16
-    SRC_EXT f90)
+check_fortran_source_compiles("
+    program t
+      use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+      real(16) :: x, y
+      real(8)  :: d
+      x = 1.0
+      y = x + x
+      d = real(x, 8)
+      if (ieee_is_finite(x)) y = y * x
+    end program
+" FORTRAN_HAS_REAL16 SRC_EXT f90)
 set(_FYPP_DEFS "")
 if(NOT FORTRAN_HAS_REAL16)
     list(APPEND _FYPP_DEFS "-DMULTIFLOATS_NO_QUAD")
