@@ -2,9 +2,8 @@ cmake_minimum_required(VERSION 3.27)
 
 # Pin the compilers to Homebrew GCC 15 by default. Apple Clang lacks
 # __float128 / libquadmath, and Apple-shipped LLVM Flang on Apple Silicon
-# does not enable REAL(KIND=16). Both are required by the multifloats
-# Fortran module and the C++ test harness. Override on the command line
-# with -DCMAKE_CXX_COMPILER=... / -DCMAKE_Fortran_COMPILER=...
+# does not enable REAL(KIND=16). Override on the command line with
+# -DCMAKE_CXX_COMPILER=... / -DCMAKE_Fortran_COMPILER=...
 if(NOT DEFINED CMAKE_CXX_COMPILER)
     find_program(_MF_GXX NAMES g++-15 g++-14 g++-13
         PATHS /opt/homebrew/bin /usr/local/bin /usr/bin)
@@ -20,89 +19,26 @@ if(NOT DEFINED CMAKE_Fortran_COMPILER)
     endif()
 endif()
 
-project(multifloat LANGUAGES CXX Fortran)
+project(multifloats-dev LANGUAGES CXX Fortran)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 enable_testing()
 
-include_directories(src)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-include(FortranCompiler)
 find_program(FYPP_EXECUTABLE fypp REQUIRED)
 
-set(MULTIFLOATS_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
-set(MULTIFLOATS_GENERATED_SRC ${MULTIFLOATS_GENERATED_DIR}/multifloats.f90)
+# =============================================================================
+# Library subprojects
+# =============================================================================
+add_subdirectory(src)   # project(multifloats)  → libmultifloats.a
+add_subdirectory(fsrc)  # project(multifloatsf) → libmultifloatsf-<compiler>.a
 
-# Detect REAL(16) support: gfortran has it, flang on ARM64 does not.
-include(CheckFortranSourceCompiles)
-check_fortran_source_compiles(
-    "program t; real(16) :: x; x = 1.0; end program"
-    FORTRAN_HAS_REAL16
-    SRC_EXT f90)
-set(_FYPP_DEFS "")
-if(NOT FORTRAN_HAS_REAL16)
-    list(APPEND _FYPP_DEFS "-DMULTIFLOATS_NO_QUAD")
-endif()
+# =============================================================================
+# Tests and benchmarks (not installed)
+# =============================================================================
 
-add_custom_command(
-    OUTPUT ${MULTIFLOATS_GENERATED_SRC}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${MULTIFLOATS_GENERATED_DIR}
-    COMMAND ${FYPP_EXECUTABLE} ${_FYPP_DEFS} ${CMAKE_CURRENT_SOURCE_DIR}/fsrc/multifloats.fypp ${MULTIFLOATS_GENERATED_SRC}
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/fsrc/multifloats.fypp
-    VERBATIM)
-
-add_library(multifloatsf STATIC ${MULTIFLOATS_GENERATED_SRC})
-fortran_module_layout(multifloatsf)
-target_include_directories(multifloatsf PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src)
-# Fat LTO for GCC: embed both GIMPLE IR and native code so ar preserves
-# LTO in .a archives. Flang/LLVM uses -flto=full (thin LTO also works).
-if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "")
-    if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-        target_compile_options(multifloatsf PUBLIC -flto -ffat-lto-objects)
-        target_link_options(multifloatsf PUBLIC -flto)
-    elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "LLVMFlang")
-        target_compile_options(multifloatsf PUBLIC -flto)
-        target_link_options(multifloatsf PUBLIC -flto)
-    endif()
-endif()
-
-add_executable(fortran_precision ./test/precision.f90)
-target_link_libraries(fortran_precision PRIVATE multifloatsf)
-add_test(NAME fortran_precision COMMAND fortran_precision)
-
-add_library(blas-multifloat
-    ./blas/wgemm.f90
-    ./blas/wtrsm.f90)
-target_link_libraries(blas-multifloat PRIVATE multifloatsf)
-
-add_executable(fortran_fuzz ./test/fuzz.f90)
-target_link_libraries(fortran_fuzz PRIVATE multifloatsf)
-add_test(NAME fortran_fuzz COMMAND fortran_fuzz)
-
-add_executable(fortran_test ./test/test.f90)
-target_link_libraries(fortran_test PRIVATE multifloatsf)
-add_test(NAME fortran_test COMMAND fortran_test)
-
-add_executable(fortran_bench ./test/bench.f90)
-target_link_libraries(fortran_bench PRIVATE multifloatsf)
-
-# DD math kernel implementations (separated from the header-only template
-# library so that the large function bodies are compiled once).
-add_library(multifloats STATIC ./src/multifloats_math.cc)
-target_include_directories(multifloats PRIVATE src)
-target_compile_options(multifloats PRIVATE -O3)
-if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "")
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_compile_options(multifloats PRIVATE -flto -ffat-lto-objects)
-    else()
-        target_compile_options(multifloats PRIVATE -flto)
-    endif()
-endif()
-
-# C++ tests for src/multifloats.hh — use __float128 / libquadmath as a
-# high-precision reference (provided by GCC, not Apple Clang).
+# C++ tests — use __float128 / libquadmath as reference (GCC only).
 add_executable(cpp_test ./test/test.cc)
 target_compile_options(cpp_test PRIVATE -fext-numeric-literals)
 target_link_libraries(cpp_test PRIVATE multifloats quadmath)
@@ -117,37 +53,42 @@ add_executable(cpp_bench ./test/bench.cc)
 target_compile_options(cpp_bench PRIVATE -fext-numeric-literals)
 target_link_libraries(cpp_bench PRIVATE multifloats quadmath)
 
-# C-ABI wrapper library (compiled as C++ with full inlining, exposed as
-# extern "C"). Used by bench_c to compare gfortran's derived-type ABI
-# against the platform C calling convention for the same DD kernels.
-add_library(multifloat-c STATIC ./src/multifloats_c.cc)
-target_include_directories(multifloat-c PRIVATE src)
-target_compile_options(multifloat-c PRIVATE -O3)
-target_link_libraries(multifloat-c PRIVATE multifloats)
+# Fortran tests
+add_executable(fortran_precision ./test/precision.f90)
+target_link_libraries(fortran_precision PRIVATE multifloatsf)
+add_test(NAME fortran_precision COMMAND fortran_precision)
+
+add_executable(fortran_test ./test/test.f90)
+target_link_libraries(fortran_test PRIVATE multifloatsf)
+add_test(NAME fortran_test COMMAND fortran_test)
+
+add_executable(fortran_fuzz ./test/fuzz.f90)
+target_link_libraries(fortran_fuzz PRIVATE multifloatsf)
+add_test(NAME fortran_fuzz COMMAND fortran_fuzz)
+
+add_executable(fortran_bench ./test/bench.f90)
+target_link_libraries(fortran_bench PRIVATE multifloatsf)
+
+# BLAS extensions (not installed)
+add_library(blas-multifloat STATIC
+    ./blas/wgemm.f90
+    ./blas/wtrsm.f90)
+target_link_libraries(blas-multifloat PRIVATE multifloatsf)
+
+# C-ABI wrapper library — used by ABI benchmarks only, not installed.
+add_library(multifloats-c STATIC ./src/multifloats_c.cc)
+target_include_directories(multifloats-c PRIVATE src)
+target_compile_options(multifloats-c PRIVATE -O3)
+target_link_libraries(multifloats-c PRIVATE multifloats)
 
 add_executable(fortran_bench_c ./test/bench_c.f90)
-target_link_libraries(fortran_bench_c PRIVATE multifloatsf multifloat-c)
+target_link_libraries(fortran_bench_c PRIVATE multifloatsf multifloats-c)
 
 add_library(dd-bindc OBJECT ./test/dd_bindc.f90)
 target_compile_options(dd-bindc PRIVATE -O3)
 set_target_properties(dd-bindc PROPERTIES
-    Fortran_MODULE_DIRECTORY ${PROJECT_BINARY_DIR}/fmod/test)
-target_include_directories(dd-bindc PUBLIC ${PROJECT_BINARY_DIR}/fmod/test)
+    Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/fmod/test)
+target_include_directories(dd-bindc PUBLIC ${CMAKE_BINARY_DIR}/fmod/test)
 
 add_executable(fortran_bench_abi ./test/bench_abi.f90)
-target_link_libraries(fortran_bench_abi PRIVATE multifloatsf multifloat-c dd-bindc)
-
-# =============================================================================
-# Install rules
-# =============================================================================
-include(GNUInstallDirs)
-
-# C++ library + header
-install(TARGETS multifloats
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES src/multifloats.hh
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
-# Fortran library (compiler-tagged) + .mod files + Config.cmake
-fortran_install_library(multifloatsf)
-fortran_install_modules(multifloatsf)
+target_link_libraries(fortran_bench_abi PRIVATE multifloatsf multifloats-c dd-bindc)
