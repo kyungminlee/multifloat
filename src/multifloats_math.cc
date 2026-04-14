@@ -1,5 +1,6 @@
 #include "multifloats.hh"
 #include "dd_constants.hh"
+#include <cstdint>
 
 namespace multifloats {
 namespace detail {
