@@ -101,11 +101,21 @@
 
 module multifloats
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
-                                              ieee_fma, ieee_value, &
-                                              ieee_quiet_nan
+                                              ieee_value, ieee_quiet_nan
     use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64
+    use, intrinsic :: iso_c_binding, only: c_double
     implicit none
     private
+
+    ! Wrap C's fma() as a pure elemental function. ieee_fma from
+    ! ieee_arithmetic is impure in gfortran <= 12, so we bypass it.
+    interface
+        pure function c_fma(x, y, z) bind(c, name="fma")
+            import :: c_double
+            real(c_double), value, intent(in) :: x, y, z
+            real(c_double) :: c_fma
+        end function
+    end interface
 
 #:if defined('MULTIFLOATS_NO_QUAD')
 #:set HAS_QUAD = False
@@ -1861,11 +1871,11 @@ contains
             r = x
             ! Step 1: r -= n * pi_half_cw1 (exact DD product via FMA)
             npi%limbs(1) = n_float * pi_half_cw1
-            npi%limbs(2) = ieee_fma(n_float, pi_half_cw1, -npi%limbs(1))
+            npi%limbs(2) = c_fma(n_float, pi_half_cw1, -npi%limbs(1))
             r = r - npi
             ! Step 2: r -= n * pi_half_cw2
             npi%limbs(1) = n_float * pi_half_cw2
-            npi%limbs(2) = ieee_fma(n_float, pi_half_cw2, -npi%limbs(1))
+            npi%limbs(2) = c_fma(n_float, pi_half_cw2, -npi%limbs(1))
             r = r - npi
             ! Step 3: r -= n * pi_half_cw3 (single dp, error is ~1e-50)
             npi%limbs(1) = n_float * pi_half_cw3
@@ -2589,13 +2599,13 @@ contains
                 half_u = 0.5_dp * u
                 ! root = x * u  (DD * dp), inlined.
                 p00 = x0 * u
-                e00 = ieee_fma(x0, u, -p00) + x1 * u
+                e00 = c_fma(x0, u, -p00) + x1 * u
                 r0 = p00 + e00
                 bprime = r0 - p00
                 r1 = e00 - bprime
                 ! residual = root * root - x  (DD multiply, then DD subtract).
                 p00 = r0 * r0
-                e00 = ieee_fma(r0, r0, -p00) + 2.0_dp * (r0 * r1)
+                e00 = c_fma(r0, r0, -p00) + 2.0_dp * (r0 * r1)
                 ! root*root as DD: limbs (s_hi, s_lo)
                 s = p00 + e00
                 bprime = s - p00
@@ -2613,7 +2623,7 @@ contains
                 e00 = e - bprime    ! residual%limbs(2)
                 ! correction = residual * half_u  (DD * dp).
                 s = p00 * half_u
-                c = ieee_fma(p00, half_u, -s) + e00 * half_u
+                c = c_fma(p00, half_u, -s) + e00 * half_u
                 p00 = s + c
                 bprime = p00 - s
                 e00 = c - bprime
@@ -3805,7 +3815,7 @@ $:mf_minmax_body(func, n)
             ah = a(k)%limbs(1); al = a(k)%limbs(2)
             bh = b(k)%limbs(1); bl = b(k)%limbs(2)
             p = ah * bh
-            e = ieee_fma(ah, bh, -p)
+            e = c_fma(ah, bh, -p)
             cross = ah * bl + al * bh
             t = s_hi + p
             bp = t - s_hi; ap = t - bp
@@ -4087,7 +4097,7 @@ $:mf_minmax_body(func, n)
                     ah = a(i1,k)%limbs(1); al = a(i1,k)%limbs(2)
                     bh = b(k,i2)%limbs(1); bl = b(k,i2)%limbs(2)
                     p = ah * bh
-                    e = ieee_fma(ah, bh, -p)
+                    e = c_fma(ah, bh, -p)
                     cross = ah * bl + al * bh
                     t = s_hi + p
                     bp = t - s_hi; ap = t - bp
@@ -4121,7 +4131,7 @@ $:mf_minmax_body(func, n)
                 ah = a(i1,k)%limbs(1); al = a(i1,k)%limbs(2)
                 bh = b(k)%limbs(1);    bl = b(k)%limbs(2)
                 p = ah * bh
-                e = ieee_fma(ah, bh, -p)
+                e = c_fma(ah, bh, -p)
                 cross = ah * bl + al * bh
                 t = s_hi + p
                 bp = t - s_hi; ap = t - bp
@@ -4154,7 +4164,7 @@ $:mf_minmax_body(func, n)
                 ah = a(k)%limbs(1);    al = a(k)%limbs(2)
                 bh = b(k,i2)%limbs(1); bl = b(k,i2)%limbs(2)
                 p = ah * bh
-                e = ieee_fma(ah, bh, -p)
+                e = c_fma(ah, bh, -p)
                 cross = ah * bl + al * bh
                 t = s_hi + p
                 bp = t - s_hi; ap = t - bp
@@ -4369,7 +4379,7 @@ $:mf_minmax_body(func, n)
             res%limbs(2) = 0.0_dp
             return
         end if
-        e00 = ieee_fma(x0, y0, -p00)
+        e00 = c_fma(x0, y0, -p00)
         p01 = x0 * y1
         p10 = x1 * y0
         e00 = e00 + (p01 + p10)
@@ -4396,12 +4406,12 @@ $:mf_minmax_body(func, n)
         end if
         ux = 1.0_dp / y0
         p00 = x0 * ux
-        e00 = ieee_fma(x0, ux, -p00) + x1 * ux
+        e00 = c_fma(x0, ux, -p00) + x1 * ux
         q0 = p00 + e00
         bprime = q0 - p00
         q1_lo = e00 - bprime
         p00 = q0 * y0
-        e00 = ieee_fma(q0, y0, -p00) + q0 * y1 + q1_lo * y0
+        e00 = c_fma(q0, y0, -p00) + q0 * y1 + q1_lo * y0
         q_y0 = p00 + e00
         bprime = q_y0 - p00
         q_y1 = e00 - bprime
@@ -4423,7 +4433,7 @@ $:mf_minmax_body(func, n)
         r1 = e - bprime
         ! correction = residual * u  (u ≈ 1/y0, single dp value)
         p00 = r0 * ux
-        e00 = ieee_fma(r0, ux, -p00) + r1 * ux
+        e00 = c_fma(r0, ux, -p00) + r1 * ux
         ! res = q - correction
         s = q0 + (-p00)
         aprime = s - (-p00)
