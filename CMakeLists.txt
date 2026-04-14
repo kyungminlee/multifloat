@@ -129,8 +129,11 @@ install(TARGETS multifloats
 install(FILES src/multifloats.hh
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-# Fortran library + .mod file
+# Fortran library + .mod file (versioned by compiler ID + major version,
+# since .mod format is compiler-specific and version-specific).
 install(TARGETS multifloatsf
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+string(TOLOWER "${CMAKE_Fortran_COMPILER_ID}" _fc_id)
+set(_fc_mod_dir "${CMAKE_INSTALL_LIBDIR}/multifloats/${_fc_id}-${CMAKE_Fortran_COMPILER_VERSION}")
 install(FILES ${CMAKE_BINARY_DIR}/modules/multifloats.mod
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/multifloats)
+    DESTINATION ${_fc_mod_dir})
