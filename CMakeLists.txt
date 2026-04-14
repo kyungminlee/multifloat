@@ -27,6 +27,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 enable_testing()
 
 include_directories(src)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(FortranCompiler)
 find_program(FYPP_EXECUTABLE fypp REQUIRED)
 
 set(MULTIFLOATS_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -51,10 +53,8 @@ add_custom_command(
     VERBATIM)
 
 add_library(multifloatsf STATIC ${MULTIFLOATS_GENERATED_SRC})
-set_target_properties(multifloatsf PROPERTIES
-    Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/modules)
+fortran_module_layout(multifloatsf)
 target_include_directories(multifloatsf PUBLIC
-    ${CMAKE_BINARY_DIR}/modules
     ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # Fat LTO for GCC: embed both GIMPLE IR and native code so ar preserves
 # LTO in .a archives. Flang/LLVM uses -flto=full (thin LTO also works).
@@ -131,7 +131,8 @@ target_link_libraries(fortran_bench_c PRIVATE multifloatsf multifloat-c)
 add_library(dd-bindc OBJECT ./test/dd_bindc.f90)
 target_compile_options(dd-bindc PRIVATE -O3)
 set_target_properties(dd-bindc PROPERTIES
-    Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/modules/test)
+    Fortran_MODULE_DIRECTORY ${PROJECT_BINARY_DIR}/fmod/test)
+target_include_directories(dd-bindc PUBLIC ${PROJECT_BINARY_DIR}/fmod/test)
 
 add_executable(fortran_bench_abi ./test/bench_abi.f90)
 target_link_libraries(fortran_bench_abi PRIVATE multifloatsf multifloat-c dd-bindc)
@@ -147,11 +148,6 @@ install(TARGETS multifloats
 install(FILES src/multifloats.hh
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-# Fortran library + .mod file (versioned by compiler ID + major version,
-# since .mod format is compiler-specific and version-specific).
-install(TARGETS multifloatsf
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-string(TOLOWER "${CMAKE_Fortran_COMPILER_ID}" _fc_id)
-set(_fc_mod_dir "${CMAKE_INSTALL_LIBDIR}/multifloats/${_fc_id}-${CMAKE_Fortran_COMPILER_VERSION}")
-install(FILES ${CMAKE_BINARY_DIR}/modules/multifloats.mod
-    DESTINATION ${_fc_mod_dir})
+# Fortran library (compiler-tagged) + .mod files + Config.cmake
+fortran_install_library(multifloatsf)
+fortran_install_modules(multifloatsf)
