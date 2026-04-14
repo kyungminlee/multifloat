@@ -398,6 +398,7 @@ contains
           "mod", "modulo", "hypot", "pow_int", "pow", "pow_md", "pow_dm", &
           "exp", "log", "log10", "sinh", "cosh", &
           "erf", "erfc", "erfc_scaled", &
+          "gamma", "lgamma", &
           "asin", "acos", "acosh", "asinh", "atanh", "atan2", &
           "cx_log_re", "cx_log_im", "cx_sinh_re", "cx_sinh_im", &
           "cx_cosh_re", "cx_cosh_im", "cx_sqrt_re", "cx_sqrt_im", &
@@ -439,7 +440,6 @@ contains
     select case (op)
     case ("arr_prod", &
           "bj0", "bj1", "by0", "by1", "bjn", "byn", &
-          "gamma", "lgamma", &
           "cx_exp_re", "cx_exp_im", "cx_log_im", &
           "cx_sin_re", "cx_sin_im", "cx_cos_re", "cx_cos_im", &
           "cx_sinh_re", "cx_sinh_im", "cx_cosh_re", "cx_cosh_im", &

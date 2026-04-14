@@ -2185,6 +2185,123 @@ contains
         if (x%limbs(1) < 0.0_dp) res%limbs = -res%limbs
     end function
 
+    ! Stirling series for log Γ(x).  Assumes x ≥ ~20.
+    elemental function dd_lgamma_stirling(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, inv_x, inv_x2, poly, corr, logx, xm_half, hlp
+        inv_x  = MF_ONE / x
+        inv_x2 = inv_x * inv_x
+        poly   = dd_horner(inv_x2, stirling_coefs_hi, stirling_coefs_lo)
+        corr   = poly * inv_x
+        logx   = dd_log_full(x)
+        xm_half%limbs = [x%limbs(1) - 0.5_dp, x%limbs(2)]
+        ! Adjust for the subtraction rounding
+        xm_half%limbs(2) = xm_half%limbs(2) + ((x%limbs(1) - xm_half%limbs(1)) - 0.5_dp)
+        hlp%limbs = [half_log_2pi_hi, half_log_2pi_lo]
+        res = xm_half * logx - x + hlp + corr
+    end function
+
+    ! Shift x up so that x ≥ 25, then apply Stirling.
+    ! lgamma(x) = stirling(x+N) - log(x*(x+1)*...*(x+N-1))
+    elemental function dd_lgamma_stirling_shift(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, y, prod
+        real(dp), parameter :: shift_target = 25.0_dp
+        logical :: any_shift
+        y = x
+        prod = MF_ONE
+        any_shift = .false.
+        do while (y%limbs(1) < shift_target)
+            prod = prod * y
+            y = y + MF_ONE
+            any_shift = .true.
+        end do
+        res = dd_lgamma_stirling(y)
+        if (any_shift) res = res - dd_log_full(prod)
+    end function
+
+    ! Full DD log_gamma(x) = log|Γ(x)|
+    elemental function dd_log_gamma_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, s, one_minus_x, lgam_1mx, lpi
+        real(dp) :: hi
+        hi = x%limbs(1)
+        ! NaN
+        if (ieee_is_nan(hi)) then
+            res%limbs = [hi, 0.0_dp]
+            return
+        end if
+        ! +/-Inf
+        if (.not. ieee_is_finite(hi)) then
+            res%limbs = [huge(0.0_dp), 0.0_dp]
+            return
+        end if
+        ! Non-positive integer poles
+        if (hi <= 0.0_dp .and. hi == anint(hi) .and. x%limbs(2) == 0.0_dp) then
+            res%limbs = [huge(0.0_dp), 0.0_dp]
+            return
+        end if
+        if (hi < 0.5_dp) then
+            ! Reflection: log|Γ(x)| = log π − log|sin(πx)| − lgamma(1−x)
+            s = dd_sinpi_full(x)
+            if (s%limbs(1) < 0.0_dp) s%limbs = -s%limbs
+            one_minus_x = MF_ONE - x
+            lgam_1mx = dd_lgamma_stirling_shift(one_minus_x)
+            lpi%limbs = [log_pi_hi, log_pi_lo]
+            res = lpi - dd_log_full(s) - lgam_1mx
+            return
+        end if
+        res = dd_lgamma_stirling_shift(x)
+    end function
+
+    ! Full DD gamma(x) = Γ(x)
+    elemental function dd_gamma_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, s, one_minus_x, lg, pi_dd, g1mx, out_val
+        real(dp) :: hi
+        logical :: neg
+        hi = x%limbs(1)
+        ! NaN
+        if (ieee_is_nan(hi)) then
+            res%limbs = [hi, 0.0_dp]
+            return
+        end if
+        ! +Inf → +Inf, -Inf → NaN
+        if (.not. ieee_is_finite(hi)) then
+            if (hi > 0.0_dp) then
+                res%limbs = [hi, 0.0_dp]
+            else
+                res%limbs = [ieee_value(hi, ieee_quiet_nan), 0.0_dp]
+            end if
+            return
+        end if
+        ! Non-positive integer poles → NaN
+        if (hi <= 0.0_dp .and. hi == anint(hi) .and. x%limbs(2) == 0.0_dp) then
+            res%limbs = [ieee_value(hi, ieee_quiet_nan), 0.0_dp]
+            return
+        end if
+        ! Overflow guard
+        if (hi > 171.624_dp) then
+            res%limbs = [huge(0.0_dp), 0.0_dp]
+            return
+        end if
+        if (hi < 0.5_dp) then
+            ! Reflection: Γ(x) = π / (sin(πx) · Γ(1−x))
+            s = dd_sinpi_full(x)
+            one_minus_x = MF_ONE - x
+            lg = dd_lgamma_stirling_shift(one_minus_x)
+            neg = s%limbs(1) < 0.0_dp
+            if (neg) s%limbs = -s%limbs
+            pi_dd%limbs = [pi_dd_hi, pi_dd_lo]
+            g1mx = dd_exp_full(lg)
+            out_val = pi_dd / (s * g1mx)
+            if (neg) out_val%limbs = -out_val%limbs
+            res = out_val
+            return
+        end if
+        res = dd_exp_full(dd_lgamma_stirling_shift(x))
+    end function
+
     ! ================================================================
     ! Unary math: mf → mf (elemental)
     ! ================================================================
@@ -2344,25 +2461,17 @@ contains
         res = dd_erfc_full(x)
 #:elif func == 'erfc_scaled'
         res = dd_erfc_scaled_full(x)
-#:elif func in ('gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1')
-        ! Derivative-corrected DD evaluation:
-        !     func(hi + lo) ≈ func(hi) + func'(hi) * lo
-        ! combined via fast_two_sum into a normalized DD result. Roughly
-        ! doubles the precision of the leading-limb std intrinsic without
-        ! ever touching quad precision.
+#:elif func == 'gamma'
+        res = dd_gamma_full(x)
+#:elif func == 'log_gamma'
+        res = dd_log_gamma_full(x)
+#:elif func in ('bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1')
+        ! Leading-limb evaluation only — no full DD kernel yet.
         block
-            real(dp) :: fhi, deriv, corr, s, bp
-            ! erfc_scaled, gamma, log_gamma, bessel_*: no closed-form
-            ! correction available without further special functions, so
-            ! fall back to a leading-limb evaluation. Precision drops to
-            ! single-double for these but no quad precision is involved.
+            real(dp) :: fhi
             fhi = ${func}$(x%limbs(1))
-            deriv = 0.0_dp
-            corr = deriv * x%limbs(2)
-            s = fhi + corr
-            bp = s - fhi
-            res%limbs(1) = s
-            res%limbs(2) = corr - bp
+            res%limbs(1) = fhi
+            res%limbs(2) = 0.0_dp
         end block
 #:else
         ! Should be unreachable: every entry of UNARY_MF_MF is handled above.

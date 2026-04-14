@@ -153,16 +153,9 @@ static bool is_full_dd(char const *op) {
   return false;
 }
 
-// Compound tier: chained evaluations or libm calls with historically weaker
-// relative accuracy. Gamma/lgamma in libquadmath give ~1e-17 and the DD
-// kernel propagates that ULP.
-static bool is_compound(char const *op) {
-  static char const *kList[] = {"tgamma", "lgamma", nullptr};
-  for (int i = 0; kList[i]; ++i) {
-    if (std::strcmp(kList[i], op) == 0) {
-      return true;
-    }
-  }
+// Compound tier: no C++ operations currently fall into this tier.
+// Kept as a placeholder for future chained-evaluation functions.
+static bool is_compound(char const *) {
   return false;
 }
 

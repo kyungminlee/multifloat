@@ -133,8 +133,8 @@ All M1 Max values are post-fix (13-term Taylor + `atan(x) = π/2·sign(x) − at
 | erf | piecewise rational approx (libquadmath erfq.c) | full DD | 1.5e-32 | — | — | **5.3×** | **5.4×** | **8.1×** |
 | erfc | piecewise rational approx + split exp(-x^2) | full DD | 6.6e-30 | — | — | **5.1×** | **5.5×** | **8.0×** |
 | erfc\_scaled | exp(x^2)·erfc(x) with asymptotic cancellation | full DD | 7.7e-30 | — | — | **182×** | **148×** | **198×** |
-| gamma | original: libm gamma(hi), no lo correction | single-double | 8.4e-17 | 4.1e-16 | 3.4e-16 | **116×** | **42×** | **58×** |
-| log\_gamma | original: libm log\_gamma(hi), no lo correction | single-double | 1.2e-16 | 2.1e-16 | 2.2e-16 | **69×** | **40×** | **50×** |
+| gamma | native DD Stirling + shift recurrence + reflection | full DD | 8.8e-30 | — | — | **116×** | **42×** | **58×** |
+| log\_gamma | native DD Stirling + shift recurrence + reflection | full DD | 5.4e-28 | — | — | **69×** | **40×** | **50×** |
 | bessel\_j0 | original: libm bessel\_j0(hi), no lo correction | single-double | 1.9e-16 | 8.2e-16 | 4.1e-16 | **99×** | **68×** | **92×** |
 | bessel\_j1 | original: libm bessel\_j1(hi), no lo correction | single-double | 2.7e-16 | 1.7e-13 | 3.0e-15 | **97×** | **69×** | **91×** |
 | bessel\_jn(3,.) | original: libm bessel\_jn(3,hi), no lo correction | single-double | 3.1e-16 | 7.4e-15 | 3.0e-15 | **106×** | **67×** | **83×** |
@@ -214,9 +214,12 @@ independent fixes landed together: stale `exp2_coefs` / `log2_narrow` /
 `dd_tan_full` now run 3-part Cody–Waite π/2 reduction with direct
 sin/cos Taylor kernels rather than `sinpi(x · inv_pi)`. A subsequent
 rewrite of tgamma / lgamma around a native DD Stirling kernel
-(`detail::gamma_v2`) eliminated the libm-seed floor for the gamma
-family. erf / erfc now use piecewise rational approximation
-coefficients from libquadmath, achieving full DD precision.
+(`detail::dd_lgamma_full` / `detail::dd_tgamma_full`) eliminated the
+libm-seed floor for the gamma family. The Fortran API now also uses
+the same Stirling approach (`dd_lgamma_stirling_shift` + reflection),
+achieving full DD precision for both gamma and log\_gamma.
+erf / erfc now use piecewise rational approximation coefficients from
+libquadmath, achieving full DD precision.
 
 M1 Max err values marked with a dagger (†) were measured with an older
 bench.cc that had per-op input drift and should be remeasured on M1 Max
@@ -349,15 +352,14 @@ fuzz/bench split.
   full DD precision on these functions, a polynomial or series expansion
   would be required (at significant implementation cost and reduced speedup).
 
-- **tgamma / lgamma** in C++ use a native double-double Stirling kernel
-  (`detail::dd_lgamma_full` / `detail::dd_tgamma_full`). `lgamma`
-  evaluates the 13-term Stirling asymptotic `(x−½)·log x − x +
-  ½·log(2π) + Σ B_{2k}/(2k(2k−1)·x^{2k−1})` in DD, after shifting the
-  argument up to x ≥ 25 via a product accumulator so a single
-  `dd_log(prod)` absorbs the recurrence. Small arguments (x < 0.5) use
-  the reflection `log Γ(x) = log π − log|sin(πx)| − log Γ(1−x)`.
-  `tgamma` derives from `exp(lgamma)`, with `π/(sin(πx)·Γ(1−x))` for
-  negative x. Both deliver full DD precision (max\_rel ~7e-30 / ~3e-28
+- **tgamma / lgamma** (both C++ and Fortran) use a native double-double
+  Stirling kernel. `lgamma` evaluates the 13-term Stirling asymptotic
+  `(x−½)·log x − x + ½·log(2π) + Σ B_{2k}/(2k(2k−1)·x^{2k−1})` in DD,
+  after shifting the argument up to x ≥ 25 via a product accumulator so a
+  single `dd_log(prod)` absorbs the recurrence. Small arguments (x < 0.5)
+  use the reflection `log Γ(x) = log π − log|sin(πx)| − log Γ(1−x)`.
+  `tgamma` / `gamma` derives from `exp(lgamma)`, with `π/(sin(πx)·Γ(1−x))`
+  for negative x. Both deliver full DD precision (max\_rel ~9e-30 / ~5e-28
   on the 1M fuzz).
 
 - **Newton-corrected** functions (asin, acos, atan, atan2) compute a libm
