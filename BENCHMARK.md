@@ -130,8 +130,8 @@ All M1 Max values are post-fix (13-term Taylor + `atan(x) = π/2·sign(x) − at
 
 | op | approach | prec | M1 Max err | Skylake err | Raptor Lake err | M1 Max × | Skylake × | Raptor Lake × |
 |---|---|---|---|---|---|---|---|---|
-| erf | original: Taylor series (\|x\|<2) + libm erf(hi) deriv correction | deriv-corrected | 3.2e-20 | 7.8e-19 | 3.7e-19 | **5.3×** | **5.4×** | **8.1×** |
-| erfc | original: 1−erf(x), or libm erfc(hi) for large x | deriv-corrected | 2.4e-16 | 2.5e-16 | 2.1e-16 | **5.1×** | **5.5×** | **8.0×** |
+| erf | piecewise rational approx (libquadmath erfq.c) | full DD | 1.5e-32 | — | — | **5.3×** | **5.4×** | **8.1×** |
+| erfc | piecewise rational approx + split exp(-x^2) | full DD | 6.6e-30 | — | — | **5.1×** | **5.5×** | **8.0×** |
 | erfc\_scaled | original: libm erfc\_scaled(hi), no lo correction | single-double | 4.3e-16 | 5.7e-16 | 4.9e-16 | **182×** | **148×** | **198×** |
 | gamma | original: libm gamma(hi), no lo correction | single-double | 8.4e-17 | 4.1e-16 | 3.4e-16 | **116×** | **42×** | **58×** |
 | log\_gamma | original: libm log\_gamma(hi), no lo correction | single-double | 1.2e-16 | 2.1e-16 | 2.2e-16 | **69×** | **40×** | **50×** |
@@ -215,8 +215,8 @@ independent fixes landed together: stale `exp2_coefs` / `log2_narrow` /
 sin/cos Taylor kernels rather than `sinpi(x · inv_pi)`. A subsequent
 rewrite of tgamma / lgamma around a native DD Stirling kernel
 (`detail::gamma_v2`) eliminated the libm-seed floor for the gamma
-family. erf / erfc remain at their deriv-corrected tier and are
-tracked separately.
+family. erf / erfc now use piecewise rational approximation
+coefficients from libquadmath, achieving full DD precision.
 
 M1 Max err values marked with a dagger (†) were measured with an older
 bench.cc that had per-op input drift and should be remeasured on M1 Max
@@ -300,8 +300,8 @@ fuzz/bench split.
 
 | op | approach | M1 Max err | Raptor Lake err | M1 Max × | Skylake × | Raptor Lake × |
 |---|---|---|---|---|---|---|
-| erf | original: Taylor series (\|x\|<2) + libm erf(hi) deriv correction | 4.2e-18 | 3.8e-18 | **5.4×** | **5.7×** | **7.4×** |
-| erfc | original: 1−erf(x), or libm erfc(hi) for large x | 3.7e-15 | 3.9e-15 | **4.6×** | **5.5×** | **14×** |
+| erf | piecewise rational approx (ported from libquadmath erfq.c) | 1.5e-32 | — | **5.4×** | **5.7×** | **7.4×** |
+| erfc | piecewise rational approx + split exp(-x^2) | 6.6e-30 | — | **4.6×** | **5.5×** | **14×** |
 | tgamma | original: native DD Stirling + shift recurrence + reflection, exp(lgamma) | 3.2e-14† | 7.3e-30 | **130×**† | **59×**† | **5.2×** |
 | lgamma | original: native DD Stirling + shift recurrence + reflection | 4.4e-15† | 2.9e-28 | **67×**† | **46×**† | **1.5×** |
 
@@ -365,9 +365,12 @@ fuzz/bench split.
   function (sin, cos, tan). Quadratic convergence makes one step sufficient
   for full DD precision.
 
-- **Deriv-corrected** functions (erf, erfc, atan for some ranges) use
-  `f(hi) + f'(hi) * lo` to recover most of the DD precision. The correction
-  is exact to first order, giving ~20–25 digits in typical cases.
+- **erf / erfc** use piecewise rational approximation coefficients from
+  libquadmath's `erfq.c`, evaluated in full DD arithmetic via Estrin's
+  scheme (`dd_neval` / `dd_deval`). The asymptotic region splits `exp(-x^2)`
+  into `exp(-s^2 - 0.5625) * exp((s-x)(s+x) + R)` with `s` truncated to
+  ~27 mantissa bits so `s^2` is exact. Both deliver full DD precision
+  (max\_rel ~1.5e-32 / ~6.6e-30 on the 1M fuzz).
 
 - The **Fortran** multifloats module uses `elemental` functions on a
   `sequence` derived type. gfortran's ABI passes/returns these via hidden

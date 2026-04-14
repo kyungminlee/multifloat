@@ -142,6 +142,7 @@ static bool is_full_dd(char const *op) {
       "sin", "cos", "tan",
       "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
       "asin", "acos", "atan", "atan2",
+      "erf", "erfc",
       "tgamma", "lgamma",
       nullptr};
   for (int i = 0; kList[i]; ++i) {
