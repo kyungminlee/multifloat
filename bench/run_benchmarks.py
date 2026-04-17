@@ -130,9 +130,26 @@ def detect_compiler(build_dir: Path) -> str:
     return fc_ver or cxx_ver or "unknown"
 
 
+_VERSION_RE = re.compile(r"(\d+(?:\.\d+){1,2})\s*$")
+
+
 def _version_line(exe: str) -> str:
+    """Extract the trailing ``MAJOR.MINOR[.PATCH]`` from ``exe --version`` — and
+    any parenthesized distribution tag on the same line — so callers get e.g.
+    ``"13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1)"``."""
     out = _run([exe, "--version"])
-    return out.splitlines()[0].split("(GCC) ")[-1].split(" ", 1)[-1] if out else ""
+    if not out:
+        return ""
+    first = out.splitlines()[0]
+    m = _VERSION_RE.search(first)
+    ver = m.group(1) if m else ""
+    dist = ""
+    lp, rp = first.find("("), first.rfind(")")
+    if lp != -1 and rp > lp:
+        dist = first[lp : rp + 1]
+    if ver and dist:
+        return f"{ver} {dist}"
+    return ver or first.strip()
 
 
 def detect_build(build_dir: Path) -> str:

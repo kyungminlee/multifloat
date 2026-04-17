@@ -39,7 +39,7 @@ def _finite(v) -> bool:
 
 def _format_max_rel(v: float) -> str:
     if v == 0.0:
-        return "0.0"
+        return "exact"
     return f"{v:.1e}"
 
 
