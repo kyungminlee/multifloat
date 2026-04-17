@@ -62,11 +62,14 @@ already; these are the ones that needed explicit review.
 
 ## Speed
 
-- [ ] **S1. `dd_matmul_mm` re-streams A per B column.**
-      `src/multifloats_math.cc:1388-1394`. Add a second register-block
-      dimension NR so each MR×NR µkernel loads A once per p and reuses
-      it across NR b-column entries. Preserves the renorm-interval
-      contract; only changes the outer dispatch.
+- [x] **S1. `dd_matmul_mm` re-streams A per B column.**
+      Fixed: introduced `dd_gemm_panel<MR=8, NR=2>` in
+      `src/multifloats_math.cc`; each p-step loads A[:,p] once into
+      registers and reuses across the 2-wide B tile. Row / column tails
+      (1..MR-1 rows, trailing 1-col remainder) fall back to the existing
+      `dd_gaxpy_mv_panel` path. Output is bit-identical to per-column mv
+      (verified via `memcmp` on 9 shapes including chunked renorm paths).
+      Measured +12–40% throughput on m,n,k ∈ {8..256} shapes.
 
 - [ ] **S2. Missing `__attribute__((always_inline))` on hot kernels.**
       `src/multifloats_math.cc:1200-1212` (`dd_mac_inl`),

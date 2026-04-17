@@ -1281,6 +1281,54 @@ static inline void dd_gaxpy_mv_dispatch(const dd_t *__restrict__ a,
   int tail = static_cast<int>(m - i);
   if (tail > 0) dd_gaxpy_mv_tail(a + i, x, y + i, tail, lda, k, renorm_interval);
 }
+
+// MR×NR GEMM µkernel: loads one column-slice of A per p and reuses it
+// across NR B-column entries. Amortizes A bandwidth vs a per-column mv
+// dispatch at the cost of MR*NR accumulator pairs (stack-spilled on
+// machines with < 32 FP regs, but the spill cost is paid once per p
+// and dwarfed by the DD-mac FLOPs).
+template <int MR, int NR>
+static inline void dd_gemm_panel(const dd_t *__restrict__ a,
+                                 const dd_t *__restrict__ b,
+                                 dd_t *__restrict__ c,
+                                 int64_t lda, int64_t ldb, int64_t ldc,
+                                 int64_t k, int64_t renorm_interval) {
+  double s_hi[MR][NR] = {}, s_lo[MR][NR] = {};
+  auto kernel_block = [&](int64_t p0, int64_t pend) {
+    for (int64_t p = p0; p < pend; ++p) {
+      const dd_t *__restrict__ acol = a + p * lda;
+      double ah[MR], al[MR];
+      for (int i = 0; i < MR; ++i) { ah[i] = acol[i].hi; al[i] = acol[i].lo; }
+      for (int jj = 0; jj < NR; ++jj) {
+        const double bh = b[jj * ldb + p].hi;
+        const double bl = b[jj * ldb + p].lo;
+        for (int i = 0; i < MR; ++i) {
+          dd_mac_inl(ah[i], al[i], bh, bl, s_hi[i][jj], s_lo[i][jj]);
+        }
+      }
+    }
+  };
+  if (renorm_interval <= 0 || k <= renorm_interval) {
+    kernel_block(0, k);
+  } else {
+    const int64_t chunk = renorm_interval;
+    int64_t p0 = 0;
+    while (p0 < k) {
+      int64_t pend = p0 + chunk;
+      if (pend > k) pend = k;
+      kernel_block(p0, pend);
+      p0 = pend;
+      if (p0 < k) {
+        for (int jj = 0; jj < NR; ++jj)
+          for (int i = 0; i < MR; ++i)
+            dd_renorm_inl(s_hi[i][jj], s_lo[i][jj]);
+      }
+    }
+  }
+  for (int jj = 0; jj < NR; ++jj)
+    for (int i = 0; i < MR; ++i)
+      c[jj * ldc + i] = dd_finalize_inl(s_hi[i][jj], s_lo[i][jj]);
+}
 } // anonymous namespace
 
 extern "C" {
@@ -1362,7 +1410,28 @@ dd_t dd_y1(dd_t a) { return to(dd_bessel_y1_full(from(a))); }
 void dd_matmul_mm(const dd_t *__restrict__ a, const dd_t *__restrict__ b,
                   dd_t *__restrict__ c, int64_t m, int64_t k, int64_t n,
                   int64_t renorm_interval) {
-  for (int64_t j = 0; j < n; ++j) {
+  // NR-blocked mm: the MR-row × NR-col tile loads A[:,p] once per p and
+  // reuses it across NR output columns, halving A-bandwidth vs a per-
+  // column mv dispatch. Row-tail (1..MR-1 rows) and column-tail
+  // (1..NR-1 cols) fall back to the single-column mv panel.
+  constexpr int MR = 8;
+  constexpr int NR = 2;
+  int64_t j = 0;
+  for (; j + NR <= n; j += NR) {
+    int64_t i = 0;
+    for (; i + MR <= m; i += MR) {
+      dd_gemm_panel<MR, NR>(a + i, b + j * k, c + j * m + i,
+                            m, k, m, k, renorm_interval);
+    }
+    int tail_m = static_cast<int>(m - i);
+    if (tail_m > 0) {
+      for (int jj = 0; jj < NR; ++jj) {
+        dd_gaxpy_mv_tail(a + i, b + (j + jj) * k, c + (j + jj) * m + i,
+                         tail_m, m, k, renorm_interval);
+      }
+    }
+  }
+  for (; j < n; ++j) {
     dd_gaxpy_mv_dispatch(a, b + j * k, c + j * m, m, k, m, renorm_interval);
   }
 }
