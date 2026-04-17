@@ -624,16 +624,16 @@ module multifloats
         pure type(dd_t) function c_dd_lgamma(a) bind(c, name='dd_lgamma')
             import :: dd_t; type(dd_t), value, intent(in) :: a
         end function
-        pure type(dd_t) function c_dd_bessel_j0(a) bind(c, name='dd_bessel_j0')
+        pure type(dd_t) function c_dd_j0(a) bind(c, name='dd_j0')
             import :: dd_t; type(dd_t), value, intent(in) :: a
         end function
-        pure type(dd_t) function c_dd_bessel_j1(a) bind(c, name='dd_bessel_j1')
+        pure type(dd_t) function c_dd_j1(a) bind(c, name='dd_j1')
             import :: dd_t; type(dd_t), value, intent(in) :: a
         end function
-        pure type(dd_t) function c_dd_bessel_y0(a) bind(c, name='dd_bessel_y0')
+        pure type(dd_t) function c_dd_y0(a) bind(c, name='dd_y0')
             import :: dd_t; type(dd_t), value, intent(in) :: a
         end function
-        pure type(dd_t) function c_dd_bessel_y1(a) bind(c, name='dd_bessel_y1')
+        pure type(dd_t) function c_dd_y1(a) bind(c, name='dd_y1')
             import :: dd_t; type(dd_t), value, intent(in) :: a
         end function
     end interface
@@ -2625,7 +2625,7 @@ contains
         type(float64x2), intent(in) :: x
         type(float64x2) :: res
         type(dd_t) :: r
-        r = c_dd_bessel_j0(dd_t(x%limbs(1), x%limbs(2)))
+        r = c_dd_j0(dd_t(x%limbs(1), x%limbs(2)))
         res%limbs = [r%hi, r%lo]
     end function
 
@@ -2633,7 +2633,7 @@ contains
         type(float64x2), intent(in) :: x
         type(float64x2) :: res
         type(dd_t) :: r
-        r = c_dd_bessel_j1(dd_t(x%limbs(1), x%limbs(2)))
+        r = c_dd_j1(dd_t(x%limbs(1), x%limbs(2)))
         res%limbs = [r%hi, r%lo]
     end function
 
@@ -2641,7 +2641,7 @@ contains
         type(float64x2), intent(in) :: x
         type(float64x2) :: res
         type(dd_t) :: r
-        r = c_dd_bessel_y0(dd_t(x%limbs(1), x%limbs(2)))
+        r = c_dd_y0(dd_t(x%limbs(1), x%limbs(2)))
         res%limbs = [r%hi, r%lo]
     end function
 
@@ -2649,7 +2649,7 @@ contains
         type(float64x2), intent(in) :: x
         type(float64x2) :: res
         type(dd_t) :: r
-        r = c_dd_bessel_y1(dd_t(x%limbs(1), x%limbs(2)))
+        r = c_dd_y1(dd_t(x%limbs(1), x%limbs(2)))
         res%limbs = [r%hi, r%lo]
     end function
 

@@ -75,17 +75,11 @@ add_library(blas-multifloat STATIC
     ./blas/wtrsm.f90)
 target_link_libraries(blas-multifloat PRIVATE multifloatsf)
 
-# C-ABI wrapper library — used by ABI benchmarks only, not installed.
-add_library(multifloats-c STATIC ./src/multifloats_c.cc)
-target_include_directories(multifloats-c PRIVATE src)
-target_compile_options(multifloats-c PRIVATE -O3)
-target_link_libraries(multifloats-c PRIVATE multifloats)
-
-# Fortran library uses C++ kernels for Bessel/gamma via bind(C)
-target_link_libraries(multifloatsf PUBLIC multifloats-c)
+# Fortran library uses C++ DD kernels via bind(C) (extern "C" in multifloats_math.cc)
+target_link_libraries(multifloatsf PUBLIC multifloats)
 
 add_executable(fortran_bench_c ./test/bench_c.f90)
-target_link_libraries(fortran_bench_c PRIVATE multifloatsf multifloats-c)
+target_link_libraries(fortran_bench_c PRIVATE multifloatsf)
 
 add_library(dd-bindc OBJECT ./test/dd_bindc.f90)
 target_compile_options(dd-bindc PRIVATE -O3)
@@ -94,4 +88,4 @@ set_target_properties(dd-bindc PROPERTIES
 target_include_directories(dd-bindc PUBLIC ${CMAKE_BINARY_DIR}/fmod/test)
 
 add_executable(fortran_bench_abi ./test/bench_abi.f90)
-target_link_libraries(fortran_bench_abi PRIVATE multifloatsf multifloats-c dd-bindc)
+target_link_libraries(fortran_bench_abi PRIVATE multifloatsf dd-bindc)
