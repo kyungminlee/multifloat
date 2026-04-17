@@ -81,16 +81,6 @@ def gen_cos_taylor(n=13):
     return [(-1)**k / factorial(2*k) for k in range(n)]
 
 
-def gen_sinpi_coefs(n=15):
-    """c[k] = (-1)^k * pi^(2k+1) / (2k+1)!"""
-    return [(-1)**k * pi**(2*k + 1) / factorial(2*k + 1) for k in range(n)]
-
-
-def gen_cospi_coefs(n=15):
-    """c[k] = (-1)^k * pi^(2k) / (2k)!"""
-    return [(-1)**k * pi**(2*k) / factorial(2*k) for k in range(n)]
-
-
 def gen_sinh_taylor(n=9):
     """sinh(x)/x Taylor: c[k] = 1 / (2k+1)!"""
     return [mpf(1) / factorial(2*k + 1) for k in range(n)]
@@ -655,10 +645,6 @@ def collect_all():
           'sin(x)/x Taylor: c[k] = (-1)^k / (2k+1)!')
     array('cos_taylor', gen_cos_taylor(13),
           'cos(x) Taylor: c[k] = (-1)^k / (2k)!')
-    array('sinpi_coefs', gen_sinpi_coefs(15),
-          'sinpi: c[k] = (-1)^k * pi^(2k+1) / (2k+1)!')
-    array('cospi_coefs', gen_cospi_coefs(15),
-          'cospi: c[k] = (-1)^k * pi^(2k) / (2k)!')
 
     # --- hyperbolic ---
     array('sinh_taylor', gen_sinh_taylor(9),

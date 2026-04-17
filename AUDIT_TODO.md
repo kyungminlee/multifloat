@@ -30,20 +30,24 @@ already; these are the ones that needed explicit review.
       Remaining `huge(0.0_dp)` sites are intentional (`huge()` inquiry
       and `nearest()` direction sentinel).
 
-- [ ] **P2. Fortran `sinpi` / `cospi` use legacy polynomial.**
-      `fsrc/multifloats.fypp:1381-1446`. Port the C++ approach:
-      `pr = π·rx` (DD-exact), then dispatch to `dd_sin_eval` / `dd_cos_eval`
-      on `pr`. After port, the Fortran `dd_sinpi_kernel` / `dd_cospi_kernel`
-      at `:1364, 1372` and the `sinpi_coefs` / `cospi_coefs` tables in
-      `dd_constants.f90.inc` become dead — remove and drop the C++-only
-      emission from `scripts/gen_constants.py`.
+- [x] **P2. Fortran `sinpi` / `cospi` use legacy polynomial.**
+      Fixed: Fortran `dd_sinpi_full` and `dd_cospi_full` now form
+      `pr = π·rx` (DD-exact) and dispatch to the existing `dd_sin_eval`
+      / `dd_cos_eval`, matching the C++ path (~4e-32 vs the legacy
+      ~5e-27). The `dd_sinpi_kernel` / `dd_cospi_kernel` helpers are
+      gone; `gen_sinpi_coefs` / `gen_cospi_coefs` were removed from
+      `scripts/gen_constants.py`; regenerated `dd_constants.*` drops the
+      four dead coefficient arrays. Added `test_sinpi_cospi_precision`
+      asserting `sinpi(0.25) == sqrt(2)/2` at DD precision.
 
-- [ ] **P3. Uncompensated complex reductions.**
-      `cx_dot_product` at `fsrc/multifloats.fypp:4175-4187` and
-      `cx_matmul_mm/mv/vm` at `:4452-4505` use a naive left fold. Real
-      side uses compensated accumulation via the C ABI
-      (`MF_FMA_RENORM_INTERVAL`). Either call the C matmul four times
-      (re·re, re·im, im·re, im·im) or add a compensated DD accumulator.
+- [x] **P3. Uncompensated complex reductions.**
+      Fixed via **option A** (4× real matmul): `cx_dot_product` delegates
+      to 4× `mf_dot_product`, and `cx_matmul_mm/mv/vm` to 4× `mf_matmul_*`
+      through split (re, im) parts. Inherits the compensated DD
+      accumulator and renorm interval of the real path. Each function has
+      a block comment noting option B (fused compensated kernel) for
+      future revisit if cx reductions become a profile hotspot.
+      `test_cx_matmul_dot` covers 8 identities in `test/test.f90`.
 
 - [ ] **P4. `mf_product` / `*_dim` reductions are naive.**
       `fsrc/multifloats.fypp:3998-4009, 4040-4046`. Inconsistent with the

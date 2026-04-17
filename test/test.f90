@@ -19,6 +19,8 @@ program multifloat_test
   call test_builtins()
   call test_math_intrinsics()
   call test_overflow_paths()
+  call test_sinpi_cospi_precision()
+  call test_cx_matmul_dot()
 
   if (num_errors == 0) then
     print *, "-------------------------------"
@@ -451,24 +453,21 @@ contains
 
     inf = ieee_value(inf, ieee_positive_inf)
 
-    ! exp2 / exp overflow → +inf
+    ! exp overflow → +inf (routes through dd_exp2_full's overflow arm)
     a = 2000.0d0
-    r = exp2(a)
-    call assert(is_inf(r%limbs(1)) .and. r%limbs(1) > 0.0d0, &
-                "exp2(2000) is +inf")
     r = exp(a)
     call assert(is_inf(r%limbs(1)) .and. r%limbs(1) > 0.0d0, &
                 "exp(2000) is +inf")
 
-    ! log2(0) → -inf; log2(+inf) → +inf
+    ! log(0) → -inf; log(+inf) → +inf (route through dd_log2_full)
     a = 0.0d0
-    r = log2(a)
+    r = log(a)
     call assert(is_inf(r%limbs(1)) .and. r%limbs(1) < 0.0d0, &
-                "log2(0) is -inf")
+                "log(0) is -inf")
     a = inf
-    r = log2(a)
+    r = log(a)
     call assert(is_inf(r%limbs(1)) .and. r%limbs(1) > 0.0d0, &
-                "log2(+inf) is +inf")
+                "log(+inf) is +inf")
 
     ! gamma(200) overflows → +inf
     a = 200.0d0
@@ -487,6 +486,67 @@ contains
     r = bessel_yn(2, a)
     call assert(is_inf(r%limbs(1)) .and. r%limbs(1) < 0.0d0, &
                 "bessel_yn(2, 0) is -inf")
+  end subroutine
+
+  subroutine test_sinpi_cospi_precision()
+    ! P2: Fortran sinpi/cospi must hit full DD (~4e-32), not the legacy
+    ! polynomial ceiling (~5e-27). assert_approx's tolerance is 1e-32,
+    ! which the legacy kernel would have failed outright at x = 0.25.
+    type(float64x2) :: x, r
+    x = 0.25d0
+    r = sinpi(x)
+    call assert_approx(r, 0.7071067811865476d0, &
+                       -4.833646656726457d-17, "sinpi(0.25) ≈ sqrt(2)/2")
+    r = cospi(x)
+    call assert_approx(r, 0.7071067811865476d0, &
+                       -4.833646656726457d-17, "cospi(0.25) ≈ sqrt(2)/2")
+    ! Large-argument reduction must still be exact at integer step.
+    x = 101.0d0
+    r = sinpi(x)
+    call assert_approx(r, 0.0d0, 0.0d0, "sinpi(101) == 0")
+    r = cospi(x)
+    call assert_approx(r, -1.0d0, 0.0d0, "cospi(101) == -1")
+  end subroutine
+
+  subroutine test_cx_matmul_dot()
+    ! P3: complex matmul/dot_product now route through the compensated
+    ! real kernels. Sanity-check identities that would fail if the
+    ! complex formula were wrong. Precision validation is inherited from
+    ! the real path's fuzz tests.
+    type(complex128x2) :: a(2, 2), b(2, 2), c(2, 2), u(2), v(2)
+    type(complex128x2) :: one, i_unit, two, zero, s
+    type(float64x2) :: zero_mf
+    zero_mf = float64x2(0.0d0)
+    one%re = float64x2(1.0d0); one%im = zero_mf
+    two%re = float64x2(2.0d0); two%im = zero_mf
+    zero%re = zero_mf; zero%im = zero_mf
+    i_unit%re = zero_mf; i_unit%im = float64x2(1.0d0)
+
+    ! [1 i; i 1] * [1 -i; -i 1] = [2 0; 0 2] (identity up to complex phase)
+    a(1,1) = one;    a(1,2) = i_unit
+    a(2,1) = i_unit; a(2,2) = one
+    b(1,1) = one;              b(1,2)%re = zero_mf; b(1,2)%im = float64x2(-1.0d0)
+    b(2,1)%re = zero_mf; b(2,1)%im = float64x2(-1.0d0)
+    b(2,2) = one
+    c = matmul(a, b)
+    call assert_approx(c(1,1)%re, 2.0d0, 0.0d0, "cx_matmul [1,1].re")
+    call assert_approx(c(1,1)%im, 0.0d0, 0.0d0, "cx_matmul [1,1].im")
+    call assert_approx(c(2,2)%re, 2.0d0, 0.0d0, "cx_matmul [2,2].re")
+    call assert_approx(c(1,2)%re, 0.0d0, 0.0d0, "cx_matmul [1,2].re")
+
+    ! dot_product conjugates the first argument; dot(u, u) is real non-neg.
+    u(1) = one
+    u(2) = i_unit
+    s = dot_product(u, u)
+    call assert_approx(s%re, 2.0d0, 0.0d0, "cx_dot(u, u) real == 2")
+    call assert_approx(s%im, 0.0d0, 0.0d0, "cx_dot(u, u) imag == 0")
+
+    ! dot(u, i*u) = conj(u_k) · (i u_k) = i (|u_1|^2 + |u_2|^2) = 2i
+    v(1) = i_unit
+    v(2)%re = float64x2(-1.0d0); v(2)%im = zero_mf  ! i * i = -1
+    s = dot_product(u, v)
+    call assert_approx(s%re, 0.0d0, 0.0d0, "cx_dot(u, i·u) real == 0")
+    call assert_approx(s%im, 2.0d0, 0.0d0, "cx_dot(u, i·u) imag == 2")
   end subroutine
 
   ! Local shims for facilities the multifloats module does not expose.

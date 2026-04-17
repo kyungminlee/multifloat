@@ -1360,63 +1360,44 @@ contains
         res = l2 * l102
     end function
 
-    ! sinpi(x) = sin(pi * x) computed via the polynomial in x², ported
-    ! from MultiFloats.jl. x must already be in [0, 0.5].
-    pure function dd_sinpi_kernel(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2) :: res, x_sq
-        x_sq = x * x
-        res = dd_horner(x_sq, sinpi_coefs_hi, sinpi_coefs_lo)
-        res = res * x
-    end function
-
-    pure function dd_cospi_kernel(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2) :: res, x_sq
-        x_sq = x * x
-        res = dd_horner(x_sq, cospi_coefs_hi, cospi_coefs_lo)
-    end function
-
-    ! sinpi: reduce x to [-0.5, 0.5] using the period of sinpi (period 2),
-    ! then dispatch to sinpi_kernel / cospi_kernel based on the quadrant.
+    ! sinpi / cospi route through the full-DD sin_eval / cos_eval
+    ! kernels evaluated at DD-exact π·rx (|rx| ≤ 0.25 ⇒ |π·rx| ≤ π/4),
+    ! mirroring the C++ path. Reaches ~4e-32 vs the legacy polynomial's
+    ! ~5e-27 ceiling.
     elemental function dd_sinpi_full(x) result(res)
         type(float64x2), intent(in) :: x
-        type(float64x2) :: res, ax, rx, neg_half_n
+        type(float64x2) :: res, ax, rx, neg_half_n, pi_dd, pr
         real(dp) :: n_float
         integer :: n_mod
+        logical :: sign
         if (.not. ieee_is_finite(x%limbs(1))) then
             res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
             return
         end if
-        ! abs(x); the final sign flip is applied at the end.
-        if (x%limbs(1) < 0.0_dp) then
+        sign = x%limbs(1) < 0.0_dp
+        if (sign) then
             ax%limbs = -x%limbs
         else
             ax = x
         end if
-        ! Reduce to [0, 0.5]: pick the nearest half-integer.
         n_float = anint(2.0_dp * ax%limbs(1))
         neg_half_n%limbs = [-0.5_dp * n_float, 0.0_dp]
         rx = ax + neg_half_n
+        pi_dd%limbs = [pi_dd_hi, pi_dd_lo]
+        pr = pi_dd * rx
         n_mod = iand(int(n_float, int64), 3_int64)
         select case (n_mod)
-        case (0)
-            res = dd_sinpi_kernel(rx)
-        case (1)
-            res = dd_cospi_kernel(rx)
-        case (2)
-            res = dd_sinpi_kernel(rx)
-            res%limbs = -res%limbs
-        case default
-            res = dd_cospi_kernel(rx)
-            res%limbs = -res%limbs
+        case (0); res =  dd_sin_eval(pr)
+        case (1); res =  dd_cos_eval(pr)
+        case (2); res = -dd_sin_eval(pr)
+        case default; res = -dd_cos_eval(pr)
         end select
-        if (x%limbs(1) < 0.0_dp) res%limbs = -res%limbs
+        if (sign) res%limbs = -res%limbs
     end function
 
     elemental function dd_cospi_full(x) result(res)
         type(float64x2), intent(in) :: x
-        type(float64x2) :: res, ax, rx, neg_half_n
+        type(float64x2) :: res, ax, rx, neg_half_n, pi_dd, pr
         real(dp) :: n_float
         integer :: n_mod
         if (.not. ieee_is_finite(x%limbs(1))) then
@@ -1431,18 +1412,14 @@ contains
         n_float = anint(2.0_dp * ax%limbs(1))
         neg_half_n%limbs = [-0.5_dp * n_float, 0.0_dp]
         rx = ax + neg_half_n
+        pi_dd%limbs = [pi_dd_hi, pi_dd_lo]
+        pr = pi_dd * rx
         n_mod = iand(int(n_float, int64), 3_int64)
         select case (n_mod)
-        case (0)
-            res = dd_cospi_kernel(rx)
-        case (1)
-            res = dd_sinpi_kernel(rx)
-            res%limbs = -res%limbs
-        case (2)
-            res = dd_cospi_kernel(rx)
-            res%limbs = -res%limbs
-        case default
-            res = dd_sinpi_kernel(rx)
+        case (0); res =  dd_cos_eval(pr)
+        case (1); res = -dd_sin_eval(pr)
+        case (2); res = -dd_cos_eval(pr)
+        case default; res =  dd_sin_eval(pr)
         end select
     end function
 
@@ -4069,18 +4046,27 @@ $:mf_minmax_body(func, n)
         res%limbs(2) = s_lo - bp
     end function
 
+    ! Complex dot_product: sum(conj(a_k) * b_k).
+    ! Expand real/imag components so each scalar reduction routes through
+    ! the compensated mf_dot_product (same Neumaier-style accumulator used
+    ! by the real path) rather than a naive left fold. Uses 4 real dots at
+    ! the cost of 4 small temp arrays.
+    !
+    ! Future: a single fused kernel that keeps four compensated DD
+    ! accumulators (re_hi/lo, im_hi/lo) in registers across one pass over
+    ! the inputs would cut memory traffic roughly in half and avoid the
+    ! temp-array copies. Worth revisiting if profiling shows cx reductions
+    ! as a bottleneck — current form prioritizes code reuse + correctness.
     pure function cx_dot_product(a, b) result(res)
         type(complex128x2), intent(in) :: a(:), b(:)
         type(complex128x2) :: res
-        type(float64x2) :: zero
-        integer :: i1
-        zero = mf_from_dp(0.0_dp)
-        res%re = zero
-        res%im = zero
-        ! Standard Fortran dot_product conjugates the first argument.
-        do i1 = 1, size(a)
-            res = res + cx_conjg(a(i1)) * b(i1)
-        end do
+        type(float64x2) :: a_re(size(a)), a_im(size(a))
+        type(float64x2) :: b_re(size(b)), b_im(size(b))
+        a_re = a%re; a_im = a%im
+        b_re = b%re; b_im = b%im
+        ! conj(a)·b = (a_re·b_re + a_im·b_im) + i (a_re·b_im - a_im·b_re)
+        res%re = mf_dot_product(a_re, b_re) + mf_dot_product(a_im, b_im)
+        res%im = mf_dot_product(a_re, b_im) - mf_dot_product(a_im, b_re)
     end function
 
     ! ================================================================
@@ -4345,60 +4331,60 @@ $:mf_minmax_body(func, n)
             int(MF_FMA_RENORM_INTERVAL, c_int64_t))
     end function
 
-    ! cx matmul: 2D × 2D → 2D
+    ! Complex matmul via 4 real DD matmuls on the split (re, im) parts.
+    ! (a + i b) · (c + i d) = (a·c - b·d) + i (a·d + b·c), so one complex
+    ! matmul of shape (M, K) × (K, N) becomes four real matmuls of the
+    ! same shape, each going through the compensated mf_matmul_mm kernel.
+    ! Cost: 2 extra m·k + 2 extra k·n temp DD arrays (plus 2 m·n
+    ! intermediates) per call.
+    !
+    ! Future: a fused complex kernel that streams each input once and
+    ! accumulates the four real-part / imag-part contributions into a
+    ! single set of compensated DD accumulators (4 doubles per output)
+    ! would roughly halve the memory traffic and remove the temp arrays.
+    ! The real mf_matmul is compute-bound on most targets, so the payoff
+    ! is modest — revisit if cx matmul becomes a profile hotspot. The
+    ! analogous note on cx_dot_product above applies here too.
     pure function cx_matmul_mm(a, b) result(res)
         type(complex128x2), intent(in) :: a(:,:), b(:,:)
         type(complex128x2) :: res(size(a,1), size(b,2))
-        type(complex128x2) :: s
-        type(float64x2) :: zero
-        integer :: i1, i2, k
-        zero = mf_from_dp(0.0_dp)
-        do i2 = 1, size(b,2)
-            do i1 = 1, size(a,1)
-                s%re = zero
-                s%im = zero
-                do k = 1, size(a,2)
-                    s = s + a(i1,k) * b(k,i2)
-                end do
-                res(i1,i2) = s
-            end do
-        end do
+        type(float64x2) :: a_re(size(a,1), size(a,2)), a_im(size(a,1), size(a,2))
+        type(float64x2) :: b_re(size(b,1), size(b,2)), b_im(size(b,1), size(b,2))
+        type(float64x2) :: p_re(size(a,1), size(b,2)), p_im(size(a,1), size(b,2))
+        a_re = a%re; a_im = a%im
+        b_re = b%re; b_im = b%im
+        p_re = mf_matmul_mm(a_re, b_re) - mf_matmul_mm(a_im, b_im)
+        p_im = mf_matmul_mm(a_re, b_im) + mf_matmul_mm(a_im, b_re)
+        res%re = p_re
+        res%im = p_im
     end function
 
-    ! cx matmul: 2D × 1D → 1D
     pure function cx_matmul_mv(a, b) result(res)
         type(complex128x2), intent(in) :: a(:,:), b(:)
         type(complex128x2) :: res(size(a,1))
-        type(complex128x2) :: s
-        type(float64x2) :: zero
-        integer :: i1, k
-        zero = mf_from_dp(0.0_dp)
-        do i1 = 1, size(a,1)
-            s%re = zero
-            s%im = zero
-            do k = 1, size(a,2)
-                s = s + a(i1,k) * b(k)
-            end do
-            res(i1) = s
-        end do
+        type(float64x2) :: a_re(size(a,1), size(a,2)), a_im(size(a,1), size(a,2))
+        type(float64x2) :: b_re(size(b)), b_im(size(b))
+        type(float64x2) :: p_re(size(a,1)), p_im(size(a,1))
+        a_re = a%re; a_im = a%im
+        b_re = b%re; b_im = b%im
+        p_re = mf_matmul_mv(a_re, b_re) - mf_matmul_mv(a_im, b_im)
+        p_im = mf_matmul_mv(a_re, b_im) + mf_matmul_mv(a_im, b_re)
+        res%re = p_re
+        res%im = p_im
     end function
 
-    ! cx matmul: 1D × 2D → 1D
     pure function cx_matmul_vm(a, b) result(res)
         type(complex128x2), intent(in) :: a(:), b(:,:)
         type(complex128x2) :: res(size(b,2))
-        type(complex128x2) :: s
-        type(float64x2) :: zero
-        integer :: i2, k
-        zero = mf_from_dp(0.0_dp)
-        do i2 = 1, size(b,2)
-            s%re = zero
-            s%im = zero
-            do k = 1, size(a)
-                s = s + a(k) * b(k,i2)
-            end do
-            res(i2) = s
-        end do
+        type(float64x2) :: a_re(size(a)), a_im(size(a))
+        type(float64x2) :: b_re(size(b,1), size(b,2)), b_im(size(b,1), size(b,2))
+        type(float64x2) :: p_re(size(b,2)), p_im(size(b,2))
+        a_re = a%re; a_im = a%im
+        b_re = b%re; b_im = b%im
+        p_re = mf_matmul_vm(a_re, b_re) - mf_matmul_vm(a_im, b_im)
+        p_im = mf_matmul_vm(a_re, b_im) + mf_matmul_vm(a_im, b_re)
+        res%re = p_re
+        res%im = p_im
     end function
 
     ! ================================================================
