@@ -595,8 +595,8 @@ inline constexpr double exp2_coefs_lo[14] = {
     -3.69709120983025627e-28, 7.77079532866566839e-29};
 
 // exp2 input clamps
-inline constexpr double exp2_min_d = -1022.0;
-inline constexpr double exp2_max_d = 1023.9999999999998;
+inline constexpr double exp2_min = -1022.0;
+inline constexpr double exp2_max = 1023.9999999999998;
 
 // log2 narrow: c[k] = 2/((2k+1)*ln2)
 inline constexpr double log2_narrow_hi[7] = {

@@ -627,7 +627,8 @@ def collect_all():
 
     # --- exp2 ---
     array('exp2_coefs', gen_exp2_coefs(14), 'exp2: c[k] = (ln2)^k / k!')
-    groups.append(dict(kind='exp2_clamp', comment='exp2 input clamps'))
+    groups.append(dict(kind='exp2_clamp', comment='exp2 input clamps',
+                       min=-1022.0, max=1023.9999999999998))
 
     # --- log2 ---
     array('log2_narrow', gen_log2_coefs(7),
@@ -1227,9 +1228,9 @@ def write_cpp(groups, f):
             f.write(f"inline constexpr double {g['name']}3 = {g['v3']:23.17e};\n\n")
 
         elif kind == 'exp2_clamp':
-            f.write("// exp2 input clamps\n")
-            f.write("inline constexpr double exp2_min_d = -1022.0;\n")
-            f.write("inline constexpr double exp2_max_d = 1023.9999999999998;\n\n")
+            f.write(f"// {g['comment']}\n")
+            f.write(f"inline constexpr double exp2_min = {g['min']!r};\n")
+            f.write(f"inline constexpr double exp2_max = {g['max']!r};\n\n")
 
         elif kind == 'array':
             n = len(g['hi'])
@@ -1282,9 +1283,9 @@ def write_f90(groups, f):
             f.write(f"    real(dp), parameter :: {g['name']}3 = {g['v3']:23.17e}_dp\n\n")
 
         elif kind == 'exp2_clamp':
-            f.write("    ! exp2 input clamps\n")
-            f.write("    real(dp), parameter :: exp2_min = -1022.0_dp\n")
-            f.write("    real(dp), parameter :: exp2_max = 1023.9999999999998_dp\n\n")
+            f.write(f"    ! {g['comment']}\n")
+            f.write(f"    real(dp), parameter :: exp2_min = {g['min']!r}_dp\n")
+            f.write(f"    real(dp), parameter :: exp2_max = {g['max']!r}_dp\n\n")
 
         elif kind == 'array':
             n = len(g['hi'])

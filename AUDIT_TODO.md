@@ -104,9 +104,14 @@ already; these are the ones that needed explicit review.
 
 ## Maintainability
 
-- [ ] **M1. Naming drift: `exp2_min_d` (C++) vs `exp2_min` (Fortran).**
-      `scripts/gen_constants.py:1245, 1300`. Pick one; the `write_cpp` /
-      `write_f90` split is the root cause — consolidate.
+- [x] **M1. Naming drift: `exp2_min_d` (C++) vs `exp2_min` (Fortran).**
+      Fixed: `scripts/gen_constants.py` now stores the numeric clamps
+      (`min`, `max`) on the `exp2_clamp` group itself; both `write_cpp`
+      and `write_f90` format from those fields. C++ symbols renamed
+      `exp2_min_d`/`exp2_max_d` → `exp2_min`/`exp2_max` to match
+      Fortran. Regenerated `dd_constants.{hh,f90.inc}`. Only callsite
+      (`dd_exp2_full` in `src/multifloats_math.cc`) updated. All tests
+      pass (C++ + Fortran + fuzz).
 
 - [ ] **M2. Fortran inlines Taylor coefficients already emitted.**
       `fsrc/multifloats.fypp:1611-1620` (sinh), `:1858-1873` (asinh),

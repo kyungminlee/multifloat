@@ -57,8 +57,8 @@ MFD2 dd_exp2_full(MFD2 const &x) {
     r._limbs[1] = 0.0;
     return r;
   }
-  if (x._limbs[0] < exp2_min_d) return MFD2();
-  if (x._limbs[0] > exp2_max_d) {
+  if (x._limbs[0] < exp2_min) return MFD2();
+  if (x._limbs[0] > exp2_max) {
     r._limbs[0] = std::numeric_limits<double>::infinity();
     r._limbs[1] = 0.0;
     return r;
