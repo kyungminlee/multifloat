@@ -1228,23 +1228,9 @@ contains
     end function
 
     ! ================================================================
-    ! Full-DD exp / log kernels (ported from MultiFloats.jl)
+    ! Rational-polynomial helpers for dd_erfc_scaled_full (the only
+    ! remaining Fortran-side math routine that evaluates DD polynomials).
     ! ================================================================
-
-    ! Horner polynomial evaluation in DD. coefs(1) is the constant term.
-    pure function dd_horner(y, coefs_hi, coefs_lo) result(p)
-        type(float64x2), intent(in) :: y
-        real(dp), intent(in) :: coefs_hi(:), coefs_lo(:)
-        type(float64x2) :: p, c
-        integer :: i, n
-        n = size(coefs_hi)
-        p%limbs = [coefs_hi(n), coefs_lo(n)]
-        do i = n - 1, 1, -1
-            p = p * y
-            c%limbs = [coefs_hi(i), coefs_lo(i)]
-            p = p + c
-        end do
-    end function
 
     ! neval: P[n]*x^n + ... + P[0] (Horner, highest degree first in array)
     pure function dd_neval(x, chi, clo) result(p)
