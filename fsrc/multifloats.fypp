@@ -54,13 +54,13 @@
 #:set ORD_OPS = [('<', 'lt'), ('>', 'gt'), ('<=', 'le'), ('>=', 'ge')]
 
 #! Unary math function tables
-#:set UNARY_MF_MF = ['abs', 'sqrt', 'sin', 'cos', 'tan', 'sinpi', 'cospi', 'exp', 'log', 'log10', 'atan', 'asin', 'acos', 'aint', 'anint', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'erf', 'erfc', 'erfc_scaled', 'gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1', 'fraction', 'rrspacing', 'spacing', 'epsilon', 'huge', 'tiny']
+#:set UNARY_MF_MF = ['abs', 'sqrt', 'sin', 'cos', 'tan', 'sinpi', 'cospi', 'tanpi', 'exp', 'log', 'log10', 'atan', 'asin', 'acos', 'atanpi', 'asinpi', 'acospi', 'aint', 'anint', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'erf', 'erfc', 'erfc_scaled', 'gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1', 'fraction', 'rrspacing', 'spacing', 'epsilon', 'huge', 'tiny']
 #:set UNARY_CX_CX = ['sqrt', 'sin', 'cos', 'tan', 'exp', 'log', 'atan', 'asin', 'acos', 'conjg', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh']
 #:set UNARY_CX_MF = ['abs', 'aimag']
 #:set ALL_UNARY = sorted(set(UNARY_MF_MF + UNARY_CX_CX + UNARY_CX_MF))
 
 #! Binary real function tables
-#:set BINARY_REAL = ['sign', 'mod', 'atan2', 'dim', 'modulo', 'hypot', 'nearest']
+#:set BINARY_REAL = ['sign', 'mod', 'atan2', 'atan2pi', 'dim', 'modulo', 'hypot', 'nearest']
 #:set BINARY_MINMAX = ['min', 'max']
 
 #! Array reduction function tables
@@ -660,6 +660,12 @@ module multifloats
     ('dd_asin_full',      'dd_asin'),   &
     ('dd_acos_full',      'dd_acos'),   &
     ('dd_atan_full',      'dd_atan'),   &
+    ('dd_sinpi_full',     'dd_sinpi'),  &
+    ('dd_cospi_full',     'dd_cospi'),  &
+    ('dd_tanpi_full',     'dd_tanpi'),  &
+    ('dd_asinpi_full',    'dd_asinpi'), &
+    ('dd_acospi_full',    'dd_acospi'), &
+    ('dd_atanpi_full',    'dd_atanpi'), &
     ('dd_sinh_full',      'dd_sinh'),   &
     ('dd_cosh_full',      'dd_cosh'),   &
     ('dd_tanh_full',      'dd_tanh'),   &
@@ -675,7 +681,8 @@ module multifloats
     ('dd_bessel_y0_full', 'dd_y0'),     &
     ('dd_bessel_y1_full', 'dd_y1') ]
 #:set C_DELEGATE_BINARY_MAP = [ &
-    ('dd_atan2_full', 'dd_atan2') ]
+    ('dd_atan2_full',   'dd_atan2'),   &
+    ('dd_atan2pi_full', 'dd_atan2pi') ]
 
     interface
 #:for _ffull, csym in C_DELEGATE_UNARY_MAP
@@ -1270,128 +1277,6 @@ contains
         end do
     end function
 
-    ! sinpi / cospi route through the full-DD sin_eval / cos_eval
-    ! kernels evaluated at DD-exact π·rx (|rx| ≤ 0.25 ⇒ |π·rx| ≤ π/4),
-    ! mirroring the C++ path. Reaches ~4e-32 vs the legacy polynomial's
-    ! ~5e-27 ceiling.
-    elemental function dd_sinpi_full(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2) :: res, ax, rx, neg_half_n, pi_dd, pr
-        real(dp) :: n_float
-        integer :: n_mod
-        logical :: sign
-        if (.not. ieee_is_finite(x%limbs(1))) then
-            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
-            return
-        end if
-        sign = x%limbs(1) < 0.0_dp
-        if (sign) then
-            ax%limbs = -x%limbs
-        else
-            ax = x
-        end if
-        n_float = anint(2.0_dp * ax%limbs(1))
-        neg_half_n%limbs = [-0.5_dp * n_float, 0.0_dp]
-        rx = ax + neg_half_n
-        pi_dd%limbs = [pi_dd_hi, pi_dd_lo]
-        pr = pi_dd * rx
-        n_mod = iand(int(n_float, int64), 3_int64)
-        select case (n_mod)
-        case (0); res =  dd_sin_eval(pr)
-        case (1); res =  dd_cos_eval(pr)
-        case (2); res = -dd_sin_eval(pr)
-        case default; res = -dd_cos_eval(pr)
-        end select
-        if (sign) res%limbs = -res%limbs
-    end function
-
-    elemental function dd_cospi_full(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2) :: res, ax, rx, neg_half_n, pi_dd, pr
-        real(dp) :: n_float
-        integer :: n_mod
-        if (.not. ieee_is_finite(x%limbs(1))) then
-            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
-            return
-        end if
-        if (x%limbs(1) < 0.0_dp) then
-            ax%limbs = -x%limbs
-        else
-            ax = x
-        end if
-        n_float = anint(2.0_dp * ax%limbs(1))
-        neg_half_n%limbs = [-0.5_dp * n_float, 0.0_dp]
-        rx = ax + neg_half_n
-        pi_dd%limbs = [pi_dd_hi, pi_dd_lo]
-        pr = pi_dd * rx
-        n_mod = iand(int(n_float, int64), 3_int64)
-        select case (n_mod)
-        case (0); res =  dd_cos_eval(pr)
-        case (1); res = -dd_sin_eval(pr)
-        case (2); res = -dd_cos_eval(pr)
-        case default; res =  dd_sin_eval(pr)
-        end select
-    end function
-
-    ! sin/cos kernel: evaluate the Taylor polynomial directly in x (not
-    ! in x/π), using the Horner scheme on the DD coefficients. These
-    ! compute sin(x)/x and cos(x) for |x| <= π/4.
-    pure function dd_sin_kernel(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2) :: res, x_sq
-        x_sq = x * x
-        res = dd_horner(x_sq, sin_taylor_hi, sin_taylor_lo)
-        res = res * x
-    end function
-
-    pure function dd_cos_kernel(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2) :: res, x_sq
-        x_sq = x * x
-        res = dd_horner(x_sq, cos_taylor_hi, cos_taylor_lo)
-    end function
-
-    ! Evaluate sin(r) for |r| ≤ π/4. If |r| > π/8, shift by π/4 and use
-    ! the angle-addition identity to halve the polynomial argument range.
-    elemental function dd_sin_eval(r) result(res)
-        type(float64x2), intent(in) :: r
-        type(float64x2) :: res, rp, sk, ck, inv_sqrt2
-        real(dp), parameter :: pi8 = 0.392699081698724_dp
-        if (abs(r%limbs(1)) <= pi8) then
-            res = dd_sin_kernel(r)
-        else
-            inv_sqrt2%limbs = [0.7071067811865476_dp, -4.833646656726457e-17_dp]
-            block
-                type(float64x2) :: pi4_dd
-                pi4_dd%limbs = [0.7853981633974483_dp, 3.061616997868383e-17_dp]
-                rp = merge(r - pi4_dd, r + pi4_dd, r%limbs(1) > 0.0_dp)
-            end block
-            sk = dd_sin_kernel(rp); ck = dd_cos_kernel(rp)
-            res = merge((sk + ck) * inv_sqrt2, (sk - ck) * inv_sqrt2, &
-                        r%limbs(1) > 0.0_dp)
-        end if
-    end function
-
-    ! Evaluate cos(r) for |r| ≤ π/4, same π/8 split.
-    elemental function dd_cos_eval(r) result(res)
-        type(float64x2), intent(in) :: r
-        type(float64x2) :: res, rp, sk, ck, inv_sqrt2
-        real(dp), parameter :: pi8 = 0.392699081698724_dp
-        if (abs(r%limbs(1)) <= pi8) then
-            res = dd_cos_kernel(r)
-        else
-            inv_sqrt2%limbs = [0.7071067811865476_dp, -4.833646656726457e-17_dp]
-            block
-                type(float64x2) :: pi4_dd
-                pi4_dd%limbs = [0.7853981633974483_dp, 3.061616997868383e-17_dp]
-                rp = merge(r - pi4_dd, r + pi4_dd, r%limbs(1) > 0.0_dp)
-            end block
-            sk = dd_sin_kernel(rp); ck = dd_cos_kernel(rp)
-            res = merge((ck - sk) * inv_sqrt2, (ck + sk) * inv_sqrt2, &
-                        r%limbs(1) > 0.0_dp)
-        end if
-    end function
-
     ! erfc_scaled(x) = exp(x^2) * erfc(x)
     ! For x >= 1.25, erfc(x) = (1/x)*exp(-x^2 - 0.5625 + R), so the x^2
     ! terms cancel: erfc_scaled(x) = (1/x)*exp(R - 0.5625). This avoids
@@ -1619,6 +1504,8 @@ $:C_DELEGATE_BINARY(ffull, csym)
         res = dd_sinpi_full(x)
 #:elif func == 'cospi'
         res = dd_cospi_full(x)
+#:elif func == 'tanpi'
+        res = dd_tanpi_full(x)
 #:elif func == 'tan'
         res = dd_tan_full(x)
 #:elif func == 'sinh'
@@ -1633,6 +1520,12 @@ $:C_DELEGATE_BINARY(ffull, csym)
         res = dd_acos_full(x)
 #:elif func == 'atan'
         res = dd_atan_full(x)
+#:elif func == 'asinpi'
+        res = dd_asinpi_full(x)
+#:elif func == 'acospi'
+        res = dd_acospi_full(x)
+#:elif func == 'atanpi'
+        res = dd_atanpi_full(x)
 #:elif func == 'asinh'
         res = dd_asinh_full(x)
 #:elif func == 'acosh'
@@ -2221,6 +2114,9 @@ $:C_DELEGATE_BINARY(ffull, csym)
         ! we still call dd_atan2_full(x, y) where x corresponds to the
         ! first argument (y in standard atan2 terms).
         res = dd_atan2_full(x, y)
+#:elif func == 'atan2pi'
+        ! atan2pi(y, x) = atan2(y, x) / π. Same (a, b) convention.
+        res = dd_atan2pi_full(x, y)
 #:elif func == 'nearest'
         ! Approximate one DD ulp toward y on the leading limb only.
         block

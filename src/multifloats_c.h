@@ -59,6 +59,17 @@ DD_API dd_t dd_acos(dd_t a);
 DD_API dd_t dd_atan(dd_t a);
 DD_API dd_t dd_atan2(dd_t a, dd_t b);
 
+/* π-scaled trig: {sin,cos,tan}pi(x) = fn(π·x),
+ *                {asin,acos,atan}pi(x) = fn(x)/π,
+ *                atan2pi(y,x) = atan2(y,x)/π. */
+DD_API dd_t dd_sinpi(dd_t a);
+DD_API dd_t dd_cospi(dd_t a);
+DD_API dd_t dd_tanpi(dd_t a);
+DD_API dd_t dd_asinpi(dd_t a);
+DD_API dd_t dd_acospi(dd_t a);
+DD_API dd_t dd_atanpi(dd_t a);
+DD_API dd_t dd_atan2pi(dd_t a, dd_t b);
+
 /* Hyperbolic */
 DD_API dd_t dd_sinh(dd_t a);
 DD_API dd_t dd_cosh(dd_t a);

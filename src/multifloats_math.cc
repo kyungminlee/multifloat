@@ -145,10 +145,10 @@ MFD2 dd_log10_full(MFD2 const &x) {
   return l2 * dd_pair(log10_2_hi, log10_2_lo);
 }
 
-// ---- sinpi / sin / cos / tan -----------------------------------------------
-// sinpi routes through the full-DD sin_eval kernel on π·rx (|rx| ≤ 0.25,
-// so |π·rx| ≤ π/4, matching the eval range). Used internally by gamma /
-// lgamma reflection.
+// ---- sinpi / cospi / tanpi / sin / cos / tan -------------------------------
+// Family of π-scaled trig: *pi(x) = fn(π·x). Range-reduce 2·|x| to the
+// nearest integer n, leaving |rx| ≤ 0.25, so |π·rx| ≤ π/4 matches the
+// sin/cos eval range. Dispatch by n mod 4 for the quadrant.
 MFD2 dd_sinpi_full(MFD2 const &x) {
   if (!std::isfinite(x._limbs[0])) {
     MFD2 r;
@@ -170,6 +170,52 @@ MFD2 dd_sinpi_full(MFD2 const &x) {
   case 2: res = -dd_sin_eval(pr); break;
   default: res = -dd_cos_eval(pr); break;
   }
+  return sign ? -res : res;
+}
+
+// cospi is even; no sign flip on the result.
+MFD2 dd_cospi_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  MFD2 ax = (x._limbs[0] < 0.0) ? -x : x;
+  double n_float = std::nearbyint(2.0 * ax._limbs[0]);
+  MFD2 rx = ax + dd_pair(-0.5 * n_float, 0.0);
+  MFD2 pi_dd = dd_pair(pi_dd_hi, pi_dd_lo);
+  MFD2 pr = pi_dd * rx;
+  long long n_mod = static_cast<long long>(n_float) & 3LL;
+  switch (n_mod) {
+  case 0: return dd_cos_eval(pr);
+  case 1: return -dd_sin_eval(pr);
+  case 2: return -dd_cos_eval(pr);
+  default: return dd_sin_eval(pr);
+  }
+}
+
+// tanpi: fuses sin/cos eval so both come from one Taylor pair. Poles at
+// half-integers fall out naturally (sin(0)=+0 ⇒ ±c/0 = ±inf).
+MFD2 dd_tanpi_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  bool sign = x._limbs[0] < 0.0;
+  MFD2 ax = sign ? -x : x;
+  double n_float = std::nearbyint(2.0 * ax._limbs[0]);
+  MFD2 rx = ax + dd_pair(-0.5 * n_float, 0.0);
+  MFD2 pi_dd = dd_pair(pi_dd_hi, pi_dd_lo);
+  MFD2 pr = pi_dd * rx;
+  MFD2 s, c;
+  dd_sincos_eval(pr, s, c);
+  long long n_mod = static_cast<long long>(n_float) & 3LL;
+  // n_mod 0, 2: tan(n·π/2 + π·rx) = tan(π·rx) = s/c
+  // n_mod 1, 3: tan(n·π/2 + π·rx) = -cot(π·rx) = -c/s
+  MFD2 res = (n_mod & 1LL) ? -c / s : s / c;
   return sign ? -res : res;
 }
 
@@ -573,6 +619,35 @@ MFD2 dd_atan2_full(MFD2 const &y, MFD2 const &x) {
     else res = -pi_half_dd - res;
   }
   return res;
+}
+
+// ---- inverse π-scaled trig -------------------------------------------------
+// fn_pi(x) = fn(x) / π via the natural path. The DD multiply by inv_pi
+// costs one DD mul (~3 FLOPs) after the main eval.
+MFD2 dd_asinpi_full(MFD2 const &x) {
+  return dd_asin_full(x) * dd_pair(inv_pi_hi, inv_pi_lo);
+}
+MFD2 dd_acospi_full(MFD2 const &x) {
+  return dd_acos_full(x) * dd_pair(inv_pi_hi, inv_pi_lo);
+}
+// atanpi: at ±inf, dd_atan_full bounces through std::atan and returns π/2 to
+// only dp precision — then inv_pi multiplication can't recover the missing
+// low limb. Short-circuit so atanpi(±inf) = ±0.5 exactly.
+MFD2 dd_atanpi_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    if (std::isnan(x._limbs[0])) {
+      r._limbs[0] = x._limbs[0];
+    } else {
+      r._limbs[0] = std::signbit(x._limbs[0]) ? -0.5 : 0.5;
+    }
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  return dd_atan_full(x) * dd_pair(inv_pi_hi, inv_pi_lo);
+}
+MFD2 dd_atan2pi_full(MFD2 const &y, MFD2 const &x) {
+  return dd_atan2_full(y, x) * dd_pair(inv_pi_hi, inv_pi_lo);
 }
 
 // ---- asinh / acosh / atanh -------------------------------------------------
@@ -1451,6 +1526,15 @@ dd_t dd_asin(dd_t a)  { return to(dd_asin_full(from(a))); }
 dd_t dd_acos(dd_t a)  { return to(dd_acos_full(from(a))); }
 dd_t dd_atan(dd_t a)  { return to(dd_atan_full(from(a))); }
 dd_t dd_atan2(dd_t a, dd_t b) { return to(dd_atan2_full(from(a), from(b))); }
+
+// π-scaled trig: fn_pi(x) = fn(π·x) or fn(x)/π.
+dd_t dd_sinpi(dd_t a)  { return to(dd_sinpi_full(from(a))); }
+dd_t dd_cospi(dd_t a)  { return to(dd_cospi_full(from(a))); }
+dd_t dd_tanpi(dd_t a)  { return to(dd_tanpi_full(from(a))); }
+dd_t dd_asinpi(dd_t a) { return to(dd_asinpi_full(from(a))); }
+dd_t dd_acospi(dd_t a) { return to(dd_acospi_full(from(a))); }
+dd_t dd_atanpi(dd_t a) { return to(dd_atanpi_full(from(a))); }
+dd_t dd_atan2pi(dd_t a, dd_t b) { return to(dd_atan2pi_full(from(a), from(b))); }
 
 // Hyperbolic
 dd_t dd_sinh(dd_t a)  { return to(dd_sinh_full(from(a))); }
