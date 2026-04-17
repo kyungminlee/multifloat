@@ -556,11 +556,10 @@ constexpr MultiFloat<T, N> fdim(MultiFloat<T, N> const &x,
 }
 
 // =============================================================================
-// detail:: full-DD math kernels for MultiFloat<double, 2>
+// detail:: inline helpers for DD polynomial evaluation
 //
-// These kernels mirror the Fortran implementation in fsrc/multifloats.fypp.
-// The constant tables are the same hex-literal coefficients ported from
-// MultiFloats.jl (see external/MultiFloats.jl/src/{exp,log,trig}.jl).
+// These are used both by the extern "C" implementations in multifloats_math.cc
+// and by the header-only template helpers (sqrt, trunc, etc.).
 // =============================================================================
 
 // Forward declaration so detail kernels below can use multifloats::sqrt via ADL.
@@ -733,78 +732,29 @@ inline MFD2 dd_deval(MFD2 const &x, double const *hi, double const *lo,
   }
 }
 
-// ---- exp2 / exp / log2 / log / log10 ---------------------------------------
-MFD2 dd_exp2_kernel(MFD2 const &x);
-MFD2 dd_exp2_full(MFD2 const &x);
-MFD2 dd_exp_full(MFD2 const &x);
-MFD2 dd_log2_kernel(MFD2 const &x);
-MFD2 dd_log2_full(MFD2 const &x);
-MFD2 dd_log_full(MFD2 const &x);
-MFD2 dd_log10_full(MFD2 const &x);
+} // namespace detail
 
-// ---- sinpi / cospi / sin / cos / tan ---------------------------------------
-MFD2 dd_sinpi_kernel(MFD2 const &x);
-MFD2 dd_cospi_kernel(MFD2 const &x);
-MFD2 dd_sinpi_full(MFD2 const &x);
-MFD2 dd_cospi_full(MFD2 const &x);
+// =============================================================================
+// C-ABI function declarations and DD conversion helpers
+//
+// All DD math functions are defined as extern "C" in multifloats_math.cc.
+// The C++ templates below call these functions for MultiFloat<double, 2>.
+// =============================================================================
 
-// ---- sin / cos / tan -------------------------------------------------------
-void dd_reduce_pi_half(MFD2 const &x, MFD2 &r, int &n_mod4);
-MFD2 dd_sin_kernel(MFD2 const &x);
-MFD2 dd_cos_kernel(MFD2 const &x);
-MFD2 dd_sin_eval(MFD2 const &r);
-MFD2 dd_cos_eval(MFD2 const &r);
-MFD2 dd_sin_full(MFD2 const &x);
-MFD2 dd_cos_full(MFD2 const &x);
-MFD2 dd_tan_full(MFD2 const &x);
+} // namespace multifloats
+#include "multifloats_c.h"
+namespace multifloats {
 
-// ---- sinh / cosh / tanh ----------------------------------------------------
-MFD2 dd_sinh_full(MFD2 const &x);
-MFD2 dd_cosh_full(MFD2 const &x);
-MFD2 dd_tanh_full(MFD2 const &x);
-
-// ---- pow -------------------------------------------------------------------
-MFD2 dd_pow_full(MFD2 const &x, MFD2 const &y);
-
-// ---- asin / acos / atan / atan2 (Newton on full-DD forward) ---------------
-MFD2 dd_asin_full(MFD2 const &x);
-MFD2 dd_acos_full(MFD2 const &x);
-MFD2 dd_atan_full(MFD2 const &x);
-MFD2 dd_atan2_full(MFD2 const &y, MFD2 const &x);
-
-// ---- asinh / acosh / atanh -------------------------------------------------
-MFD2 dd_asinh_full(MFD2 const &x);
-MFD2 dd_acosh_full(MFD2 const &x);
-MFD2 dd_atanh_full(MFD2 const &x);
-
-// ---- erf / erfc (piecewise rational, ported from libquadmath erfq.c) -------
-MFD2 dd_erf_full(MFD2 const &x);
-MFD2 dd_erfc_full(MFD2 const &x);
-
-// ---- tgamma / lgamma -------------------------------------------------------
-MFD2 dd_lgamma_stirling(MFD2 const &x);
-MFD2 dd_lgamma_stirling_shift(MFD2 const &x);
-MFD2 dd_lgamma_full(MFD2 const &x);
-MFD2 dd_tgamma_full(MFD2 const &x);
-
-// ---- Bessel functions (piecewise rational, from libquadmath j0q.c/j1q.c) ---
-MFD2 dd_bessel_j0_full(MFD2 const &x);
-MFD2 dd_bessel_j1_full(MFD2 const &x);
-MFD2 dd_bessel_y0_full(MFD2 const &x);
-MFD2 dd_bessel_y1_full(MFD2 const &x);
-
+namespace detail {
+inline dd_t to_dd(MFD2 const &x) { return {x._limbs[0], x._limbs[1]}; }
+inline MFD2 from_dd(dd_t x) { MFD2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
 } // namespace detail
 
 // =============================================================================
 // Power, exponential and logarithm
 //
-// For T == double && N == 2 these use the same polynomial / table-based
-// kernels as the Fortran module (ported from MultiFloats.jl). Other (T, N)
-// combinations fall back to the leading-limb std:: call (N == 1) or a
-// derivative-corrected approach (N == 2 with non-double T).
-// against the leading-limb std:: implementation, which yields ~2x the
-// precision of double but does not necessarily reach the full ~106-bit
-// double-double precision.
+// For T == double && N == 2 these call the extern "C" dd_* functions which
+// use Estrin polynomial evaluation and are compiled with full optimization.
 // =============================================================================
 
 template <typename T, std::size_t N>
@@ -857,7 +807,7 @@ MultiFloat<T, N> exp(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::exp(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_exp_full(x);
+    return detail::from_dd(::dd_exp(detail::to_dd(x)));
   } else {
     T e = std::exp(x._limbs[0]);
     MultiFloat<T, N> e_dd(e);
@@ -872,7 +822,7 @@ MultiFloat<T, N> exp2(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::exp2(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_exp2_full(x);
+    return detail::from_dd(::dd_exp2(detail::to_dd(x)));
   } else {
     T e = std::exp2(x._limbs[0]);
     const T ln2 = std::log(T(2));
@@ -899,7 +849,7 @@ MultiFloat<T, N> log(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::log(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_log_full(x);
+    return detail::from_dd(::dd_log(detail::to_dd(x)));
   } else {
     T l = std::log(x._limbs[0]);
     return MultiFloat<T, N>(l) +
@@ -914,7 +864,7 @@ MultiFloat<T, N> log10(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::log10(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_log10_full(x);
+    return detail::from_dd(::dd_log10(detail::to_dd(x)));
   } else {
     const T inv_ln10 = T(1) / std::log(T(10));
     return log(x) * MultiFloat<T, N>(inv_ln10);
@@ -928,7 +878,7 @@ MultiFloat<T, N> log2(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::log2(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_log2_full(x);
+    return detail::from_dd(::dd_log2(detail::to_dd(x)));
   } else {
     const T inv_ln2 = T(1) / std::log(T(2));
     return log(x) * MultiFloat<T, N>(inv_ln2);
@@ -953,7 +903,7 @@ MultiFloat<T, N> pow(MultiFloat<T, N> const &x, MultiFloat<T, N> const &y) {
     r._limbs[0] = std::pow(x._limbs[0], y._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_pow_full(x, y);
+    return detail::from_dd(::dd_pow(detail::to_dd(x), detail::to_dd(y)));
   } else {
     if (x._limbs[0] == T(0) && y._limbs[0] == T(0)) {
       return MultiFloat<T, N>(T(1));
@@ -973,7 +923,7 @@ MultiFloat<T, N> sin(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::sin(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_sin_full(x);
+    return detail::from_dd(::dd_sin(detail::to_dd(x)));
   } else {
     T s = std::sin(x._limbs[0]);
     T c = std::cos(x._limbs[0]);
@@ -989,7 +939,7 @@ MultiFloat<T, N> cos(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::cos(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_cos_full(x);
+    return detail::from_dd(::dd_cos(detail::to_dd(x)));
   } else {
     T s = std::sin(x._limbs[0]);
     T c = std::cos(x._limbs[0]);
@@ -1005,7 +955,7 @@ MultiFloat<T, N> tan(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::tan(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_tan_full(x);
+    return detail::from_dd(::dd_tan(detail::to_dd(x)));
   } else {
     return sin(x) / cos(x);
   }
@@ -1018,7 +968,7 @@ MultiFloat<T, N> asin(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::asin(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_asin_full(x);
+    return detail::from_dd(::dd_asin(detail::to_dd(x)));
   } else {
     T a = std::asin(x._limbs[0]);
     MultiFloat<T, N> denom = sqrt(MultiFloat<T, N>(T(1)) - x * x);
@@ -1033,7 +983,7 @@ MultiFloat<T, N> acos(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::acos(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_acos_full(x);
+    return detail::from_dd(::dd_acos(detail::to_dd(x)));
   } else {
     T a = std::acos(x._limbs[0]);
     MultiFloat<T, N> denom = sqrt(MultiFloat<T, N>(T(1)) - x * x);
@@ -1048,7 +998,7 @@ MultiFloat<T, N> atan(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::atan(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_atan_full(x);
+    return detail::from_dd(::dd_atan(detail::to_dd(x)));
   } else {
     T a = std::atan(x._limbs[0]);
     MultiFloat<T, N> denom = MultiFloat<T, N>(T(1)) + x * x;
@@ -1063,7 +1013,7 @@ MultiFloat<T, N> atan2(MultiFloat<T, N> const &y, MultiFloat<T, N> const &x) {
     r._limbs[0] = std::atan2(y._limbs[0], x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_atan2_full(y, x);
+    return detail::from_dd(::dd_atan2(detail::to_dd(y), detail::to_dd(x)));
   } else {
     T a = std::atan2(y._limbs[0], x._limbs[0]);
     MultiFloat<T, N> num = x * MultiFloat<T, N>(y._limbs[1]) -
@@ -1084,7 +1034,7 @@ MultiFloat<T, N> sinh(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::sinh(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_sinh_full(x);
+    return detail::from_dd(::dd_sinh(detail::to_dd(x)));
   } else {
     T s = std::sinh(x._limbs[0]);
     T c = std::cosh(x._limbs[0]);
@@ -1100,7 +1050,7 @@ MultiFloat<T, N> cosh(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::cosh(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_cosh_full(x);
+    return detail::from_dd(::dd_cosh(detail::to_dd(x)));
   } else {
     T s = std::sinh(x._limbs[0]);
     T c = std::cosh(x._limbs[0]);
@@ -1116,7 +1066,7 @@ MultiFloat<T, N> tanh(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::tanh(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_tanh_full(x);
+    return detail::from_dd(::dd_tanh(detail::to_dd(x)));
   } else {
     return sinh(x) / cosh(x);
   }
@@ -1129,7 +1079,7 @@ MultiFloat<T, N> asinh(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::asinh(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_asinh_full(x);
+    return detail::from_dd(::dd_asinh(detail::to_dd(x)));
   } else {
     // d/dx asinh(x) = 1/sqrt(1 + x^2)
     T a = std::asinh(x._limbs[0]);
@@ -1145,7 +1095,7 @@ MultiFloat<T, N> acosh(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::acosh(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_acosh_full(x);
+    return detail::from_dd(::dd_acosh(detail::to_dd(x)));
   } else {
     // d/dx acosh(x) = 1/sqrt(x^2 - 1)
     T a = std::acosh(x._limbs[0]);
@@ -1161,7 +1111,7 @@ MultiFloat<T, N> atanh(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::atanh(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_atanh_full(x);
+    return detail::from_dd(::dd_atanh(detail::to_dd(x)));
   } else {
     // d/dx atanh(x) = 1/(1 - x^2)
     T a = std::atanh(x._limbs[0]);
@@ -1181,7 +1131,7 @@ MultiFloat<T, N> erf(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::erf(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_erf_full(x);
+    return detail::from_dd(::dd_erf(detail::to_dd(x)));
   } else {
     // d/dx erf(x) = 2/sqrt(pi) * exp(-x^2)
     const T two_over_sqrt_pi = T(2) / std::sqrt(std::acos(T(-1)));
@@ -1199,7 +1149,7 @@ MultiFloat<T, N> erfc(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::erfc(x._limbs[0]);
     return r;
   } else if constexpr (std::is_same_v<T, double>) {
-    return detail::dd_erfc_full(x);
+    return detail::from_dd(::dd_erfc(detail::to_dd(x)));
   } else {
     const T two_over_sqrt_pi = T(2) / std::sqrt(std::acos(T(-1)));
     T e = std::erfc(x._limbs[0]);
@@ -1212,7 +1162,7 @@ MultiFloat<T, N> erfc(MultiFloat<T, N> const &x) {
 template <typename T, std::size_t N>
 MultiFloat<T, N> tgamma(MultiFloat<T, N> const &x) {
   if constexpr (N == 2 && std::is_same_v<T, double>) {
-    return detail::dd_tgamma_full(x);
+    return detail::from_dd(::dd_tgamma(detail::to_dd(x)));
   } else {
     MultiFloat<T, N> r;
     r._limbs[0] = std::tgamma(x._limbs[0]);
@@ -1223,7 +1173,7 @@ MultiFloat<T, N> tgamma(MultiFloat<T, N> const &x) {
 template <typename T, std::size_t N>
 MultiFloat<T, N> lgamma(MultiFloat<T, N> const &x) {
   if constexpr (N == 2 && std::is_same_v<T, double>) {
-    return detail::dd_lgamma_full(x);
+    return detail::from_dd(::dd_lgamma(detail::to_dd(x)));
   } else {
     MultiFloat<T, N> r;
     r._limbs[0] = std::lgamma(x._limbs[0]);
@@ -1238,7 +1188,7 @@ MultiFloat<T, N> lgamma(MultiFloat<T, N> const &x) {
 template <typename T, std::size_t N>
 MultiFloat<T, N> bessel_j0(MultiFloat<T, N> const &x) {
   if constexpr (N == 2 && std::is_same_v<T, double>) {
-    return detail::dd_bessel_j0_full(x);
+    return detail::from_dd(::dd_j0(detail::to_dd(x)));
   } else {
     MultiFloat<T, N> r;
     r._limbs[0] = ::j0(x._limbs[0]);
@@ -1249,7 +1199,7 @@ MultiFloat<T, N> bessel_j0(MultiFloat<T, N> const &x) {
 template <typename T, std::size_t N>
 MultiFloat<T, N> bessel_j1(MultiFloat<T, N> const &x) {
   if constexpr (N == 2 && std::is_same_v<T, double>) {
-    return detail::dd_bessel_j1_full(x);
+    return detail::from_dd(::dd_j1(detail::to_dd(x)));
   } else {
     MultiFloat<T, N> r;
     r._limbs[0] = ::j1(x._limbs[0]);
@@ -1260,7 +1210,7 @@ MultiFloat<T, N> bessel_j1(MultiFloat<T, N> const &x) {
 template <typename T, std::size_t N>
 MultiFloat<T, N> bessel_y0(MultiFloat<T, N> const &x) {
   if constexpr (N == 2 && std::is_same_v<T, double>) {
-    return detail::dd_bessel_y0_full(x);
+    return detail::from_dd(::dd_y0(detail::to_dd(x)));
   } else {
     MultiFloat<T, N> r;
     r._limbs[0] = ::y0(x._limbs[0]);
@@ -1271,7 +1221,7 @@ MultiFloat<T, N> bessel_y0(MultiFloat<T, N> const &x) {
 template <typename T, std::size_t N>
 MultiFloat<T, N> bessel_y1(MultiFloat<T, N> const &x) {
   if constexpr (N == 2 && std::is_same_v<T, double>) {
-    return detail::dd_bessel_y1_full(x);
+    return detail::from_dd(::dd_y1(detail::to_dd(x)));
   } else {
     MultiFloat<T, N> r;
     r._limbs[0] = ::y1(x._limbs[0]);

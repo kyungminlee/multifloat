@@ -43,7 +43,9 @@ DD_API dd_t dd_fma(dd_t a, dd_t b, dd_t c);
 
 /* Exponential / logarithmic */
 DD_API dd_t dd_exp(dd_t a);
+DD_API dd_t dd_exp2(dd_t a);
 DD_API dd_t dd_log(dd_t a);
+DD_API dd_t dd_log2(dd_t a);
 DD_API dd_t dd_log10(dd_t a);
 
 /* Trigonometric */
