@@ -126,7 +126,11 @@ MFD2 dd_log_full(MFD2 const &x) {
     r._limbs[1] = 0.0;
     return r;
   }
-  return dd_log2_full(x) * dd_pair(ln_2_hi, ln_2_lo);
+  // log2(0) = -inf. DD multiply (-inf, 0) * (ln_2_hi, ln_2_lo) would refine
+  // into (-inf, NaN) because the two_prod FMA hits -inf + inf; short-circuit.
+  MFD2 l2 = dd_log2_full(x);
+  if (!std::isfinite(l2._limbs[0])) return l2;
+  return l2 * dd_pair(ln_2_hi, ln_2_lo);
 }
 
 MFD2 dd_log10_full(MFD2 const &x) {
@@ -136,7 +140,9 @@ MFD2 dd_log10_full(MFD2 const &x) {
     r._limbs[1] = 0.0;
     return r;
   }
-  return dd_log2_full(x) * dd_pair(log10_2_hi, log10_2_lo);
+  MFD2 l2 = dd_log2_full(x);
+  if (!std::isfinite(l2._limbs[0])) return l2;
+  return l2 * dd_pair(log10_2_hi, log10_2_lo);
 }
 
 // ---- sinpi / sin / cos / tan -----------------------------------------------
