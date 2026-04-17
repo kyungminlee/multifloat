@@ -7,6 +7,8 @@ target_include_directories(multifloats
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# Hide all C++ symbols; only extern "C" dd_* functions are exported.
+set_target_properties(multifloats PROPERTIES CXX_VISIBILITY_PRESET hidden)
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "")
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(multifloats PRIVATE -O3 -flto -ffat-lto-objects)
