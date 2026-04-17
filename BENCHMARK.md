@@ -181,7 +181,7 @@ values > 1× mean multifloats is faster); **err** = max\_rel from the
 | arr\_minval (n=8) | original: chained DD compare | full DD | 6.0e-33 | 6.0e-33 | 6.0e-33 | **3.0×** | **5.2×** | **5.5×** |
 | arr\_dot (n=8) | original: fused multiply-accumulate with periodic renormalization | full DD | 2.1e-31 | 1.0e-31 | 2.1e-31 | **3.6×** | **4.6×** | **4.1×** |
 | arr\_norm2 (n=8) | original: sqrt(dot(x,x)) | full DD | 5.2e-32 | 6.4e-32 | 5.2e-32 | **5.0×** | **6.8×** | **6.5×** |
-| arr\_matmul (8×8\*8) | original: AXPY-order C kernel with compile-time-fixed-M dispatch for small m | full DD | 7.1e-30 | 8.8e-30 | 7.1e-30 | **2.9×** | 0.8× (pre-reorder) | 0.58× (pre-reorder) |
+| arr\_matmul (8×8\*8) | original: AXPY-order C kernel, MR=8 register-blocked panels + 1..7 tail, periodic renorm | full DD | 7.1e-30 | 8.8e-30 | 7.1e-30 | **2.7×** | 0.8× (pre-reorder) | 0.58× (pre-reorder) |
 
 ## C++: `MultiFloat<double,2>` vs `__float128`
 
@@ -374,15 +374,19 @@ independent measurements on that system.
 
 - **Array reductions** (`dot_product`, `matmul`) use a fused multiply-
   accumulate kernel that computes the product's error-free representation
-  and accumulates corrections into a scalar `s_lo`. `dot_product` lives in
-  Fortran and uses periodic renormalization (configurable via
+  and accumulates corrections into a scalar `s_lo`. `dot_product` lives
+  in Fortran and uses periodic renormalization (configurable via
   `mf_set_fma_renorm_interval`). `matmul` routes to a C kernel
   (`src/multifloats_math.cc`) in AXPY / gaxpy loop order: outer over the
   shared dim `p`, inner over the output row `i`, so A is read as
-  contiguous columns and the m output accumulators are independent. For
-  small m (1–8, plus 16) the C kernel dispatches to a compile-time-fixed
-  `dd_gaxpy_*_fixed<M>` template so the accumulator pairs stay in
-  registers and the inner loop fully unrolls — the M1 Max 8×8·8 matvec
-  then runs at ~2.9× vs libquadmath, approaching `dot_product`'s n=8
-  speed. Larger m falls back to a generic AXPY loop that accumulates
-  in-place on the output buffer.
+  contiguous columns and the m output accumulators are independent. The
+  kernel register-blocks any `m` via a strided panel template
+  `dd_gaxpy_mv_panel<MR>` at `MR=8` plus a 1..7-row tail handler (kept
+  `noinline` so the hot path inlines `panel<8>` into `dd_matmul_mv` and
+  the accumulators stay in registers); matrix-matrix calls the same
+  dispatcher per output column. Periodic renormalization — mirroring
+  `mf_set_fma_renorm_interval` and passed through the C ABI — chunks
+  the p-loop so `fast_two_sum` fires between chunks rather than inside
+  the inner loop; when `k ≤ renorm_interval` the chunking scaffold is
+  skipped entirely. M1 Max 8×8·8 matvec runs at ~2.7× vs libquadmath;
+  the same panel template now covers any `m` (no cliff above m=16).
