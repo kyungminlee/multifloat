@@ -113,10 +113,14 @@ already; these are the ones that needed explicit review.
       (`dd_exp2_full` in `src/multifloats_math.cc`) updated. All tests
       pass (C++ + Fortran + fuzz).
 
-- [ ] **M2. Fortran inlines Taylor coefficients already emitted.**
-      `fsrc/multifloats.fypp:1611-1620` (sinh), `:1858-1873` (asinh),
-      `:2206-2220` (atanh). Replace with `dd_horner(x2, *_taylor_hi,
-      *_taylor_lo, N)` using the generated arrays.
+- [x] **M2. Fortran inlines Taylor coefficients already emitted.**
+      Fixed: `dd_sinh_full`, `dd_asinh_full`, `dd_atanh_full` small-|x|
+      branches now call `dd_horner(x*x, {sinh,asinh,atanh}_taylor_hi,
+      *_taylor_lo)` using the generated arrays (removed ~93 lines of
+      duplicated coefficient literals + manual Horner expansion).
+      Benchmarks unchanged to within noise
+      (sinh 0.0447→0.0443s, asinh 0.0639→0.0646s, atanh 0.0503→0.0498s
+      on 40960 random inputs). All tests pass.
 
 - [ ] **M3. Arithmetic-dispatch mega-template in fypp.**
       `fsrc/multifloats.fypp:4565-4744` — single ~180-line body expanded
