@@ -1632,103 +1632,154 @@ contains
     ! sin / cos / tan, seeded by the libm leading-limb call. Quadratic
     ! convergence makes a single iteration enough to reach DD precision.
 
-    elemental function dd_asin_full(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2) :: res, y0, sy, cy, num
-        if (.not. ieee_is_finite(x%limbs(1))) then
-            res%limbs = [asin(x%limbs(1)), 0.0_dp]
-            return
-        end if
-        if (abs(x%limbs(1)) > 1.0_dp) then
-            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
-            return
-        end if
-        y0%limbs = [asin(x%limbs(1)), 0.0_dp]
-        ! Newton: y' = y + (x - sin(y)) / cos(y)
-        sy = dd_sin_full(y0)
-        cy = dd_cos_full(y0)
-        if (abs(cy%limbs(1)) < 1.0e-15_dp) then
-            ! Near ±1: cos(asin(x)) ≈ 0, division is ill-conditioned;
-            ! fall back to the seed (libm precision).
-            res = y0
-            return
-        end if
-        num = x - sy
-        res = y0 + num / cy
-    end function
-
-    elemental function dd_acos_full(x) result(res)
-        type(float64x2), intent(in) :: x
-        type(float64x2) :: res, y0, sy, cy, num
-        if (.not. ieee_is_finite(x%limbs(1))) then
-            res%limbs = [acos(x%limbs(1)), 0.0_dp]
-            return
-        end if
-        if (abs(x%limbs(1)) > 1.0_dp) then
-            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
-            return
-        end if
-        y0%limbs = [acos(x%limbs(1)), 0.0_dp]
-        ! Newton: y' = y - (x - cos(y)) / sin(y)  [d/dy cos = -sin]
-        sy = dd_sin_full(y0)
-        cy = dd_cos_full(y0)
-        if (abs(sy%limbs(1)) < 1.0e-15_dp) then
-            res = y0
-            return
-        end if
-        num = x - cy
-        res = y0 - num / sy
-    end function
-
+    ! ---- atan (table lookup + rational polynomial, from libquadmath atanq.c) ---
+    ! arctan(t) = t + t^3 * P(t^2) / Q(t^2),  |t| <= 0.09375
+    ! Argument reduced via 84-entry table: arctan(x) = atantbl[k] + arctan(t)
     elemental function dd_atan_full(x) result(res)
         type(float64x2), intent(in) :: x
-        type(float64x2) :: res, y0, sy, cy, t, c2, arg, pi_half_dd, one_dd
-        logical :: use_recip
+        type(float64x2) :: res, ax, t, t2, u, tbl, p, q, one_dd, neg1_dd
+        real(dp) :: ax_d, u_d
+        integer :: k
+        logical :: neg
         if (.not. ieee_is_finite(x%limbs(1))) then
             res%limbs = [atan(x%limbs(1)), 0.0_dp]
             return
         end if
-        ! For |x| > 1 the Newton residual (x - tan(y0)) cancels to
-        ! ~ulp(x), capping precision at ~log2(x) bits lost. Apply the
-        ! identity atan(x) = sign(x)·π/2 - atan(1/x) to keep the Newton
-        ! argument in [-1, 1], where the residual stays well-scaled.
-        use_recip = abs(x%limbs(1)) > 1.0_dp
-        if (use_recip) then
+        ax_d = abs(x%limbs(1))
+        if (ax_d < 2.4e-17_dp) then
+            res = x
+            return
+        end if
+        neg = x%limbs(1) < 0.0_dp
+        if (neg) then
+            ax%limbs = [-x%limbs(1), -x%limbs(2)]
+        else
+            ax = x
+        end if
+        if (ax_d >= 10.25_dp) then
+            k = 83
+            neg1_dd%limbs = [-1.0_dp, 0.0_dp]
+            t = neg1_dd / ax
+        else
+            k = int(8.0_dp * ax_d + 0.25_dp)
+            u_d = 0.125_dp * k
+            u%limbs = [u_d, 0.0_dp]
             one_dd%limbs = [1.0_dp, 0.0_dp]
-            arg = one_dd / x
-        else
-            arg = x
+            t = (ax - u) / (one_dd + ax * u)
         end if
-        y0%limbs = [atan(arg%limbs(1)), 0.0_dp]
-        ! Newton: y' = y + cos²(y) * (arg - tan(y))
-        sy = dd_sin_full(y0)
-        cy = dd_cos_full(y0)
-        if (abs(cy%limbs(1)) < 1.0e-15_dp) then
-            res = y0
-        else
-            t = sy / cy
-            c2 = cy * cy
-            res = y0 + c2 * (arg - t)
+        ! arctan(t) = t + t^3 * P(t^2) / Q(t^2)
+        t2 = t * t
+        p = dd_neval(t2, atan_P_hi, atan_P_lo)
+        q = dd_deval(t2, atan_Q_hi, atan_Q_lo)
+        tbl%limbs = [atan_table_hi(k + 1), atan_table_lo(k + 1)]
+        res = tbl + t + t * t2 * p / q
+        if (neg) res%limbs = -res%limbs
+    end function
+
+    ! ---- asin (piecewise rational, from libquadmath asinq.c) -----------------
+    elemental function dd_asin_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, ax, t, s, w, p, q, pi_half, asinref
+        real(dp) :: ax_d
+        logical :: neg
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            res%limbs = [asin(x%limbs(1)), 0.0_dp]
+            return
         end if
-        if (use_recip) then
-            pi_half_dd%limbs = [1.5707963267948966_dp, 6.123233995736766e-17_dp]
-            if (x%limbs(1) > 0.0_dp) then
-                res = pi_half_dd - res
-            else
-                ! atan(x) = -π/2 - atan(1/x), but 1/x < 0 here so
-                ! computed `res` is negative; add to reach -π/2 + (-|res|).
-                res%limbs(1) = -res%limbs(1)
-                res%limbs(2) = -res%limbs(2)
-                res = res - pi_half_dd
-            end if
+        ax_d = abs(x%limbs(1))
+        if (ax_d > 1.0_dp) then
+            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
+            return
+        end if
+        if (ax_d < 2.4e-17_dp) then
+            res = x
+            return
+        end if
+        neg = x%limbs(1) < 0.0_dp
+        if (neg) then
+            ax%limbs = [-x%limbs(1), -x%limbs(2)]
+        else
+            ax = x
+        end if
+        if (ax_d < 0.5_dp) then
+            ! Region 1: asin(x) = x + x*x^2*P(x^2)/Q(x^2)
+            t = ax * ax
+            p = dd_neval(t, asin_pS_hi, asin_pS_lo)
+            q = dd_deval(t, asin_qS_hi, asin_qS_lo)
+            res = ax + ax * t * p / q
+        else if (ax_d < 0.625_dp) then
+            ! Region 2: centered at 0.5625
+            t%limbs = [0.5625_dp, 0.0_dp]
+            t = ax - t
+            p = t * dd_neval(t, asin_rS_hi, asin_rS_lo)
+            q = dd_deval(t, asin_sS_hi, asin_sS_lo)
+            asinref%limbs = [asinr5625_hi, asinr5625_lo]
+            res = asinref + p / q
+        else
+            ! Region 3: half-angle identity
+            w%limbs = [1.0_dp, 0.0_dp]
+            w = w - ax
+            t%limbs = [0.5_dp, 0.0_dp]
+            t = w * t
+            s = mf_sqrt(t)
+            p = dd_neval(t, asin_pS_hi, asin_pS_lo)
+            q = dd_deval(t, asin_qS_hi, asin_qS_lo)
+            w = t * p / q
+            pi_half%limbs = [pi_half_cw1, pi_half_cw2]
+            s%limbs = [2.0_dp * s%limbs(1), 2.0_dp * s%limbs(2)]
+            res = pi_half - (s + s * w)
+        end if
+        if (neg) res%limbs = -res%limbs
+    end function
+
+    ! ---- acos (derived from asin polynomial) ---------------------------------
+    elemental function dd_acos_full(x) result(res)
+        type(float64x2), intent(in) :: x
+        type(float64x2) :: res, t, s, p, q, w, pi_half, pi_dd, two_dd
+        real(dp) :: ax_d
+        if (.not. ieee_is_finite(x%limbs(1))) then
+            res%limbs = [acos(x%limbs(1)), 0.0_dp]
+            return
+        end if
+        ax_d = abs(x%limbs(1))
+        if (ax_d > 1.0_dp) then
+            res%limbs = [ieee_value(0.0_dp, ieee_quiet_nan), 0.0_dp]
+            return
+        end if
+        pi_half%limbs = [pi_half_cw1, pi_half_cw2]
+        if (ax_d <= 0.5_dp) then
+            ! acos(x) = pi/2 - asin(x)
+            res = pi_half - dd_asin_full(x)
+        else if (x%limbs(1) > 0.0_dp) then
+            ! x > 0.5: acos(x) = 2*asin(sqrt((1-x)/2))
+            t%limbs = [1.0_dp, 0.0_dp]
+            t = t - x
+            t%limbs = [0.5_dp * t%limbs(1), 0.5_dp * t%limbs(2)]
+            s = mf_sqrt(t)
+            p = dd_neval(t, asin_pS_hi, asin_pS_lo)
+            q = dd_deval(t, asin_qS_hi, asin_qS_lo)
+            w = t * p / q
+            two_dd%limbs = [2.0_dp, 0.0_dp]
+            res = two_dd * (s + s * w)
+        else
+            ! x < -0.5: acos(x) = pi - 2*asin(sqrt((1+x)/2))
+            t%limbs = [1.0_dp, 0.0_dp]
+            t = t + x
+            t%limbs = [0.5_dp * t%limbs(1), 0.5_dp * t%limbs(2)]
+            s = mf_sqrt(t)
+            p = dd_neval(t, asin_pS_hi, asin_pS_lo)
+            q = dd_deval(t, asin_qS_hi, asin_qS_lo)
+            w = t * p / q
+            two_dd%limbs = [2.0_dp, 0.0_dp]
+            pi_dd%limbs = [pi_dd_hi, pi_dd_lo]
+            res = pi_dd - two_dd * (s + s * w)
         end if
     end function
 
+    ! ---- atan2 ---------------------------------------------------------------
     elemental function dd_atan2_full(y, x) result(res)
         type(float64x2), intent(in) :: y, x
         type(float64x2) :: res, ratio, pi_dd, pi_half_dd
-        ! Use the libm atan2 leading-limb result as the seed and do one
-        ! Newton step on atan(y/x) when both inputs are non-zero finite.
         if (.not. ieee_is_finite(x%limbs(1)) .or. .not. ieee_is_finite(y%limbs(1))) then
             res%limbs = [atan2(y%limbs(1), x%limbs(1)), 0.0_dp]
             return
@@ -1737,11 +1788,9 @@ contains
             res%limbs = [atan2(y%limbs(1), x%limbs(1)), 0.0_dp]
             return
         end if
-        ! High-precision π and π/2 constants for the quadrant correction.
-        pi_dd%limbs      = [3.141592653589793_dp,    1.2246467991473532e-16_dp]
-        pi_half_dd%limbs = [1.5707963267948966_dp,   6.123233995736766e-17_dp]
+        pi_dd%limbs      = [pi_dd_hi, pi_dd_lo]
+        pi_half_dd%limbs = [pi_half_cw1, pi_half_cw2]
         if (abs(x%limbs(1)) >= abs(y%limbs(1))) then
-            ! Result is in the band closest to ±π/2; use atan(y/x).
             ratio = y / x
             res = dd_atan_full(ratio)
             if (x%limbs(1) < 0.0_dp) then
@@ -1752,7 +1801,6 @@ contains
                 end if
             end if
         else
-            ! Use atan2(y, x) = ±π/2 - atan(x/y) to keep |x/y| <= 1.
             ratio = x / y
             res = dd_atan_full(ratio)
             if (y%limbs(1) > 0.0_dp) then

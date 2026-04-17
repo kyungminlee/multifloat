@@ -108,12 +108,10 @@ values > 1× mean multifloats is faster); **err** = max\_rel from the
 | sinpi | Julia: sinpi Horner polynomial, direct | full DD | 4.9e-27 | 4.9e-27 | 4.9e-27 | **3.0×** | **2.8×** | **3.9×** |
 | cospi | Julia: cospi Horner polynomial, direct | full DD | 8.2e-27 | 8.2e-27 | 8.2e-27 | **3.2×** | **2.6×** | **3.8×** |
 | tan | original: sin/cos Taylor kernels + DD divide | full DD | 4.6e-32 | 6.7e-32 | 6.1e-32 | 0.85× | 0.8× | 1.1× |
-| asin | original: Newton step on sin, seeded by libm asin(hi) | full DD | 2.7e-32 | 4.3e-32 | 4.7e-32 | 1.3× | 1.2× | 1.6× |
-| acos | original: Newton step on cos, seeded by libm acos(hi) | full DD | 2.9e-32 | 5.4e-32 | 2.9e-32 | 1.4× | 1.2× | 1.7× |
-| atan | original: Newton on tan + atan(x)=π/2·sign(x)−atan(1/x) for \|x\|>1 | full DD | 5.1e-32 | 4.2e-32 | 5.1e-32 | 0.76× | 0.7× | 0.92× |
-| atan2 | original: Newton step on atan + quadrant correction | full DD | 3.7e-32 | 3.0e-32 | 3.3e-32 | 0.75× | 0.8× | 0.93× |
-
-All M1 Max values are post-fix (13-term Taylor + `atan(x) = π/2·sign(x) − atan(1/x)`).
+| asin | original: piecewise rational P/Q (3 regions, from libquadmath asinq.c) | full DD | 1.7e-32 | 4.3e-32 | 4.7e-32 | **3.6×** | 1.2× | 1.6× |
+| acos | original: asin polynomial + half-angle identity | full DD | 1.9e-32 | 5.4e-32 | 2.9e-32 | **2.9×** | 1.2× | 1.7× |
+| atan | original: 84-entry table lookup + rational P(t²)/Q(t²) (from libquadmath atanq.c) | full DD | 2.6e-32 | 4.2e-32 | 5.1e-32 | **3.1×** | 0.7× | 0.92× |
+| atan2 | original: table-based atan + quadrant correction | full DD | 2.7e-32 | 3.0e-32 | 3.3e-32 | **2.6×** | 0.8× | 0.93× |
 
 ### Hyperbolic
 
@@ -282,10 +280,10 @@ independent measurements on that system.
 | sin | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split | 3.6e-32 | 3.6e-32 | **2.0×** | **2.3×** | **2.7×** |
 | cos | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split | 4.4e-32 | 4.4e-32 | **2.1×** | **2.3×** | **2.4×** |
 | tan | original: sin/cos Taylor kernels + DD divide | 5.2e-32 | 5.2e-32 | 0.97× | 1.1× | 1.1× |
-| asin | original: Newton step on sin, seeded by libm asin(hi) | 3.5e-32 | 4.1e-32 | 1.5× | 1.7× | **2.0×** |
-| acos | original: Newton step on cos, seeded by libm acos(hi) | 7.1e-32 | 2.4e-32 | 1.5× | 1.7× | **2.3×** |
-| atan | original: Newton on tan + atan(x)=π/2·sign(x)−atan(1/x) for \|x\|>1 | 5.3e-32 | 5.3e-32 | 0.84× | 1.0× | 1.2× |
-| atan2 | original: Newton step on atan + quadrant correction | 3.7e-32 | 3.7e-32 | 0.90× | 1.1× | 1.3× |
+| asin | original: piecewise rational P/Q (3 regions, from libquadmath asinq.c) | 1.9e-32 | 4.1e-32 | **5.6×** | 1.7× | **2.0×** |
+| acos | original: asin polynomial + half-angle identity | 1.4e-32 | 2.4e-32 | **5.3×** | 1.7× | **2.3×** |
+| atan | original: 84-entry table lookup + rational P(t²)/Q(t²) (from libquadmath atanq.c) | 2.5e-32 | 5.3e-32 | **3.5×** | 1.0× | 1.2× |
+| atan2 | original: table-based atan + quadrant correction | 3.2e-32 | 3.7e-32 | **2.9×** | 1.1× | 1.3× |
 
 ### Hyperbolic
 
@@ -335,13 +333,12 @@ independent measurements on that system.
   quotients > 2³¹, making the reduction loop run `|x/y|` iterations
   instead of one — one `mod(6.57e11, -44.65)` call was taking ~5 minutes.
   Fix: switch to `aint` (real-returning). (2) The 10-term sin/cos Taylor
-  truncated at ~1e-23 at x² ≈ (π/8)², capping Newton-seeded asin/acos
-  at ~1e-26. Fix: extend to 13 terms (Apple M1 was silently at ~5e-27 for
-  the same reason but within the documented "near-DD" tolerance).
-  (3) `atan(x)` for |x|>1 had ~log₂(x) bits of cancellation in the
-  `x − tan(y₀)` Newton residual, giving ~1e-17 at |x|=10¹⁵. Fix: use
-  `atan(x) = sign(x)·π/2 − atan(1/x)` so the Newton argument stays
-  in [−1, 1]. All three fixes are in both the Fortran and C++ codebases
+  truncated at ~1e-23 at x² ≈ (π/8)², capping precision. Fix: extend to
+  13 terms. (3) Inverse trig functions (asin, acos, atan) were rewritten
+  from Newton-on-sin/cos to piecewise rational polynomials from
+  libquadmath (table-based atan, 3-region asin), eliminating the
+  expensive sin/cos calls and improving both speed and precision.
+  All three fixes are in both the Fortran and C++ codebases
   and benefit both platforms.
 
 - **tgamma / lgamma** (both C++ and Fortran) use a native double-double
@@ -354,10 +351,13 @@ independent measurements on that system.
   for negative x. Both deliver full DD precision (max\_rel ~9e-30 / ~5e-28
   on the 1M fuzz).
 
-- **Newton-corrected** functions (asin, acos, atan, atan2) compute a libm
-  seed `f(hi)` and refine with one Newton step using the DD-accurate inverse
-  function (sin, cos, tan). Quadratic convergence makes one step sufficient
-  for full DD precision.
+- **Inverse trigonometric** functions (asin, acos, atan, atan2) use
+  piecewise rational polynomial approximations ported from libquadmath's
+  `asinq.c` / `atanq.c`. `atan` uses an 84-entry lookup table for
+  argument reduction followed by a small rational `P(t²)/Q(t²)`. `asin`
+  uses three regions (|x|<0.5, 0.5–0.625 centered at 0.5625, 0.625–1 via
+  half-angle identity). `acos` derives from the `asin` polynomial with
+  domain-appropriate formulas to avoid cancellation near ±1.
 
 - **erf / erfc** use piecewise rational approximation coefficients from
   libquadmath's `erfq.c`, evaluated in full DD arithmetic via Estrin's

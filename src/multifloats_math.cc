@@ -359,47 +359,10 @@ MFD2 dd_pow_full(MFD2 const &x, MFD2 const &y) {
   return dd_exp_full(y * dd_log_full(x));
 }
 
-// ---- asin / acos / atan / atan2 (Newton on full-DD forward) ---------------
-MFD2 dd_asin_full(MFD2 const &x) {
-  if (!std::isfinite(x._limbs[0])) {
-    MFD2 r;
-    r._limbs[0] = std::asin(x._limbs[0]);
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  if (std::abs(x._limbs[0]) > 1.0) {
-    MFD2 r;
-    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  MFD2 y0 = dd_pair(std::asin(x._limbs[0]), 0.0);
-  MFD2 sy = dd_sin_full(y0);
-  MFD2 cy = dd_cos_full(y0);
-  if (std::abs(cy._limbs[0]) < 1e-15) return y0;
-  return y0 + (x - sy) / cy;
-}
-
-MFD2 dd_acos_full(MFD2 const &x) {
-  if (!std::isfinite(x._limbs[0])) {
-    MFD2 r;
-    r._limbs[0] = std::acos(x._limbs[0]);
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  if (std::abs(x._limbs[0]) > 1.0) {
-    MFD2 r;
-    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  MFD2 y0 = dd_pair(std::acos(x._limbs[0]), 0.0);
-  MFD2 sy = dd_sin_full(y0);
-  MFD2 cy = dd_cos_full(y0);
-  if (std::abs(sy._limbs[0]) < 1e-15) return y0;
-  return y0 - (x - cy) / sy;
-}
-
+// ---- atan (table lookup + rational polynomial, from libquadmath atanq.c) ---
+// arctan(t) = t + t^3 * P(t^2) / Q(t^2),  |t| <= 0.09375
+// Argument reduced via 84-entry table: arctan(x) = atantbl[k] + arctan(t)
+// where t = (x - k/8) / (1 + x*k/8).
 MFD2 dd_atan_full(MFD2 const &x) {
   if (!std::isfinite(x._limbs[0])) {
     MFD2 r;
@@ -407,37 +370,123 @@ MFD2 dd_atan_full(MFD2 const &x) {
     r._limbs[1] = 0.0;
     return r;
   }
-  // For |x| > 1 the Newton residual (x - tan(y0)) cancels to ~ulp(x),
-  // capping precision at ~log2(x) bits lost. Apply the identity
-  // atan(x) = sign(x)·π/2 - atan(1/x) to keep the Newton argument in
-  // [-1, 1], where the residual stays well-scaled.
-  bool use_recip = std::abs(x._limbs[0]) > 1.0;
-  MFD2 arg = use_recip ? (dd_pair(1.0, 0.0) / x) : x;
-  MFD2 y0 = dd_pair(std::atan(arg._limbs[0]), 0.0);
-  MFD2 sy = dd_sin_full(y0);
-  MFD2 cy = dd_cos_full(y0);
-  MFD2 res;
-  if (std::abs(cy._limbs[0]) < 1e-15) {
-    res = y0;
+  double ax_d = std::abs(x._limbs[0]);
+  if (ax_d < 2.4e-17) return x;  // atan(x) ≈ x for tiny x
+
+  bool neg = x._limbs[0] < 0.0;
+  MFD2 ax = neg ? -x : x;
+
+  int k;
+  MFD2 t;
+  if (ax_d >= 10.25) {
+    k = 83;
+    t = MFD2(-1.0) / ax;
   } else {
-    MFD2 t = sy / cy;
-    MFD2 c2 = cy * cy;
-    res = y0 + c2 * (arg - t);
+    k = static_cast<int>(8.0 * ax_d + 0.25);
+    double u_d = 0.125 * k;
+    MFD2 u = dd_pair(u_d, 0.0);  // exact in double
+    t = (ax - u) / (MFD2(1.0) + ax * u);
   }
-  if (use_recip) {
-    MFD2 pi_half_dd = dd_pair(1.5707963267948966, 6.123233995736766e-17);
-    if (x._limbs[0] > 0.0) {
-      res = pi_half_dd - res;
-    } else {
-      // atan(x) = -π/2 - atan(1/x), with 1/x < 0 giving res < 0.
-      res._limbs[0] = -res._limbs[0];
-      res._limbs[1] = -res._limbs[1];
-      res = res - pi_half_dd;
-    }
-  }
-  return res;
+
+  // arctan(t) = t + t^3 * P(t^2) / Q(t^2)
+  MFD2 t2 = t * t;
+  MFD2 p = dd_neval(t2, atan_P_hi, atan_P_lo, 4);
+  MFD2 q = dd_deval(t2, atan_Q_hi, atan_Q_lo, 4);
+  MFD2 res = dd_pair(atan_table_hi[k], atan_table_lo[k])
+           + t + t * t2 * p / q;
+
+  return neg ? -res : res;
 }
 
+// ---- asin (piecewise rational, from libquadmath asinq.c) -------------------
+// Region 1: |x| < 0.5      — asin(x) = x + x*x^2*P(x^2)/Q(x^2)
+// Region 2: 0.5 <= |x| < 0.625 — centered at 0.5625
+// Region 3: 0.625 <= |x| < 1   — half-angle: asin(x) = pi/2 - 2*asin(sqrt((1-x)/2))
+MFD2 dd_asin_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::asin(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  double ax_d = std::abs(x._limbs[0]);
+  if (ax_d > 1.0) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (ax_d < 2.4e-17) return x;  // asin(x) ≈ x for tiny x
+
+  bool neg = x._limbs[0] < 0.0;
+  MFD2 ax = neg ? -x : x;
+  MFD2 res;
+
+  if (ax_d < 0.5) {
+    // Region 1: asin(x) = x + x*x^2*P(x^2)/Q(x^2)
+    MFD2 t = ax * ax;
+    MFD2 p = dd_neval(t, asin_pS_hi, asin_pS_lo, 9);
+    MFD2 q = dd_deval(t, asin_qS_hi, asin_qS_lo, 8);
+    res = ax + ax * t * p / q;
+  } else if (ax_d < 0.625) {
+    // Region 2: centered at 0.5625
+    MFD2 t = ax - MFD2(0.5625);
+    MFD2 p = t * dd_neval(t, asin_rS_hi, asin_rS_lo, 10);
+    MFD2 q = dd_deval(t, asin_sS_hi, asin_sS_lo, 9);
+    res = dd_pair(asinr5625_hi, asinr5625_lo) + p / q;
+  } else {
+    // Region 3: half-angle identity
+    MFD2 w = MFD2(1.0) - ax;
+    MFD2 t = w * MFD2(0.5);
+    MFD2 s = sqrt(t);
+    MFD2 p = dd_neval(t, asin_pS_hi, asin_pS_lo, 9);
+    MFD2 q = dd_deval(t, asin_qS_hi, asin_qS_lo, 8);
+    MFD2 w2 = t * p / q;
+    res = dd_pair(pi_half_cw1, pi_half_cw2) - MFD2(2.0) * (s + s * w2);
+  }
+
+  return neg ? -res : res;
+}
+
+// ---- acos (derived from asin polynomial) ------------------------------------
+MFD2 dd_acos_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    r._limbs[0] = std::acos(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  double ax_d = std::abs(x._limbs[0]);
+  if (ax_d > 1.0) {
+    MFD2 r;
+    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+
+  MFD2 pi_half = dd_pair(pi_half_cw1, pi_half_cw2);
+
+  if (ax_d <= 0.5) {
+    // acos(x) = pi/2 - asin(x) — no cancellation since result ∈ [π/3, 2π/3]
+    return pi_half - dd_asin_full(x);
+  } else if (x._limbs[0] > 0.0) {
+    // x > 0.5: acos(x) = 2*asin(sqrt((1-x)/2))
+    MFD2 t = (MFD2(1.0) - x) * MFD2(0.5);
+    MFD2 s = sqrt(t);
+    MFD2 p = dd_neval(t, asin_pS_hi, asin_pS_lo, 9);
+    MFD2 q = dd_deval(t, asin_qS_hi, asin_qS_lo, 8);
+    return MFD2(2.0) * (s + s * t * p / q);
+  } else {
+    // x < -0.5: acos(x) = pi - 2*asin(sqrt((1+x)/2))
+    MFD2 t = (MFD2(1.0) + x) * MFD2(0.5);
+    MFD2 s = sqrt(t);
+    MFD2 p = dd_neval(t, asin_pS_hi, asin_pS_lo, 9);
+    MFD2 q = dd_deval(t, asin_qS_hi, asin_qS_lo, 8);
+    return dd_pair(pi_dd_hi, pi_dd_lo) - MFD2(2.0) * (s + s * t * p / q);
+  }
+}
+
+// ---- atan2 ------------------------------------------------------------------
 MFD2 dd_atan2_full(MFD2 const &y, MFD2 const &x) {
   if (!std::isfinite(x._limbs[0]) || !std::isfinite(y._limbs[0])) {
     MFD2 r;
@@ -451,8 +500,8 @@ MFD2 dd_atan2_full(MFD2 const &y, MFD2 const &x) {
     r._limbs[1] = 0.0;
     return r;
   }
-  MFD2 pi_dd = dd_pair(3.141592653589793, 1.2246467991473532e-16);
-  MFD2 pi_half_dd = dd_pair(1.5707963267948966, 6.123233995736766e-17);
+  MFD2 pi_dd = dd_pair(pi_dd_hi, pi_dd_lo);
+  MFD2 pi_half_dd = dd_pair(pi_half_cw1, pi_half_cw2);
   MFD2 res;
   if (std::abs(x._limbs[0]) >= std::abs(y._limbs[0])) {
     res = dd_atan_full(y / x);
