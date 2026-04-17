@@ -1,6 +1,8 @@
 #!/bin/bash
-# Localize all non-dd_* symbols in a static archive so that only the
-# extern "C" dd_* API functions are externally visible.
+# Clean up a static archive so that only the extern "C" dd_* API
+# functions are visible. Two steps:
+#   1. Localize non-dd_* global symbols (nmedit/objcopy)
+#   2. Strip local symbol names (strip -x) for a clean nm output
 set -e
 LIB="$1"
 if [ "$(uname)" = "Darwin" ]; then
@@ -8,6 +10,8 @@ if [ "$(uname)" = "Darwin" ]; then
     nm -g "$LIB" | grep ' T _dd_' | awk '{print $3}' > "$EXPORTS"
     nmedit -s "$EXPORTS" "$LIB"
     rm "$EXPORTS"
+    strip -x "$LIB"
 elif [ "$(uname)" = "Linux" ]; then
     objcopy --localize-hidden "$LIB"
+    strip --strip-unneeded "$LIB"
 fi
