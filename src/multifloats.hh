@@ -787,6 +787,12 @@ MFD2 dd_lgamma_stirling_shift(MFD2 const &x);
 MFD2 dd_lgamma_full(MFD2 const &x);
 MFD2 dd_tgamma_full(MFD2 const &x);
 
+// ---- Bessel functions (piecewise rational, from libquadmath j0q.c/j1q.c) ---
+MFD2 dd_bessel_j0_full(MFD2 const &x);
+MFD2 dd_bessel_j1_full(MFD2 const &x);
+MFD2 dd_bessel_y0_full(MFD2 const &x);
+MFD2 dd_bessel_y1_full(MFD2 const &x);
+
 } // namespace detail
 
 // =============================================================================
@@ -1221,6 +1227,54 @@ MultiFloat<T, N> lgamma(MultiFloat<T, N> const &x) {
   } else {
     MultiFloat<T, N> r;
     r._limbs[0] = std::lgamma(x._limbs[0]);
+    return r;
+  }
+}
+
+// =============================================================================
+// Bessel functions
+// =============================================================================
+
+template <typename T, std::size_t N>
+MultiFloat<T, N> bessel_j0(MultiFloat<T, N> const &x) {
+  if constexpr (N == 2 && std::is_same_v<T, double>) {
+    return detail::dd_bessel_j0_full(x);
+  } else {
+    MultiFloat<T, N> r;
+    r._limbs[0] = ::j0(x._limbs[0]);
+    return r;
+  }
+}
+
+template <typename T, std::size_t N>
+MultiFloat<T, N> bessel_j1(MultiFloat<T, N> const &x) {
+  if constexpr (N == 2 && std::is_same_v<T, double>) {
+    return detail::dd_bessel_j1_full(x);
+  } else {
+    MultiFloat<T, N> r;
+    r._limbs[0] = ::j1(x._limbs[0]);
+    return r;
+  }
+}
+
+template <typename T, std::size_t N>
+MultiFloat<T, N> bessel_y0(MultiFloat<T, N> const &x) {
+  if constexpr (N == 2 && std::is_same_v<T, double>) {
+    return detail::dd_bessel_y0_full(x);
+  } else {
+    MultiFloat<T, N> r;
+    r._limbs[0] = ::y0(x._limbs[0]);
+    return r;
+  }
+}
+
+template <typename T, std::size_t N>
+MultiFloat<T, N> bessel_y1(MultiFloat<T, N> const &x) {
+  if constexpr (N == 2 && std::is_same_v<T, double>) {
+    return detail::dd_bessel_y1_full(x);
+  } else {
+    MultiFloat<T, N> r;
+    r._limbs[0] = ::y1(x._limbs[0]);
     return r;
   }
 }

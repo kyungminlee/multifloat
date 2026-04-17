@@ -16,6 +16,7 @@ Requirements: mpmath (pip install mpmath)
 """
 
 import os
+import re
 import sys
 from mpmath import mp, mpf, log, log10, factorial, pi
 from mpmath import bernoulli, sqrt, gamma as mpgamma, findroot, digamma
@@ -109,6 +110,30 @@ def gen_atanh_taylor(n=15):
 def gen_stirling_coefs(n=13):
     """c[k] = B_{2k} / (2k*(2k-1)), k=1..n"""
     return [bernoulli(2*k) / (2*k * (2*k - 1)) for k in range(1, n + 1)]
+
+
+def extract_float128_arrays(path):
+    """Extract __float128 constant arrays from a libquadmath .c file.
+
+    Returns dict mapping array name to list of mpf values.
+    """
+    with open(path, 'r') as f:
+        content = f.read()
+    pattern = re.compile(
+        r'static const __float128\s+(\w+)\[[^\]]*\]\s*=\s*\{([^\}]+)\};',
+        re.MULTILINE)
+    result = {}
+    for m in pattern.finditer(content):
+        name = m.group(1)
+        vals_str = m.group(2)
+        vals = []
+        for v in vals_str.split(','):
+            v = re.sub(r'/\*.*?\*/', '', v, flags=re.DOTALL)
+            v = v.strip().replace('Q', '').replace('L', '')
+            if v:
+                vals.append(mpf(v))
+        result[name] = vals
+    return result
 
 
 # =============================================================================
@@ -1084,6 +1109,31 @@ def collect_all():
         ' 1.519928623743264797939103740132278337476E5',
         ' 7.989298844938119228411117593338850892311E2',
     ]], 'lgamma Q(x) for [12.5, 13.5]')
+
+    # --- Bessel functions (from libquadmath j0q.c / j1q.c) ---
+    scalar('inv_sqrt2', 1 / sqrt(mpf(2)), '1/sqrt(2)')
+    scalar('two_over_pi', 2 / pi, '2/pi')
+    scalar('bessel_u0',
+           mpf('-7.3804295108687225274343927948483016310862e-02'),
+           'Y0 small-x constant')
+    scalar('pi_quarter', pi / 4, 'pi/4')
+    scalar('three_pi_quarter', 3 * pi / 4, '3*pi/4')
+
+    j0_path = os.path.join(PROJECT_DIR, 'external', 'libquadmath', 'math',
+                           'j0q.c')
+    j1_path = os.path.join(PROJECT_DIR, 'external', 'libquadmath', 'math',
+                           'j1q.c')
+    j0_data = extract_float128_arrays(j0_path)
+    j1_data = extract_float128_arrays(j1_path)
+
+    for prefix, data in [('j0', j0_data), ('j1', j1_data)]:
+        for name, vals in data.items():
+            full_name = f'{prefix}_{name}'
+            # j1q.c reuses J0/Y0 naming for J1/Y1 — rename
+            if prefix == 'j1':
+                full_name = full_name.replace('J0', 'J1').replace('Y0', 'Y1')
+            array(full_name, vals,
+                  f'Bessel {full_name} ({len(vals)} coefficients)')
 
     return groups
 

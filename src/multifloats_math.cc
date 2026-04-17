@@ -898,5 +898,212 @@ MFD2 dd_tgamma_full(MFD2 const &x) {
 }
 
 
+// =============================================================================
+// Bessel functions — piecewise rational approximation from libquadmath j0q/j1q
+// =============================================================================
+
+// Shared asymptotic P(z),Q(z) selection for order 0 (used by both j0 and y0).
+// z = 1/x^2, xinv_d = 1/x (double).
+static void dd_bessel_pq0(double xinv_d, MFD2 const &z, MFD2 &p, MFD2 &q) {
+  if (xinv_d <= 0.25) {
+    if (xinv_d <= 0.125) {
+      if (xinv_d <= 0.0625) {
+        p = dd_neval(z, j0_P16_IN_hi, j0_P16_IN_lo, 9) / dd_deval(z, j0_P16_ID_hi, j0_P16_ID_lo, 9);
+        q = dd_neval(z, j0_Q16_IN_hi, j0_Q16_IN_lo, 10) / dd_deval(z, j0_Q16_ID_hi, j0_Q16_ID_lo, 9);
+      } else {
+        p = dd_neval(z, j0_P8_16N_hi, j0_P8_16N_lo, 10) / dd_deval(z, j0_P8_16D_hi, j0_P8_16D_lo, 10);
+        q = dd_neval(z, j0_Q8_16N_hi, j0_Q8_16N_lo, 11) / dd_deval(z, j0_Q8_16D_hi, j0_Q8_16D_lo, 11);
+      }
+    } else if (xinv_d <= 0.1875) {
+      p = dd_neval(z, j0_P5_8N_hi, j0_P5_8N_lo, 10) / dd_deval(z, j0_P5_8D_hi, j0_P5_8D_lo, 9);
+      q = dd_neval(z, j0_Q5_8N_hi, j0_Q5_8N_lo, 10) / dd_deval(z, j0_Q5_8D_hi, j0_Q5_8D_lo, 10);
+    } else {
+      p = dd_neval(z, j0_P4_5N_hi, j0_P4_5N_lo, 9) / dd_deval(z, j0_P4_5D_hi, j0_P4_5D_lo, 9);
+      q = dd_neval(z, j0_Q4_5N_hi, j0_Q4_5N_lo, 10) / dd_deval(z, j0_Q4_5D_hi, j0_Q4_5D_lo, 9);
+    }
+  } else {
+    if (xinv_d <= 0.375) {
+      if (xinv_d <= 0.3125) {
+        p = dd_neval(z, j0_P3r2_4N_hi, j0_P3r2_4N_lo, 9) / dd_deval(z, j0_P3r2_4D_hi, j0_P3r2_4D_lo, 9);
+        q = dd_neval(z, j0_Q3r2_4N_hi, j0_Q3r2_4N_lo, 10) / dd_deval(z, j0_Q3r2_4D_hi, j0_Q3r2_4D_lo, 9);
+      } else {
+        p = dd_neval(z, j0_P2r7_3r2N_hi, j0_P2r7_3r2N_lo, 9) / dd_deval(z, j0_P2r7_3r2D_hi, j0_P2r7_3r2D_lo, 8);
+        q = dd_neval(z, j0_Q2r7_3r2N_hi, j0_Q2r7_3r2N_lo, 9) / dd_deval(z, j0_Q2r7_3r2D_hi, j0_Q2r7_3r2D_lo, 9);
+      }
+    } else if (xinv_d <= 0.4375) {
+      p = dd_neval(z, j0_P2r3_2r7N_hi, j0_P2r3_2r7N_lo, 9) / dd_deval(z, j0_P2r3_2r7D_hi, j0_P2r3_2r7D_lo, 8);
+      q = dd_neval(z, j0_Q2r3_2r7N_hi, j0_Q2r3_2r7N_lo, 9) / dd_deval(z, j0_Q2r3_2r7D_hi, j0_Q2r3_2r7D_lo, 8);
+    } else {
+      p = dd_neval(z, j0_P2_2r3N_hi, j0_P2_2r3N_lo, 8) / dd_deval(z, j0_P2_2r3D_hi, j0_P2_2r3D_lo, 8);
+      q = dd_neval(z, j0_Q2_2r3N_hi, j0_Q2_2r3N_lo, 9) / dd_deval(z, j0_Q2_2r3D_hi, j0_Q2_2r3D_lo, 8);
+    }
+  }
+}
+
+// Shared asymptotic P(z),Q(z) selection for order 1 (used by both j1 and y1).
+static void dd_bessel_pq1(double xinv_d, MFD2 const &z, MFD2 &p, MFD2 &q) {
+  if (xinv_d <= 0.25) {
+    if (xinv_d <= 0.125) {
+      if (xinv_d <= 0.0625) {
+        p = dd_neval(z, j1_P16_IN_hi, j1_P16_IN_lo, 9) / dd_deval(z, j1_P16_ID_hi, j1_P16_ID_lo, 9);
+        q = dd_neval(z, j1_Q16_IN_hi, j1_Q16_IN_lo, 10) / dd_deval(z, j1_Q16_ID_hi, j1_Q16_ID_lo, 9);
+      } else {
+        p = dd_neval(z, j1_P8_16N_hi, j1_P8_16N_lo, 11) / dd_deval(z, j1_P8_16D_hi, j1_P8_16D_lo, 10);
+        q = dd_neval(z, j1_Q8_16N_hi, j1_Q8_16N_lo, 11) / dd_deval(z, j1_Q8_16D_hi, j1_Q8_16D_lo, 11);
+      }
+    } else if (xinv_d <= 0.1875) {
+      p = dd_neval(z, j1_P5_8N_hi, j1_P5_8N_lo, 10) / dd_deval(z, j1_P5_8D_hi, j1_P5_8D_lo, 10);
+      q = dd_neval(z, j1_Q5_8N_hi, j1_Q5_8N_lo, 10) / dd_deval(z, j1_Q5_8D_hi, j1_Q5_8D_lo, 10);
+    } else {
+      p = dd_neval(z, j1_P4_5N_hi, j1_P4_5N_lo, 10) / dd_deval(z, j1_P4_5D_hi, j1_P4_5D_lo, 9);
+      q = dd_neval(z, j1_Q4_5N_hi, j1_Q4_5N_lo, 10) / dd_deval(z, j1_Q4_5D_hi, j1_Q4_5D_lo, 9);
+    }
+  } else {
+    if (xinv_d <= 0.375) {
+      if (xinv_d <= 0.3125) {
+        p = dd_neval(z, j1_P3r2_4N_hi, j1_P3r2_4N_lo, 9) / dd_deval(z, j1_P3r2_4D_hi, j1_P3r2_4D_lo, 9);
+        q = dd_neval(z, j1_Q3r2_4N_hi, j1_Q3r2_4N_lo, 9) / dd_deval(z, j1_Q3r2_4D_hi, j1_Q3r2_4D_lo, 9);
+      } else {
+        p = dd_neval(z, j1_P2r7_3r2N_hi, j1_P2r7_3r2N_lo, 9) / dd_deval(z, j1_P2r7_3r2D_hi, j1_P2r7_3r2D_lo, 8);
+        q = dd_neval(z, j1_Q2r7_3r2N_hi, j1_Q2r7_3r2N_lo, 9) / dd_deval(z, j1_Q2r7_3r2D_hi, j1_Q2r7_3r2D_lo, 9);
+      }
+    } else if (xinv_d <= 0.4375) {
+      p = dd_neval(z, j1_P2r3_2r7N_hi, j1_P2r3_2r7N_lo, 9) / dd_deval(z, j1_P2r3_2r7D_hi, j1_P2r3_2r7D_lo, 8);
+      q = dd_neval(z, j1_Q2r3_2r7N_hi, j1_Q2r3_2r7N_lo, 9) / dd_deval(z, j1_Q2r3_2r7D_hi, j1_Q2r3_2r7D_lo, 8);
+    } else {
+      p = dd_neval(z, j1_P2_2r3N_hi, j1_P2_2r3N_lo, 8) / dd_deval(z, j1_P2_2r3D_hi, j1_P2_2r3D_lo, 8);
+      q = dd_neval(z, j1_Q2_2r3N_hi, j1_Q2_2r3N_lo, 9) / dd_deval(z, j1_Q2_2r3D_hi, j1_Q2_2r3D_lo, 8);
+    }
+  }
+}
+
+MFD2 dd_bessel_j0_full(MFD2 const &x) {
+  MFD2 ax = x;
+  if (ax._limbs[0] < 0.0) { ax._limbs[0] = -ax._limbs[0]; ax._limbs[1] = -ax._limbs[1]; }
+  double xx = ax._limbs[0];
+  if (xx == 0.0) return MFD2(1.0);
+  if (!std::isfinite(xx)) return MFD2(0.0);
+
+  if (xx <= 2.0) {
+    MFD2 z = ax * ax;
+    MFD2 r = z * z * dd_neval(z, j0_J0_2N_hi, j0_J0_2N_lo, 6) /
+                      dd_deval(z, j0_J0_2D_hi, j0_J0_2D_lo, 6);
+    return r - z * MFD2(0.25) + MFD2(1.0);
+  }
+
+  MFD2 angle = ax - dd_pair(pi_quarter_hi, pi_quarter_lo);
+  MFD2 s = dd_sin_full(angle);
+  MFD2 c = dd_cos_full(angle);
+  MFD2 xinv = MFD2(1.0) / ax;
+  MFD2 z = xinv * xinv;
+  MFD2 p, q;
+  dd_bessel_pq0(1.0 / xx, z, p, q);
+  p = MFD2(1.0) + z * p;
+  q = (z * q - MFD2(0.125)) * xinv;
+  MFD2 tpi = dd_pair(two_over_pi_hi, two_over_pi_lo);
+  return multifloats::sqrt(tpi / ax) * (p * c - q * s);
+}
+
+MFD2 dd_bessel_j1_full(MFD2 const &x) {
+  bool neg = x._limbs[0] < 0.0;
+  MFD2 ax = neg ? MFD2(0.0) - x : x;
+  double xx = ax._limbs[0];
+  if (xx == 0.0) return MFD2(0.0);
+  if (!std::isfinite(xx)) return MFD2(0.0);
+
+  MFD2 res;
+  if (xx <= 2.0) {
+    MFD2 z = ax * ax;
+    res = ax * MFD2(0.5) + ax * z * dd_neval(z, j1_J1_2N_hi, j1_J1_2N_lo, 6) /
+                                     dd_deval(z, j1_J1_2D_hi, j1_J1_2D_lo, 6);
+  } else {
+    MFD2 angle = ax - dd_pair(three_pi_quarter_hi, three_pi_quarter_lo);
+    MFD2 s = dd_sin_full(angle);
+    MFD2 c = dd_cos_full(angle);
+    MFD2 xinv = MFD2(1.0) / ax;
+    MFD2 z = xinv * xinv;
+    MFD2 p, q;
+    dd_bessel_pq1(1.0 / xx, z, p, q);
+    p = MFD2(1.0) + z * p;
+    q = (z * q + MFD2(0.375)) * xinv;
+    MFD2 tpi = dd_pair(two_over_pi_hi, two_over_pi_lo);
+    res = multifloats::sqrt(tpi / ax) * (p * c - q * s);
+  }
+  if (neg) { res._limbs[0] = -res._limbs[0]; res._limbs[1] = -res._limbs[1]; }
+  return res;
+}
+
+MFD2 dd_bessel_y0_full(MFD2 const &x) {
+  double xx = x._limbs[0];
+  if (xx <= 0.0 || !std::isfinite(xx)) {
+    MFD2 r;
+    r._limbs[0] = (xx == 0.0) ? -std::numeric_limits<double>::infinity()
+                               : std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+
+  if (xx <= 1e-17) {
+    MFD2 tpi = dd_pair(two_over_pi_hi, two_over_pi_lo);
+    return dd_pair(bessel_u0_hi, bessel_u0_lo) + tpi * dd_log_full(x);
+  }
+
+  if (xx <= 2.0) {
+    MFD2 z = x * x;
+    MFD2 p = dd_neval(z, j0_Y0_2N_hi, j0_Y0_2N_lo, 7) /
+             dd_deval(z, j0_Y0_2D_hi, j0_Y0_2D_lo, 7);
+    MFD2 tpi = dd_pair(two_over_pi_hi, two_over_pi_lo);
+    return tpi * dd_log_full(x) * dd_bessel_j0_full(x) + p;
+  }
+
+  MFD2 angle = x - dd_pair(pi_quarter_hi, pi_quarter_lo);
+  MFD2 s = dd_sin_full(angle);
+  MFD2 c = dd_cos_full(angle);
+  MFD2 xinv = MFD2(1.0) / x;
+  MFD2 z = xinv * xinv;
+  MFD2 p, q;
+  dd_bessel_pq0(1.0 / xx, z, p, q);
+  p = MFD2(1.0) + z * p;
+  q = (z * q - MFD2(0.125)) * xinv;
+  MFD2 tpi = dd_pair(two_over_pi_hi, two_over_pi_lo);
+  return multifloats::sqrt(tpi / x) * (p * s + q * c);
+}
+
+MFD2 dd_bessel_y1_full(MFD2 const &x) {
+  double xx = x._limbs[0];
+  if (xx <= 0.0 || !std::isfinite(xx)) {
+    MFD2 r;
+    r._limbs[0] = (xx == 0.0) ? -std::numeric_limits<double>::infinity()
+                               : std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+
+  if (xx <= 1e-30) {
+    MFD2 tpi = dd_pair(two_over_pi_hi, two_over_pi_lo);
+    return MFD2(0.0) - tpi / x;
+  }
+
+  if (xx <= 2.0) {
+    MFD2 z = x * x;
+    MFD2 p = x * dd_neval(z, j1_Y1_2N_hi, j1_Y1_2N_lo, 7) /
+                 dd_deval(z, j1_Y1_2D_hi, j1_Y1_2D_lo, 7);
+    MFD2 tpi = dd_pair(two_over_pi_hi, two_over_pi_lo);
+    return tpi * (dd_log_full(x) * dd_bessel_j1_full(x) - MFD2(1.0) / x) + p;
+  }
+
+  MFD2 angle = x - dd_pair(three_pi_quarter_hi, three_pi_quarter_lo);
+  MFD2 s = dd_sin_full(angle);
+  MFD2 c = dd_cos_full(angle);
+  MFD2 xinv = MFD2(1.0) / x;
+  MFD2 z = xinv * xinv;
+  MFD2 p, q;
+  dd_bessel_pq1(1.0 / xx, z, p, q);
+  p = MFD2(1.0) + z * p;
+  q = (z * q + MFD2(0.375)) * xinv;
+  MFD2 tpi = dd_pair(two_over_pi_hi, two_over_pi_lo);
+  return multifloats::sqrt(tpi / x) * (p * s + q * c);
+}
+
 } // namespace detail
 } // namespace multifloats
