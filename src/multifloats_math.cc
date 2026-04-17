@@ -1164,6 +1164,10 @@ static inline MF2 from(dd_t x) { MF2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; 
 static inline dd_t to(MF2 const &x) { return {x._limbs[0], x._limbs[1]}; }
 
 // Inline matmul micro-ops used by the dispatched panel templates below.
+// `always_inline` is a hint: the panel templates rely on both ends of
+// the MAC fusing into one register-resident body; a stray function call
+// here would spill the accumulator ladder and cost ~2× the hot loop.
+__attribute__((always_inline))
 static inline void dd_mac_inl(double ah, double al, double bh, double bl,
                               double &s_hi, double &s_lo) {
   double p = ah * bh;
@@ -1181,6 +1185,7 @@ static inline void dd_mac_inl(double ah, double al, double bh, double bl,
 // Renormalize an accumulator pair. Uses full two_sum rather than
 // fast_two_sum because |s_hi| >= |s_lo| is not guaranteed after
 // cancellation in a long compensated dot-product.
+__attribute__((always_inline))
 static inline void dd_renorm_inl(double &s_hi, double &s_lo) {
   double t = s_hi + s_lo;
   double bp = t - s_hi;
@@ -1191,6 +1196,7 @@ static inline void dd_renorm_inl(double &s_hi, double &s_lo) {
   s_hi = t;
 }
 
+__attribute__((always_inline))
 static inline dd_t dd_finalize_inl(double s_hi, double s_lo) {
   dd_renorm_inl(s_hi, s_lo);
   return {s_hi, s_lo};

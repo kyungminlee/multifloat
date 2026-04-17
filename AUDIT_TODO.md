@@ -71,11 +71,16 @@ already; these are the ones that needed explicit review.
       (verified via `memcmp` on 9 shapes including chunked renorm paths).
       Measured +12–40% throughput on m,n,k ∈ {8..256} shapes.
 
-- [ ] **S2. Missing `__attribute__((always_inline))` on hot kernels.**
-      `src/multifloats_math.cc:1200-1212` (`dd_mac_inl`),
-      `:1214-1218` (`dd_finalize_inl`), and `dd_gaxpy_mv_panel`. Some
-      compilers refuse inlining at `-O2`. Benchmark before/after to
-      confirm codegen win (it's a hint, not a correctness change).
+- [x] **S2. Missing `__attribute__((always_inline))` on hot kernels.**
+      Fixed: added `__attribute__((always_inline))` on the three leaf
+      utilities `dd_mac_inl`, `dd_renorm_inl`, `dd_finalize_inl` in
+      `src/multifloats_math.cc`. Panel templates (`dd_gaxpy_mv_panel`,
+      `dd_gemm_panel`) kept as plain `static inline` — annotating them
+      caused a measurable 10% regression on the 8×8×1024 shape under
+      clang-arm64 (large body + template instantiation interacts badly
+      with the compiler's register allocator when forced inline).
+      Under clang-arm64 at `-O3` the leaf hint is a no-op (flat perf);
+      defensive against `-O2` / other compilers as the note said.
 
 - [ ] **S3. Bessel asymptotic doubles the sin/cos work.**
       `src/multifloats_math.cc:1054-1079, 1110-1144, 1146-1180`. Add a
