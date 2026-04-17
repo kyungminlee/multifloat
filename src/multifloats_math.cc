@@ -2,8 +2,12 @@
 #include "dd_constants.hh"
 #include <cstdint>
 
-namespace multifloats {
-namespace detail {
+// All DD math kernels have internal linkage (anonymous namespace).
+// Only the extern "C" dd_* wrappers at the bottom are exported.
+namespace {
+
+using namespace multifloats::detail;  // dd_pair, dd_neval, dd_deval, dd_horner
+using MFD2 = multifloats::MultiFloat<double, 2>;
 
 // Forward declarations for internal cross-references
 MFD2 dd_exp_full(MFD2 const &x);
@@ -1115,8 +1119,7 @@ MFD2 dd_bessel_y1_full(MFD2 const &x) {
   return multifloats::sqrt(tpi / x) * (p * s + q * c);
 }
 
-} // namespace detail
-} // namespace multifloats
+} // anonymous namespace
 
 // =============================================================================
 // C-ABI entry points — extern "C" functions following math.h naming convention.
@@ -1148,49 +1151,49 @@ dd_t dd_sqrt(dd_t a) { return to(multifloats::sqrt(from(a))); }
 dd_t dd_fmin(dd_t a, dd_t b)     { return to(multifloats::fmin(from(a), from(b))); }
 dd_t dd_fmax(dd_t a, dd_t b)     { return to(multifloats::fmax(from(a), from(b))); }
 dd_t dd_hypot(dd_t a, dd_t b)    { return to(multifloats::hypot(from(a), from(b))); }
-dd_t dd_pow(dd_t a, dd_t b)      { return to(multifloats::detail::dd_pow_full(from(a), from(b))); }
+dd_t dd_pow(dd_t a, dd_t b)      { return to(dd_pow_full(from(a), from(b))); }
 dd_t dd_fmod(dd_t a, dd_t b)     { return to(multifloats::fmod(from(a), from(b))); }
 dd_t dd_fdim(dd_t a, dd_t b)     { return to(multifloats::fdim(from(a), from(b))); }
 dd_t dd_copysign(dd_t a, dd_t b) { return to(multifloats::copysign(from(a), from(b))); }
 dd_t dd_fma(dd_t a, dd_t b, dd_t c) { return to(multifloats::fma(from(a), from(b), from(c))); }
 
 // Exponential / logarithmic
-dd_t dd_exp(dd_t a)   { return to(multifloats::detail::dd_exp_full(from(a))); }
-dd_t dd_exp2(dd_t a)  { return to(multifloats::detail::dd_exp2_full(from(a))); }
-dd_t dd_log(dd_t a)   { return to(multifloats::detail::dd_log_full(from(a))); }
-dd_t dd_log2(dd_t a)  { return to(multifloats::detail::dd_log2_full(from(a))); }
-dd_t dd_log10(dd_t a) { return to(multifloats::detail::dd_log10_full(from(a))); }
+dd_t dd_exp(dd_t a)   { return to(dd_exp_full(from(a))); }
+dd_t dd_exp2(dd_t a)  { return to(dd_exp2_full(from(a))); }
+dd_t dd_log(dd_t a)   { return to(dd_log_full(from(a))); }
+dd_t dd_log2(dd_t a)  { return to(dd_log2_full(from(a))); }
+dd_t dd_log10(dd_t a) { return to(dd_log10_full(from(a))); }
 
 // Trigonometric
-dd_t dd_sin(dd_t a)   { return to(multifloats::detail::dd_sin_full(from(a))); }
-dd_t dd_cos(dd_t a)   { return to(multifloats::detail::dd_cos_full(from(a))); }
-dd_t dd_tan(dd_t a)   { return to(multifloats::detail::dd_tan_full(from(a))); }
-dd_t dd_asin(dd_t a)  { return to(multifloats::detail::dd_asin_full(from(a))); }
-dd_t dd_acos(dd_t a)  { return to(multifloats::detail::dd_acos_full(from(a))); }
-dd_t dd_atan(dd_t a)  { return to(multifloats::detail::dd_atan_full(from(a))); }
-dd_t dd_atan2(dd_t a, dd_t b) { return to(multifloats::detail::dd_atan2_full(from(a), from(b))); }
+dd_t dd_sin(dd_t a)   { return to(dd_sin_full(from(a))); }
+dd_t dd_cos(dd_t a)   { return to(dd_cos_full(from(a))); }
+dd_t dd_tan(dd_t a)   { return to(dd_tan_full(from(a))); }
+dd_t dd_asin(dd_t a)  { return to(dd_asin_full(from(a))); }
+dd_t dd_acos(dd_t a)  { return to(dd_acos_full(from(a))); }
+dd_t dd_atan(dd_t a)  { return to(dd_atan_full(from(a))); }
+dd_t dd_atan2(dd_t a, dd_t b) { return to(dd_atan2_full(from(a), from(b))); }
 
 // Hyperbolic
-dd_t dd_sinh(dd_t a)  { return to(multifloats::detail::dd_sinh_full(from(a))); }
-dd_t dd_cosh(dd_t a)  { return to(multifloats::detail::dd_cosh_full(from(a))); }
-dd_t dd_tanh(dd_t a)  { return to(multifloats::detail::dd_tanh_full(from(a))); }
-dd_t dd_asinh(dd_t a) { return to(multifloats::detail::dd_asinh_full(from(a))); }
-dd_t dd_acosh(dd_t a) { return to(multifloats::detail::dd_acosh_full(from(a))); }
-dd_t dd_atanh(dd_t a) { return to(multifloats::detail::dd_atanh_full(from(a))); }
+dd_t dd_sinh(dd_t a)  { return to(dd_sinh_full(from(a))); }
+dd_t dd_cosh(dd_t a)  { return to(dd_cosh_full(from(a))); }
+dd_t dd_tanh(dd_t a)  { return to(dd_tanh_full(from(a))); }
+dd_t dd_asinh(dd_t a) { return to(dd_asinh_full(from(a))); }
+dd_t dd_acosh(dd_t a) { return to(dd_acosh_full(from(a))); }
+dd_t dd_atanh(dd_t a) { return to(dd_atanh_full(from(a))); }
 
 // Error functions
-dd_t dd_erf(dd_t a)   { return to(multifloats::detail::dd_erf_full(from(a))); }
-dd_t dd_erfc(dd_t a)  { return to(multifloats::detail::dd_erfc_full(from(a))); }
+dd_t dd_erf(dd_t a)   { return to(dd_erf_full(from(a))); }
+dd_t dd_erfc(dd_t a)  { return to(dd_erfc_full(from(a))); }
 
 // Gamma functions
-dd_t dd_tgamma(dd_t a) { return to(multifloats::detail::dd_tgamma_full(from(a))); }
-dd_t dd_lgamma(dd_t a) { return to(multifloats::detail::dd_lgamma_full(from(a))); }
+dd_t dd_tgamma(dd_t a) { return to(dd_tgamma_full(from(a))); }
+dd_t dd_lgamma(dd_t a) { return to(dd_lgamma_full(from(a))); }
 
 // Bessel functions (math.h naming: j0, j1, y0, y1)
-dd_t dd_j0(dd_t a) { return to(multifloats::detail::dd_bessel_j0_full(from(a))); }
-dd_t dd_j1(dd_t a) { return to(multifloats::detail::dd_bessel_j1_full(from(a))); }
-dd_t dd_y0(dd_t a) { return to(multifloats::detail::dd_bessel_y0_full(from(a))); }
-dd_t dd_y1(dd_t a) { return to(multifloats::detail::dd_bessel_y1_full(from(a))); }
+dd_t dd_j0(dd_t a) { return to(dd_bessel_j0_full(from(a))); }
+dd_t dd_j1(dd_t a) { return to(dd_bessel_j1_full(from(a))); }
+dd_t dd_y0(dd_t a) { return to(dd_bessel_y0_full(from(a))); }
+dd_t dd_y1(dd_t a) { return to(dd_bessel_y1_full(from(a))); }
 
 // Comparison
 int dd_eq(dd_t a, dd_t b) { return from(a) == from(b) ? 1 : 0; }

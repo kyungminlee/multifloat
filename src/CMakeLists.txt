@@ -9,6 +9,15 @@ target_include_directories(multifloats
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # Hide all C++ symbols; only extern "C" dd_* functions are exported.
 set_target_properties(multifloats PROPERTIES CXX_VISIBILITY_PRESET hidden)
+
+# Strip leaked inline-copy C++ symbols from the static archive.
+# The compiler may emit out-of-line copies of inline header functions
+# with global linkage; we localize them so only dd_* remain exported.
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/localize_symbols.sh.in
+               ${CMAKE_CURRENT_BINARY_DIR}/localize_symbols.sh @ONLY)
+add_custom_command(TARGET multifloats POST_BUILD
+    COMMAND bash ${CMAKE_CURRENT_BINARY_DIR}/localize_symbols.sh $<TARGET_FILE:multifloats>
+    COMMENT "Localizing C++ symbols in libmultifloats (keeping dd_* only)")
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "")
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(multifloats PRIVATE -O3 -flto -ffat-lto-objects)
