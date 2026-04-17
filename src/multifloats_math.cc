@@ -1194,6 +1194,67 @@ namespace mf = multifloats;
 using MF2 = mf::MultiFloat<double, 2>;
 static inline MF2 from(dd_t x) { MF2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
 static inline dd_t to(MF2 const &x) { return {x._limbs[0], x._limbs[1]}; }
+
+// Matmul building blocks (duplicated here so the templates can reference
+// them — the extern "C" dd_mac/dd_finalize are in a nested namespace).
+static inline void dd_mac_inl(double ah, double al, double bh, double bl,
+                              double &s_hi, double &s_lo) {
+  double p = ah * bh;
+  double e = std::fma(ah, bh, -p);
+  double cross = std::fma(ah, bl, al * bh);
+  double t = s_hi + p;
+  double bp = t - s_hi;
+  double ap = t - bp;
+  double aerr = s_hi - ap;
+  double berr = p - bp;
+  s_lo += (e + cross) + (aerr + berr);
+  s_hi = t;
+}
+
+static inline dd_t dd_finalize_inl(double s_hi, double s_lo) {
+  double t = s_hi + s_lo;
+  double bp = t - s_hi;
+  return {t, s_lo - bp};
+}
+
+// AXPY-style matvec / matmul with compile-time-fixed output dim M.
+// Fixed M lets the compiler register-promote the m independent DD
+// accumulators and fully unroll the inner loop.
+template <int M>
+static inline void dd_gaxpy_mv_fixed(const dd_t *__restrict__ a,
+                                     const dd_t *__restrict__ x,
+                                     dd_t *__restrict__ y, int64_t k) {
+  double s_hi[M] = {}, s_lo[M] = {};
+  for (int64_t p = 0; p < k; ++p) {
+    const double xh = x[p].hi;
+    const double xl = x[p].lo;
+    const dd_t *__restrict__ acol = a + p * M;
+    for (int i = 0; i < M; ++i) {
+      dd_mac_inl(acol[i].hi, acol[i].lo, xh, xl, s_hi[i], s_lo[i]);
+    }
+  }
+  for (int i = 0; i < M; ++i) y[i] = dd_finalize_inl(s_hi[i], s_lo[i]);
+}
+
+template <int M>
+static inline void dd_gaxpy_mm_fixed(const dd_t *__restrict__ a,
+                                     const dd_t *__restrict__ b,
+                                     dd_t *__restrict__ c,
+                                     int64_t k, int64_t n) {
+  for (int64_t j = 0; j < n; ++j) {
+    double s_hi[M] = {}, s_lo[M] = {};
+    for (int64_t p = 0; p < k; ++p) {
+      const double bh = b[p + j * k].hi;
+      const double bl = b[p + j * k].lo;
+      const dd_t *__restrict__ acol = a + p * M;
+      for (int i = 0; i < M; ++i) {
+        dd_mac_inl(acol[i].hi, acol[i].lo, bh, bl, s_hi[i], s_lo[i]);
+      }
+    }
+    dd_t *__restrict__ ccol = c + j * M;
+    for (int i = 0; i < M; ++i) ccol[i] = dd_finalize_inl(s_hi[i], s_lo[i]);
+  }
+}
 } // anonymous namespace
 
 extern "C" {
@@ -1261,68 +1322,85 @@ dd_t dd_y1(dd_t a) { return to(dd_bessel_y1_full(from(a))); }
 //   cross = fma(ah, bl, al*bh)       (DD-mul cross term, ignoring bl*bl)
 //   (s_hi, s_lo) += (p + cross + e)  via two_sum on s_hi
 // Final fast_two_sum renormalizes s_hi/s_lo into the DD result.
-namespace {
+//
+// For small, compile-time-known output dims (m = 1..8, 16) we dispatch to
+// the templated `dd_gaxpy_*_fixed<M>` helpers in the file-scope anonymous
+// namespace above. Fixed M lets the compiler register-promote the m
+// independent accumulators and unroll the inner loop, which gives ~2×
+// over the dynamic-m path. Larger m uses the generic in-place path below,
+// which still reads A contiguously (AXPY-style outer-p / inner-i order)
+// but keeps accumulators in the output buffer.
 
-static inline void dd_mac(double ah, double al, double bh, double bl,
-                          double &s_hi, double &s_lo) {
-  double p = ah * bh;
-  double e = std::fma(ah, bh, -p);
-  double cross = std::fma(ah, bl, al * bh);
-  double t = s_hi + p;
-  double bp = t - s_hi;
-  double ap = t - bp;
-  double aerr = s_hi - ap;
-  double berr = p - bp;
-  s_lo += (e + cross) + (aerr + berr);
-  s_hi = t;
-}
+#define DD_MATMUL_MM_CASE(M) \
+  case M: dd_gaxpy_mm_fixed<M>(a, b, c, k, n); return
+#define DD_MATMUL_MV_CASE(M) \
+  case M: dd_gaxpy_mv_fixed<M>(a, x, y, k); return
 
-static inline dd_t dd_finalize(double s_hi, double s_lo) {
-  double t = s_hi + s_lo;
-  double bp = t - s_hi;
-  return {t, s_lo - bp};
-}
-
-} // namespace
-
-void dd_matmul_mm(const dd_t *a, const dd_t *b, dd_t *c,
+void dd_matmul_mm(const dd_t *__restrict__ a, const dd_t *__restrict__ b,
+                  dd_t *__restrict__ c,
                   int64_t m, int64_t k, int64_t n) {
+  switch (m) {
+    DD_MATMUL_MM_CASE(1);  DD_MATMUL_MM_CASE(2);
+    DD_MATMUL_MM_CASE(3);  DD_MATMUL_MM_CASE(4);
+    DD_MATMUL_MM_CASE(5);  DD_MATMUL_MM_CASE(6);
+    DD_MATMUL_MM_CASE(7);  DD_MATMUL_MM_CASE(8);
+    DD_MATMUL_MM_CASE(16);
+  }
+  // Generic path: accumulate in place on c (safe under __restrict__).
   for (int64_t j = 0; j < n; ++j) {
-    for (int64_t i = 0; i < m; ++i) {
-      double s_hi = 0.0, s_lo = 0.0;
-      for (int64_t p = 0; p < k; ++p) {
-        dd_t aa = a[i + p * m];
-        dd_t bb = b[p + j * k];
-        dd_mac(aa.hi, aa.lo, bb.hi, bb.lo, s_hi, s_lo);
-      }
-      c[i + j * m] = dd_finalize(s_hi, s_lo);
-    }
-  }
-}
-
-void dd_matmul_mv(const dd_t *a, const dd_t *x, dd_t *y,
-                  int64_t m, int64_t k) {
-  for (int64_t i = 0; i < m; ++i) {
-    double s_hi = 0.0, s_lo = 0.0;
+    dd_t *__restrict__ ccol = c + j * m;
+    for (int64_t i = 0; i < m; ++i) { ccol[i].hi = 0.0; ccol[i].lo = 0.0; }
     for (int64_t p = 0; p < k; ++p) {
-      dd_t aa = a[i + p * m];
-      dd_t bb = x[p];
-      dd_mac(aa.hi, aa.lo, bb.hi, bb.lo, s_hi, s_lo);
+      const double bh = b[p + j * k].hi;
+      const double bl = b[p + j * k].lo;
+      const dd_t *__restrict__ acol = a + p * m;
+      for (int64_t i = 0; i < m; ++i) {
+        dd_mac_inl(acol[i].hi, acol[i].lo, bh, bl, ccol[i].hi, ccol[i].lo);
+      }
     }
-    y[i] = dd_finalize(s_hi, s_lo);
+    for (int64_t i = 0; i < m; ++i) ccol[i] = dd_finalize_inl(ccol[i].hi, ccol[i].lo);
   }
 }
 
-void dd_matmul_vm(const dd_t *x, const dd_t *b, dd_t *y,
+void dd_matmul_mv(const dd_t *__restrict__ a, const dd_t *__restrict__ x,
+                  dd_t *__restrict__ y,
+                  int64_t m, int64_t k) {
+  switch (m) {
+    DD_MATMUL_MV_CASE(1);  DD_MATMUL_MV_CASE(2);
+    DD_MATMUL_MV_CASE(3);  DD_MATMUL_MV_CASE(4);
+    DD_MATMUL_MV_CASE(5);  DD_MATMUL_MV_CASE(6);
+    DD_MATMUL_MV_CASE(7);  DD_MATMUL_MV_CASE(8);
+    DD_MATMUL_MV_CASE(16);
+  }
+  // Generic path: accumulate in place on y (safe under __restrict__).
+  for (int64_t i = 0; i < m; ++i) { y[i].hi = 0.0; y[i].lo = 0.0; }
+  for (int64_t p = 0; p < k; ++p) {
+    const double xh = x[p].hi;
+    const double xl = x[p].lo;
+    const dd_t *__restrict__ acol = a + p * m;
+    for (int64_t i = 0; i < m; ++i) {
+      dd_mac_inl(acol[i].hi, acol[i].lo, xh, xl, y[i].hi, y[i].lo);
+    }
+  }
+  for (int64_t i = 0; i < m; ++i) y[i] = dd_finalize_inl(y[i].hi, y[i].lo);
+}
+
+#undef DD_MATMUL_MM_CASE
+#undef DD_MATMUL_MV_CASE
+
+// vm: y[j] = sum_p x[p] * B[p, j]. Column-major B makes B[:, j]
+// contiguous at fixed j, so the natural (j, p) order is already optimal
+// — one accumulator per output, contiguous reads.
+void dd_matmul_vm(const dd_t *__restrict__ x, const dd_t *__restrict__ b,
+                  dd_t *__restrict__ y,
                   int64_t k, int64_t n) {
   for (int64_t j = 0; j < n; ++j) {
     double s_hi = 0.0, s_lo = 0.0;
+    const dd_t *__restrict__ bcol = b + j * k;
     for (int64_t p = 0; p < k; ++p) {
-      dd_t aa = x[p];
-      dd_t bb = b[p + j * k];
-      dd_mac(aa.hi, aa.lo, bb.hi, bb.lo, s_hi, s_lo);
+      dd_mac_inl(x[p].hi, x[p].lo, bcol[p].hi, bcol[p].lo, s_hi, s_lo);
     }
-    y[j] = dd_finalize(s_hi, s_lo);
+    y[j] = dd_finalize_inl(s_hi, s_lo);
   }
 }
 
