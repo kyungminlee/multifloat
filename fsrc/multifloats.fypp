@@ -4452,49 +4452,23 @@ $:mf_minmax_body(func, n)
     ! Binary arithmetic (+, -, *, /) — elemental
     ! ================================================================
 
-#:for opsym, opname in ARITH_OPS
-#:for n1, d1 in ATYPES
-#:for n2, d2 in ATYPES
-#:if n1 in ('mf', 'cx') or n2 in ('mf', 'cx')
-#:set rc = ISCPLX[n1] or ISCPLX[n2]
-    elemental function ${n1}$_${opname}$_${n2}$(a, b) result(res)
-        ${d1}$, intent(in) :: a
-        ${d2}$, intent(in) :: b
-        ${'type(complex128x2)' if rc else 'type(float64x2)'}$ :: res
-#:if not rc
-        ! Hot fast path uses scalar dp locals (no float64x2 copies, no
-        ! generic mf_from_dp call). The single non-finite guard runs
-        ! after the leading-limb op so a single test catches every IEEE
-        ! special case.
-        real(dp) :: x0, x1, y0, y1
-        real(dp) :: s, e, t, aprime, bprime, aerr, berr
-        real(dp) :: p00, e00, p01, p10, c, d
-        real(dp) :: ux, uy, q0, q1_lo, r0, r1, q_y0, q_y1
-#:if n1 == 'mf'
-        x0 = a%limbs(1)
-        x1 = a%limbs(2)
-#:elif n1 == 'sp' or n1 == 'int'
-        x0 = real(a, dp)
-        x1 = 0.0_dp
+#! Unpack operand `name` (a or b) into scalar dp locals (hi, lo). For non-DD
+#! operands lo is 0. Used by the real-DD arithmetic bodies below.
+#:def unpack_operand(name, n, hi, lo)
+#:if n == 'mf'
+        ${hi}$ = ${name}$%limbs(1)
+        ${lo}$ = ${name}$%limbs(2)
+#:elif n == 'sp' or n == 'int'
+        ${hi}$ = real(${name}$, dp)
+        ${lo}$ = 0.0_dp
 #:else
-        x0 = a
-        x1 = 0.0_dp
+        ${hi}$ = ${name}$
+        ${lo}$ = 0.0_dp
 #:endif
-#:if n2 == 'mf'
-        y0 = b%limbs(1)
-        y1 = b%limbs(2)
-#:elif n2 == 'sp' or n2 == 'int'
-        y0 = real(b, dp)
-        y1 = 0.0_dp
-#:else
-        y0 = b
-        y1 = 0.0_dp
-#:endif
-#:if opname == 'sub'
-        y0 = -y0
-        y1 = -y1
-#:endif
-#:if opname == 'add' or opname == 'sub'
+#:enddef
+
+#! Real-DD add/sub. For sub, the caller negates y first.
+#:def dd_arith_addsub_body()
         s = x0 + y0
         if (.not. ieee_is_finite(s)) then
             ! Any non-finite input or overflow makes s non-finite. The
@@ -4531,7 +4505,10 @@ $:mf_minmax_body(func, n)
         res%limbs(1) = t + e
         bprime = res%limbs(1) - t
         res%limbs(2) = e - bprime
-#:elif opname == 'mul'
+#:enddef
+
+#! Real-DD multiply via FMA-based two_prod plus cross terms.
+#:def dd_arith_mul_body()
         p00 = x0 * y0
         if (.not. ieee_is_finite(p00)) then
             ! Any non-finite input, 0*inf, or overflow lands here in one
@@ -4547,11 +4524,13 @@ $:mf_minmax_body(func, n)
         res%limbs(1) = p00 + e00
         bprime = res%limbs(1) - p00
         res%limbs(2) = e00 - bprime
-#:else
-        ! Newton-refined DD division. The first guard tests the leading
-        ! quotient s; if it is non-finite, every IEEE edge case (y=0,
-        ! 0/0, inf/finite, NaN) collapses to the same path. The second
-        ! guard catches finite/inf (s=0 but refinement hits 0*inf=NaN).
+#:enddef
+
+#! Newton-refined DD divide. The first guard tests the leading quotient s;
+#! if non-finite, every IEEE edge case (y=0, 0/0, inf/finite, NaN) collapses
+#! to the same path. The second guard catches finite/inf (s=0 but refinement
+#! would hit 0*inf=NaN).
+#:def dd_arith_div_body()
         s = x0 / y0
         if (.not. ieee_is_finite(s)) then
             res%limbs(1) = s
@@ -4610,11 +4589,11 @@ $:mf_minmax_body(func, n)
         res%limbs(1) = t + e
         bprime = res%limbs(1) - t
         res%limbs(2) = e - bprime
-#:endif
-#:else
-        ! Complex result: use native DD complex arithmetic. Lift any
-        ! non-complex operand to a complex128x2 via the assignment overloads
-        ! and then do the operation in (a.re, a.im) form.
+#:enddef
+
+#! Complex result: lift any non-complex operand to a complex128x2 via
+#! assignment overloads, then do the op in (re, im) form.
+#:def cx_arith_body(opname)
         block
             type(complex128x2) :: ca, cb
             type(float64x2) :: denom
@@ -4635,6 +4614,41 @@ $:mf_minmax_body(func, n)
             res%im = (ca%im * cb%re - ca%re * cb%im) / denom
 #:endif
         end block
+#:enddef
+
+#:for opsym, opname in ARITH_OPS
+#:for n1, d1 in ATYPES
+#:for n2, d2 in ATYPES
+#:if n1 in ('mf', 'cx') or n2 in ('mf', 'cx')
+#:set rc = ISCPLX[n1] or ISCPLX[n2]
+    elemental function ${n1}$_${opname}$_${n2}$(a, b) result(res)
+        ${d1}$, intent(in) :: a
+        ${d2}$, intent(in) :: b
+        ${'type(complex128x2)' if rc else 'type(float64x2)'}$ :: res
+#:if not rc
+        ! Hot fast path uses scalar dp locals (no float64x2 copies, no
+        ! generic mf_from_dp call). The single non-finite guard runs
+        ! after the leading-limb op so a single test catches every IEEE
+        ! special case.
+        real(dp) :: x0, x1, y0, y1
+        real(dp) :: s, e, t, aprime, bprime, aerr, berr
+        real(dp) :: p00, e00, p01, p10, c, d
+        real(dp) :: ux, uy, q0, q1_lo, r0, r1, q_y0, q_y1
+$:unpack_operand('a', n1, 'x0', 'x1')
+$:unpack_operand('b', n2, 'y0', 'y1')
+#:if opname == 'sub'
+        y0 = -y0
+        y1 = -y1
+#:endif
+#:if opname == 'add' or opname == 'sub'
+$:dd_arith_addsub_body()
+#:elif opname == 'mul'
+$:dd_arith_mul_body()
+#:else
+$:dd_arith_div_body()
+#:endif
+#:else
+$:cx_arith_body(opname)
 #:endif
     end function
 

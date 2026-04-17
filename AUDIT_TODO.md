@@ -122,10 +122,15 @@ already; these are the ones that needed explicit review.
       (sinh 0.0447→0.0443s, asinh 0.0639→0.0646s, atanh 0.0503→0.0498s
       on 40960 random inputs). All tests pass.
 
-- [ ] **M3. Arithmetic-dispatch mega-template in fypp.**
-      `fsrc/multifloats.fypp:4565-4744` — single ~180-line body expanded
-      ~50×. Extract per-op bodies (`add` / `sub`, `mul`, `div`, complex)
-      into named fypp `#:def` macros.
+- [x] **M3. Arithmetic-dispatch mega-template in fypp.**
+      Fixed: extracted five `#:def` macros at the top of the arithmetic
+      block — `unpack_operand`, `dd_arith_addsub_body`,
+      `dd_arith_mul_body`, `dd_arith_div_body`, `cx_arith_body`. The
+      `n1_op_n2` function now just declares locals, unpacks operands,
+      negates for `sub`, and dispatches to one macro. Generated
+      Fortran is bit-identical (diff shows only relocated comments /
+      blank lines, zero code changes across all 96 instantiations).
+      All tests pass.
 
 - [ ] **M4. 8-way erfc dispatch duplicated.**
       `fsrc/multifloats.fypp:2060-2085` vs `:2138-2163`. Extract
