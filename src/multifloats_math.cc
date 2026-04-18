@@ -1609,10 +1609,8 @@ static void bessel_yn_range_full(int n1, int n2, float64x2 x, float64x2 *out) {
 // multifloats_c.h is already pulled in via multifloats.hh.
 
 namespace {
-namespace mf = multifloats;
-using MF2 = mf::MultiFloat<double, 2>;
-static inline MF2 from(float64x2_t x) { MF2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
-static inline float64x2_t to(MF2 const &x) { return {x._limbs[0], x._limbs[1]}; }
+static inline float64x2 from(float64x2_t x) { float64x2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
+static inline float64x2_t to(float64x2 const &x) { return {x._limbs[0], x._limbs[1]}; }
 
 // Inline matmul micro-ops used by the dispatched panel templates below.
 // `always_inline` is a hint: the panel templates rely on both ends of
@@ -1869,21 +1867,21 @@ float64x2_t yndd(int n, float64x2_t a) { return to(bessel_yn_full(n, from(a))); 
 void yn_rangedd(int n1, int n2, float64x2_t a, float64x2_t *out) {
   int size = n2 - n1 + 1;
   if (size <= 0) return;
-  std::vector<MF2> buf(size);
+  std::vector<float64x2> buf(size);
   bessel_yn_range_full(n1, n2, from(a), buf.data());
   for (int i = 0; i < size; ++i) out[i] = to(buf[i]);
 }
 
 // Fused sincos / sinhcosh. Out-pointer style (C has no multi-value return).
 void sincosdd(float64x2_t a, float64x2_t *s, float64x2_t *c) {
-  MF2 ss, cc;
+  float64x2 ss, cc;
   sincos_full(from(a), ss, cc);
   *s = to(ss);
   *c = to(cc);
 }
 
 void sinhcoshdd(float64x2_t a, float64x2_t *s, float64x2_t *c) {
-  MF2 ss, cc;
+  float64x2 ss, cc;
   sinhcosh_full(from(a), ss, cc);
   *s = to(ss);
   *c = to(cc);
@@ -1903,9 +1901,9 @@ void sinhcoshdd(float64x2_t a, float64x2_t *s, float64x2_t *c) {
 
 // exp(a+bi) = e^a · (cos b + i·sin b). 2 transcendentals (exp + sincos).
 complex64x2_t cexpdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 ea = exp_full(a);
-  MF2 s, c;
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 ea = exp_full(a);
+  float64x2 s, c;
   sincos_full(b, s, c);
   return { to(ea * c), to(ea * s) };
 }
@@ -1917,28 +1915,28 @@ complex64x2_t cexpdd(complex64x2_t z) {
 // though log(|z|) itself is finite. atan2 handles the negative-real-
 // axis branch cut (including signed-zero propagation).
 complex64x2_t clogdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 ax = multifloats::abs(a);
-  MF2 ay = multifloats::abs(b);
-  MF2 big   = (ax > ay) ? ax : ay;
-  MF2 small = (ax > ay) ? ay : ax;
-  MF2 r;
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 ax = multifloats::abs(a);
+  float64x2 ay = multifloats::abs(b);
+  float64x2 big   = (ax > ay) ? ax : ay;
+  float64x2 small = (ax > ay) ? ay : ax;
+  float64x2 r;
   if (big._limbs[0] == 0.0) {
     r._limbs[0] = -std::numeric_limits<double>::infinity();
     r._limbs[1] = 0.0;
   } else {
-    MF2 ratio = small / big;
-    MF2 one = float64x2(1.0, 0.0);
-    MF2 half = float64x2(0.5, 0.0);
+    float64x2 ratio = small / big;
+    float64x2 one = float64x2(1.0, 0.0);
+    float64x2 half = float64x2(0.5, 0.0);
     r = log_full(big) + half * log_full(one + ratio * ratio);
   }
-  MF2 phi = atan2_full(b, a);
+  float64x2 phi = atan2_full(b, a);
   return { to(r), to(phi) };
 }
 
 // log10(z) = log(z) · (1/ln 10).
 complex64x2_t clog10dd(complex64x2_t z) {
-  static const MF2 inv_ln10 = float64x2(0x1.bcb7b1526e50ep-2,
+  static const float64x2 inv_ln10 = float64x2(0x1.bcb7b1526e50ep-2,
                                       0x1.95355baaafad3p-57);
   complex64x2_t l = clogdd(z);
   return { to(from(l.re) * inv_ln10), to(from(l.im) * inv_ln10) };
@@ -1948,8 +1946,8 @@ complex64x2_t clog10dd(complex64x2_t z) {
 complex64x2_t cpowdd(complex64x2_t z, complex64x2_t w) {
   if (z.re.hi == 0.0 && z.im.hi == 0.0) return { {0.0, 0.0}, {0.0, 0.0} };
   complex64x2_t l = clogdd(z);
-  MF2 lr = from(l.re), li = from(l.im);
-  MF2 wr = from(w.re), wi = from(w.im);
+  float64x2 lr = from(l.re), li = from(l.im);
+  float64x2 wr = from(w.re), wi = from(w.im);
   // w * log(z) = (wr·lr − wi·li) + i·(wr·li + wi·lr)
   complex64x2_t p = { to(wr * lr - wi * li), to(wr * li + wi * lr) };
   return cexpdd(p);
@@ -1958,27 +1956,27 @@ complex64x2_t cpowdd(complex64x2_t z, complex64x2_t w) {
 // sqrt(z). Principal branch; cut on negative real axis, continuous above.
 // Uses Moshier's 2·Re·Im = Im identity to avoid cancellation in mod ± a.
 complex64x2_t csqrtdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
+  float64x2 a = from(z.re), b = from(z.im);
   if (a._limbs[0] == 0.0 && b._limbs[0] == 0.0)
-    return { to(MF2(0.0)), z.im };  // preserves signed zero of imag
-  MF2 mod = multifloats::hypot(a, b);
-  MF2 half = float64x2(0.5, 0.0);
+    return { to(float64x2(0.0)), z.im };  // preserves signed zero of imag
+  float64x2 mod = multifloats::hypot(a, b);
+  float64x2 half = float64x2(0.5, 0.0);
   if (a._limbs[0] >= 0.0) {
-    MF2 r = multifloats::sqrt((mod + a) * half);
-    MF2 i = b / (r + r);
+    float64x2 r = multifloats::sqrt((mod + a) * half);
+    float64x2 i = b / (r + r);
     return { to(r), to(i) };
   } else {
-    MF2 s = multifloats::sqrt((mod - a) * half);
-    MF2 r = multifloats::abs(b) / (s + s);
-    MF2 i = (b._limbs[0] < 0.0) ? -s : s;
+    float64x2 s = multifloats::sqrt((mod - a) * half);
+    float64x2 r = multifloats::abs(b) / (s + s);
+    float64x2 i = (b._limbs[0] < 0.0) ? -s : s;
     return { to(r), to(i) };
   }
 }
 
 // sin(a+bi) = sin(a)·cosh(b) + i·cos(a)·sinh(b). 2 fused transcendentals.
 complex64x2_t csindd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 sa, ca, sb, cb;
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 sa, ca, sb, cb;
   sincos_full(a, sa, ca);
   sinhcosh_full(b, sb, cb);
   return { to(sa * cb), to(ca * sb) };
@@ -1986,8 +1984,8 @@ complex64x2_t csindd(complex64x2_t z) {
 
 // cos(a+bi) = cos(a)·cosh(b) − i·sin(a)·sinh(b). 2 fused transcendentals.
 complex64x2_t ccosdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 sa, ca, sb, cb;
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 sa, ca, sb, cb;
   sincos_full(a, sa, ca);
   sinhcosh_full(b, sb, cb);
   return { to(ca * cb), to(-(sa * sb)) };
@@ -1997,21 +1995,21 @@ complex64x2_t ccosdd(complex64x2_t z) {
 // libquadmath ctanq formula; 2 fused transcendentals + real div
 // (vs 8 for generic sin(z)/cos(z)).
 complex64x2_t ctandd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 sa, ca, sb, cb;
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 sa, ca, sb, cb;
   sincos_full(a, sa, ca);
   sinhcosh_full(b, sb, cb);
-  MF2 den = ca * ca + sb * sb;
+  float64x2 den = ca * ca + sb * sb;
   return { to((sa * ca) / den), to((sb * cb) / den) };
 }
 
 // asin(z) = −i · log(i·z + sqrt(1 − z²)). Cuts on real axis for |a|>1.
 complex64x2_t casindd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
+  float64x2 a = from(z.re), b = from(z.im);
   // 1 − z² : Re = 1 − a² + b², Im = −2ab
-  complex64x2_t one_mz2 = { to(MF2(1.0) - a * a + b * b), to(-(a * b + a * b)) };
+  complex64x2_t one_mz2 = { to(float64x2(1.0) - a * a + b * b), to(-(a * b + a * b)) };
   complex64x2_t root = csqrtdd(one_mz2);
-  MF2 rr = from(root.re), ri = from(root.im);
+  float64x2 rr = from(root.re), ri = from(root.im);
   // i·z + root : (−b + rr) + i·(a + ri)
   complex64x2_t arg = { to(-b + rr), to(a + ri) };
   complex64x2_t l = clogdd(arg);
@@ -2023,7 +2021,7 @@ complex64x2_t casindd(complex64x2_t z) {
 // template truncates `(_Tp)1.5707963…L` to double on arm64-macOS, losing
 // the DD low limb — specializing here fixes that correctness bug.
 complex64x2_t cacosdd(complex64x2_t z) {
-  static const MF2 half_pi = float64x2(0x1.921fb54442d18p+0,
+  static const float64x2 half_pi = float64x2(0x1.921fb54442d18p+0,
                                      0x1.1a62633145c07p-54);
   complex64x2_t s = casindd(z);
   return { to(half_pi - from(s.re)), to(-from(s.im)) };
@@ -2034,21 +2032,21 @@ complex64x2_t cacosdd(complex64x2_t z) {
 //   Im = 0.25 · log((a² + (b+1)²) / (a² + (b−1)²))
 // Single log-ratio rather than the naive (i/2)(log(1−iz) − log(1+iz)).
 complex64x2_t catandd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 a2 = a * a;
-  MF2 x = MF2(1.0) - a2 - b * b;
-  MF2 bp1 = b + MF2(1.0), bm1 = b - MF2(1.0);
-  MF2 num = a2 + bp1 * bp1;
-  MF2 den = a2 + bm1 * bm1;
-  MF2 half = float64x2(0.5, 0.0), quarter = float64x2(0.25, 0.0);
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 a2 = a * a;
+  float64x2 x = float64x2(1.0) - a2 - b * b;
+  float64x2 bp1 = b + float64x2(1.0), bm1 = b - float64x2(1.0);
+  float64x2 num = a2 + bp1 * bp1;
+  float64x2 den = a2 + bm1 * bm1;
+  float64x2 half = float64x2(0.5, 0.0), quarter = float64x2(0.25, 0.0);
   return { to(half * atan2_full(a + a, x)),
            to(quarter * log_full(num / den)) };
 }
 
 // sinh(a+bi) = sinh(a)·cos(b) + i·cosh(a)·sin(b). 2 fused transcendentals.
 complex64x2_t csinhdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 sa, ca, sb, cb;
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 sa, ca, sb, cb;
   sinhcosh_full(a, sa, ca);
   sincos_full(b, sb, cb);
   return { to(sa * cb), to(ca * sb) };
@@ -2056,8 +2054,8 @@ complex64x2_t csinhdd(complex64x2_t z) {
 
 // cosh(a+bi) = cosh(a)·cos(b) + i·sinh(a)·sin(b). 2 fused transcendentals.
 complex64x2_t ccoshdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 sa, ca, sb, cb;
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 sa, ca, sb, cb;
   sinhcosh_full(a, sa, ca);
   sincos_full(b, sb, cb);
   return { to(ca * cb), to(sa * sb) };
@@ -2066,19 +2064,19 @@ complex64x2_t ccoshdd(complex64x2_t z) {
 // tanh(a+bi) = (sinh(a)·cosh(a) + i·sin(b)·cos(b)) / (sinh(a)² + cos(b)²).
 // libquadmath ctanhq formula.
 complex64x2_t ctanhdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 sa, ca, sb, cb;
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 sa, ca, sb, cb;
   sinhcosh_full(a, sa, ca);
   sincos_full(b, sb, cb);
-  MF2 den = sa * sa + cb * cb;
+  float64x2 den = sa * sa + cb * cb;
   return { to((sa * ca) / den), to((sb * cb) / den) };
 }
 
 // asinh(z) = log(z + sqrt(z² + 1)). Textbook; matches libstdc++ generic.
 complex64x2_t casinhdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
+  float64x2 a = from(z.re), b = from(z.im);
   // 1 + z² : Re = 1 + a² − b², Im = 2ab
-  complex64x2_t one_pz2 = { to(MF2(1.0) + a * a - b * b), to(a * b + a * b) };
+  complex64x2_t one_pz2 = { to(float64x2(1.0) + a * a - b * b), to(a * b + a * b) };
   complex64x2_t root = csqrtdd(one_pz2);
   complex64x2_t arg = { to(a + from(root.re)), to(b + from(root.im)) };
   return clogdd(arg);
@@ -2088,10 +2086,10 @@ complex64x2_t casinhdd(complex64x2_t z) {
 // More stable near z≈1 than the naive log(z + sqrt(z²−1)) which suffers
 // cancellation in z²−1.
 complex64x2_t cacoshdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 half = float64x2(0.5, 0.0);
-  complex64x2_t zp = { to((a + MF2(1.0)) * half), to(b * half) };
-  complex64x2_t zm = { to((a - MF2(1.0)) * half), to(b * half) };
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 half = float64x2(0.5, 0.0);
+  complex64x2_t zp = { to((a + float64x2(1.0)) * half), to(b * half) };
+  complex64x2_t zm = { to((a - float64x2(1.0)) * half), to(b * half) };
   complex64x2_t s1 = csqrtdd(zp);
   complex64x2_t s2 = csqrtdd(zm);
   complex64x2_t sum = { to(from(s1.re) + from(s2.re)), to(from(s1.im) + from(s2.im)) };
@@ -2103,13 +2101,13 @@ complex64x2_t cacoshdd(complex64x2_t z) {
 //   Re = 0.25 · log((1+a)² + b²)/((1−a)² + b²))
 //   Im = 0.5 · atan2(2b, 1 − a² − b²)
 complex64x2_t catanhdd(complex64x2_t z) {
-  MF2 a = from(z.re), b = from(z.im);
-  MF2 b2 = b * b;
-  MF2 x = MF2(1.0) - b2 - a * a;
-  MF2 ap1 = a + MF2(1.0), am1 = a - MF2(1.0);
-  MF2 num = b2 + ap1 * ap1;
-  MF2 den = b2 + am1 * am1;
-  MF2 half = float64x2(0.5, 0.0), quarter = float64x2(0.25, 0.0);
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 b2 = b * b;
+  float64x2 x = float64x2(1.0) - b2 - a * a;
+  float64x2 ap1 = a + float64x2(1.0), am1 = a - float64x2(1.0);
+  float64x2 num = b2 + ap1 * ap1;
+  float64x2 den = b2 + am1 * am1;
+  float64x2 half = float64x2(0.5, 0.0), quarter = float64x2(0.25, 0.0);
   return { to(quarter * log_full(num / den)),
            to(half * atan2_full(b + b, x)) };
 }
