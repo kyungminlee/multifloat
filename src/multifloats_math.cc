@@ -1,6 +1,7 @@
 #include "multifloats.hh"
 #include "dd_constants.hh"
 #include <cstdint>
+#include <cstring>
 
 // All DD math kernels have internal linkage (anonymous namespace).
 // Only the extern "C" dd_* wrappers at the bottom are exported.
@@ -221,10 +222,11 @@ MFD2 dd_tanpi_full(MFD2 const &x) {
 }
 
 // Cody-Waite range reduction: n = nearest(x·2/π), r = x − n·(π/2) using a
-// 3-part π/2 constant (~161 bits). Each n·pi_half_cwK is an exact DD
-// product via FMA, then subtracted from r as full DD. This preserves ~106
-// bits through the reduction — the critical difference from the previous
-// sinpi(x·inv_pi) path, which lost the integer part of x/π for large |x|.
+// 3-part π/2 constant (three back-to-back doubles). Each n·pi_half_cwK is
+// an exact DD product via FMA, then subtracted from r as full DD; the
+// accumulator carries the full ~106 bits DD can hold — the critical
+// difference from the previous sinpi(x·inv_pi) path, which lost the
+// integer part of x/π for large |x|.
 //
 // Inlined as three (two_sum + low-limb-merge + fast_two_sum) steps rather
 // than three full DD operator- calls: operator- does two independent
@@ -501,7 +503,9 @@ MFD2 dd_atan_full(MFD2 const &x) {
     return r;
   }
   double ax_d = std::abs(x._limbs[0]);
-  if (ax_d < 2.4e-17) return x;  // atan(x) ≈ x for tiny x
+  // atan(x) = x - x³/3 + …; for |x| < sqrt(3)·2⁻⁵³ ≈ 1.85e-16 the
+  // cubic term is below 0.5 DD ulp, so identity is correct to DD.
+  if (ax_d < 1.85e-16) return x;
 
   bool neg = x._limbs[0] < 0.0;
   MFD2 ax = neg ? -x : x;
@@ -546,7 +550,9 @@ MFD2 dd_asin_full(MFD2 const &x) {
     r._limbs[1] = 0.0;
     return r;
   }
-  if (ax_d < 2.4e-17) return x;  // asin(x) ≈ x for tiny x
+  // asin(x) = x + x³/6 + …; for |x| < sqrt(3)·2⁻⁵³ ≈ 1.85e-16 the
+  // cubic term is below 0.5 DD ulp, so identity is correct to DD.
+  if (ax_d < 1.85e-16) return x;
 
   bool neg = x._limbs[0] < 0.0;
   MFD2 ax = neg ? -x : x;
@@ -831,14 +837,14 @@ MFD2 dd_erfc_full(MFD2 const &x) {
 
     // Split x for accurate exp(-x^2): truncate hi limb by zeroing the
     // low 35 mantissa bits (keeps ~17 high bits), so s^2 fits exactly
-    // in a double (2·18 = 36 bits ≤ 53).
-    union {
-      double d;
-      uint64_t u;
-    } uu;
-    uu.d = ax._limbs[0];
-    uu.u &= 0xFFFFFFF800000000ULL;
-    MFD2 s = dd_pair(uu.d, 0.0);
+    // in a double (2·18 = 36 bits ≤ 53). std::memcpy sidesteps strict-
+    // aliasing concerns; the compiler folds it to a register move.
+    uint64_t u;
+    std::memcpy(&u, &ax._limbs[0], sizeof(u));
+    u &= 0xFFFFFFF800000000ULL;
+    double s_hi;
+    std::memcpy(&s_hi, &u, sizeof(s_hi));
+    MFD2 s = dd_pair(s_hi, 0.0);
 
     MFD2 e1 = dd_exp_full(-(s * s) - MFD2(0.5625));
     MFD2 diff_sq = (s - ax) * (s + ax);

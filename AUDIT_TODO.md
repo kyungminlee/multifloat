@@ -132,14 +132,20 @@ already; these are the ones that needed explicit review.
       blank lines, zero code changes across all 96 instantiations).
       All tests pass.
 
-- [ ] **M4. 8-way erfc dispatch duplicated.**
-      `fsrc/multifloats.fypp:2060-2085` vs `:2138-2163`. Extract
-      `dd_erfc_asym_pq(idx, z, p)` helper.
+- [~] **M4. 8-way erfc dispatch duplicated.** **Obsolete:** erfc now
+      lives in C++ only; the Fortran side picked up `dd_erfc`/`dd_erfcx`
+      through `C_DELEGATE_UNARY_MAP` (see M3 refactor). No Fortran
+      dispatch remains to deduplicate.
 
-- [ ] **M5. Section banners.**
-      `fsrc/multifloats.fypp` is 5000 lines with three top-level
-      banners. Promote the ~20 inline `! ====` sub-banners to a
-      consistent style.
+- [x] **M5. Section banners.**
+      Fixed: `fsrc/multifloats.fypp` now uses a clean two-level scheme —
+      `! ====` super-banners mark the three structural divisions (PUBLIC
+      INTERFACE, MODULE DATA/CONSTANTS/C-ABI INTERFACES, PROCEDURE
+      IMPLEMENTATIONS), and `! ----` sub-banners mark each topical
+      section within them. Replaced 103 `! ====` lines with `! ----`,
+      removed the stray duplicate banner before `dd_constants.f90.inc`,
+      and inserted the three super-banner trios. No behavioral changes;
+      full test suite passes.
 
 ## API / ABI
 
@@ -174,13 +180,34 @@ already; these are the ones that needed explicit review.
 
 ## Minor / nits (batch when convenient)
 
-- [ ] `src/multifloats_math.cc:689-692` — union type-pun → `std::bit_cast<uint64_t>`.
-- [ ] `src/multifloats.hh:530-544` — `nextafter` undercounts near powers of 2.
-- [ ] `src/multifloats_math.cc:385, 430` — conservative `2.4e-17` threshold vs true `sqrt(3)·2^-53 ≈ 1.85e-16` in atan/asin (no accuracy loss, tiny perf).
-- [ ] `src/multifloats_math.cc:392-400` — atan cutover `|x|≥10.25` puts `|t|=1/|x|` past rational's 0.09375 validity edge; shift to `|x|≥10+2/3`.
-- [ ] `src/multifloats_math.cc:202` — comment overstates Cody-Waite reduction as "~161 bits"; actually ~106.
-- [ ] `fsrc/multifloats.fypp:638-664` — dead `c_dd_tgamma` / `c_dd_lgamma` bind(C) declarations (Fortran reimplements; doesn't call).
-- [ ] `fsrc/multifloats.fypp:641-643` — `real(dp)` in bind(c) type; idiomatically `real(c_double)`.
-- [ ] `fsrc/multifloats.fypp:3521, 3527, 3605, 3643` — `ax%limbs = -ax%limbs` may allocate temps; split to per-limb.
-- [ ] `fsrc/multifloats.fypp:4140-4173` — `if (ri > 0 .and. mod(k, ri) == 0)` inside hot loop; restructure as nested loops with `ri` as outer stride.
-- [ ] `fsrc/multifloats.fypp:3966-4011` vs `fsrc/multifloats.fypp` product/dim — `sum` is Neumaier-compensated, other reductions naive (duplicate of P4).
+- [x] `src/multifloats_math.cc` — union type-pun in `dd_erfc_scaled_full` replaced
+      with `std::memcpy` round-trip (C++17-safe; compiler folds to a reg move).
+- [x] `src/multifloats_math.cc` — atan/asin tiny-|x| fast-path threshold
+      widened from `2.4e-17` to `1.85e-16 ≈ sqrt(3)·2⁻⁵³`; cubic term still
+      below 0.5 DD ulp. Inline comment records the bound.
+- [x] `src/multifloats_math.cc` — Cody-Waite comment no longer cites "~161
+      bits" (was confusing against the "~106 bits preserved" sentence right
+      after); now describes the constant as "three back-to-back doubles".
+- [x] `fsrc/multifloats.fypp` — `dd_t` bind(c) type uses `real(c_double)`
+      instead of `real(dp)`.
+- [~] `fsrc/multifloats.fypp:638-664` — dead `c_dd_tgamma`/`c_dd_lgamma`
+      bind(C) declarations. **Obsolete:** gone after the M3 refactor
+      (C_DELEGATE_UNARY_MAP covers them).
+- [~] `fsrc/multifloats.fypp` product/dim — naive vs Neumaier. **Obsolete:**
+      subsumed by fixed **P4**.
+
+Deferred (flag for user review before applying):
+
+- [ ] `src/multifloats.hh` `nextafter` — below a power of 2 the down-side
+      `ulp` halves, so `eps = ldexp(ulp, -53)` undercounts by 2×.
+      Fix changes semantics (may skip a DD-representable neighbor), so it
+      wants a deliberate decision + a targeted test.
+- [ ] `src/multifloats_math.cc` atan cutover `|x|≥10.25` — puts
+      `|t|=1/|x|` past the rational's 0.09375 validity edge; shift to
+      `|x|≥10+2/3`. Needs a fuzz re-sweep to confirm no new worst-case.
+- [ ] `fsrc/multifloats.fypp` many sites — `ax%limbs = -ax%limbs` may
+      allocate a temp; split to explicit per-limb negation where it's in
+      a hot path. Grep finds ~20 sites; worth a targeted sweep.
+- [ ] `fsrc/multifloats.fypp:2632` (`mf_dot_product`) — `if (ri > 0 .and.
+      mod(k, ri) == 0)` inside hot loop; restructure as nested loops with
+      `ri` as outer stride. Needs bench to confirm perf win.
