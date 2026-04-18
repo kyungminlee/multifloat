@@ -833,12 +833,15 @@ MultiFloat<T, N> sqrt(MultiFloat<T, N> const &x) {
     r._limbs[0] = std::sqrt(x._limbs[0]);
     return r;
   } else {
-    if (!(x._limbs[0] > T(0))) {
-      r._limbs[0] = std::sqrt(x._limbs[0]); // 0, -0, NaN, or signaling
+    T s = std::sqrt(x._limbs[0]);
+    // Bail on 0, -0, negative, NaN, +Inf — the Karp-Markstein refinement
+    // would compute `inf - inf = NaN` in the residual step for +Inf, and
+    // `0 / 0` for 0. Leading-limb sqrt handles every IEEE special case.
+    if (!(x._limbs[0] > T(0)) || !std::isfinite(s)) {
+      r._limbs[0] = s;
       return r;
     }
     // Karp/Markstein: r = s + (x - s*s) / (2s), evaluated in DD.
-    T s = std::sqrt(x._limbs[0]);
     MultiFloat<T, N> s_dd(s);
     MultiFloat<T, N> residual = x - s_dd * s_dd;
     MultiFloat<T, N> correction(residual._limbs[0] * (T(0.5) / s));
@@ -866,7 +869,42 @@ MultiFloat<T, N> cbrt(MultiFloat<T, N> const &x) {
 
 template <typename T, std::size_t N>
 MultiFloat<T, N> hypot(MultiFloat<T, N> const &x, MultiFloat<T, N> const &y) {
-  return sqrt(x * x + y * y);
+  if constexpr (N == 1) {
+    MultiFloat<T, N> r;
+    r._limbs[0] = std::hypot(x._limbs[0], y._limbs[0]);
+    return r;
+  } else {
+    // Defer to libm's hypot for non-finite so inf/NaN propagate correctly.
+    if (!std::isfinite(x._limbs[0]) || !std::isfinite(y._limbs[0])) {
+      MultiFloat<T, N> r;
+      r._limbs[0] = std::hypot(x._limbs[0], y._limbs[0]);
+      for (std::size_t i = 1; i < N; ++i) r._limbs[i] = T(0);
+      return r;
+    }
+    MultiFloat<T, N> ax = signbit(x) ? -x : x;
+    MultiFloat<T, N> ay = signbit(y) ? -y : y;
+    MultiFloat<T, N> big = (ax > ay) ? ax : ay;
+    MultiFloat<T, N> small = (ax > ay) ? ay : ax;
+    if (big._limbs[0] == T(0)) return MultiFloat<T, N>();
+    // Power-of-2 scale (exact) so big has exponent 0 before the square.
+    int e = std::ilogb(big._limbs[0]);
+    for (std::size_t i = 0; i < N; ++i) {
+      big._limbs[i] = std::ldexp(big._limbs[i], -e);
+      small._limbs[i] = std::ldexp(small._limbs[i], -e);
+    }
+    MultiFloat<T, N> ratio = small / big;
+    MultiFloat<T, N> root = big * sqrt(MultiFloat<T, N>(T(1)) + ratio * ratio);
+    MultiFloat<T, N> r;
+    for (std::size_t i = 0; i < N; ++i) {
+      r._limbs[i] = std::ldexp(root._limbs[i], e);
+    }
+    // Overflow: true result exceeds T's range. Zero the trailing limbs so
+    // callers see a clean inf rather than (inf, NaN).
+    if (!std::isfinite(r._limbs[0])) {
+      for (std::size_t i = 1; i < N; ++i) r._limbs[i] = T(0);
+    }
+    return r;
+  }
 }
 
 template <typename T, std::size_t N>
