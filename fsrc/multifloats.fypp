@@ -54,8 +54,8 @@
 #:set ORD_OPS = [('<', 'lt'), ('>', 'gt'), ('<=', 'le'), ('>=', 'ge')]
 
 #! Unary math function tables
-#:set UNARY_DD_DD = ['abs', 'sqrt', 'sin', 'cos', 'tan', 'sinpi', 'cospi', 'tanpi', 'exp', 'log', 'log10', 'atan', 'asin', 'acos', 'atanpi', 'asinpi', 'acospi', 'aint', 'anint', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'erf', 'erfc', 'erfc_scaled', 'gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1', 'fraction', 'rrspacing', 'spacing', 'epsilon', 'huge', 'tiny']
-#:set UNARY_CDD_CDD = ['sqrt', 'sin', 'cos', 'tan', 'exp', 'log', 'atan', 'asin', 'acos', 'conjg', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh']
+#:set UNARY_DD_DD = ['abs', 'sqrt', 'sin', 'cos', 'tan', 'sinpi', 'cospi', 'tanpi', 'exp', 'expm1', 'log', 'log2', 'log10', 'log1p', 'atan', 'asin', 'acos', 'atanpi', 'asinpi', 'acospi', 'aint', 'anint', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'erf', 'erfc', 'erfc_scaled', 'gamma', 'log_gamma', 'bessel_j0', 'bessel_j1', 'bessel_y0', 'bessel_y1', 'fraction', 'rrspacing', 'spacing', 'epsilon', 'huge', 'tiny']
+#:set UNARY_CDD_CDD = ['sqrt', 'sin', 'sinpi', 'cos', 'cospi', 'tan', 'exp', 'expm1', 'log', 'log2', 'log10', 'log1p', 'atan', 'asin', 'acos', 'conjg', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh']
 #:set UNARY_CDD_DD = ['abs', 'aimag']
 #:set ALL_UNARY = sorted(set(UNARY_DD_DD + UNARY_CDD_CDD + UNARY_CDD_DD))
 
@@ -527,6 +527,20 @@ module multifloats
     public :: dd_to_double
 
     ! ----------------------------------------------------------------
+    ! Fused sincos / sinhcosh
+    ! ----------------------------------------------------------------
+
+    interface sincos
+        module procedure dd_sincos
+    end interface
+    public :: sincos
+
+    interface sinhcosh
+        module procedure dd_sinhcosh
+    end interface
+    public :: sinhcosh
+
+    ! ----------------------------------------------------------------
     ! random_number (impure subroutine)
     ! ----------------------------------------------------------------
 
@@ -659,8 +673,9 @@ module multifloats
 #! Complex DD transcendentals delegated to C c*dd kernels. Function names
 #! are uniform so no map is needed — the Fortran-side name is always
 #! `cdd_<func>`, the C symbol is always `c<func>dd`.
-#:set C_DELEGATE_CX_UNARY_FUNCS = ['sqrt', 'exp', 'log', 'sin', 'cos', 'tan', &
-    'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh']
+#:set C_DELEGATE_CX_UNARY_FUNCS = ['sqrt', 'exp', 'expm1', 'log', 'log2',      &
+    'log10', 'log1p', 'sin', 'sinpi', 'cos', 'cospi', 'tan', 'asin', 'acos',  &
+    'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh']
 
 #! (fortran_full_name, c_symbol) pairs for DD math kernels implemented in
 #! src/multifloats_math.cc. The Fortran side exposes these as elemental
@@ -742,6 +757,17 @@ module multifloats
             integer(c_int), value, intent(in) :: n1, n2
             type(float64x2_t), value, intent(in) :: a
             type(float64x2_t), intent(out) :: out(*)
+        end subroutine
+        ! Fused sin/cos and sinh/cosh: one range-reduction feeds both outputs.
+        pure subroutine c_dd_sincos(a, s, c) bind(c, name='sincosdd')
+            import :: float64x2_t
+            type(float64x2_t), value, intent(in) :: a
+            type(float64x2_t), intent(out) :: s, c
+        end subroutine
+        pure subroutine c_dd_sinhcosh(a, s, c) bind(c, name='sinhcoshdd')
+            import :: float64x2_t
+            type(float64x2_t), value, intent(in) :: a
+            type(float64x2_t), intent(out) :: s, c
         end subroutine
     end interface
 
@@ -1348,10 +1374,16 @@ $:C_DELEGATE_BINARY(ffull, csym)
         res%limbs = [abs(x%limbs(1)) / scale(spacing(x%limbs(1)), -53), 0.0_dp]
 #:elif func == 'exp'
         res = dd_exp_full(x)
+#:elif func == 'expm1'
+        res = dd_expm1_full(x)
 #:elif func == 'log'
         res = dd_log_full(x)
+#:elif func == 'log2'
+        res = dd_log2_full(x)
 #:elif func == 'log10'
         res = dd_log10_full(x)
+#:elif func == 'log1p'
+        res = dd_log1p_full(x)
 #:elif func == 'sin'
         res = dd_sin_full(x)
 #:elif func == 'cos'
@@ -2612,6 +2644,28 @@ $:dd_minmax_body(func, n)
         res%re = p_re
         res%im = p_im
     end function
+
+    ! ----------------------------------------------------------------
+    ! Fused sincos / sinhcosh — one range-reduction, two outputs
+    ! ----------------------------------------------------------------
+
+    pure elemental subroutine dd_sincos(x, s, c)
+        type(float64x2), intent(in) :: x
+        type(float64x2), intent(out) :: s, c
+        type(float64x2_t) :: ss, cc
+        call c_dd_sincos(float64x2_t(x%limbs(1), x%limbs(2)), ss, cc)
+        s%limbs = [ss%hi, ss%lo]
+        c%limbs = [cc%hi, cc%lo]
+    end subroutine
+
+    pure elemental subroutine dd_sinhcosh(x, s, c)
+        type(float64x2), intent(in) :: x
+        type(float64x2), intent(out) :: s, c
+        type(float64x2_t) :: ss, cc
+        call c_dd_sinhcosh(float64x2_t(x%limbs(1), x%limbs(2)), ss, cc)
+        s%limbs = [ss%hi, ss%lo]
+        c%limbs = [cc%hi, cc%lo]
+    end subroutine
 
     ! ----------------------------------------------------------------
     ! Configuration

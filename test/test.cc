@@ -15,6 +15,8 @@
 #include <complex>
 #include <cstdio>
 #include <limits>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace mf = multifloats;
@@ -365,6 +367,69 @@ static void test_atan2_signed_zero() {
   REQUIRE(mf::atan2(y_pos, x_neg)._limbs[0] > 1.5);
   // y<0, x<0 → answer in (−π, −π/2), specifically ≈ −3π/4.
   REQUIRE(mf::atan2(y_neg, x_neg)._limbs[0] < -1.5);
+}
+
+// to_string / operator<< round-trip and format sanity checks. The public
+// API guarantees ~32 significant decimal digits; this test locks in the
+// scientific-notation format, the signed-zero / nan / inf cases, and
+// precision honoring via os.precision().
+static void test_io_to_string_and_stream() {
+  // Signed zero, nan, inf: exact textual match.
+  REQUIRE(mf::to_string(mf::float64x2(0.0)) == "0e+00");
+  mf::float64x2 nz;
+  nz._limbs[0] = -0.0;
+  REQUIRE(mf::to_string(nz) == "-0e+00");
+  REQUIRE(mf::to_string(mf::float64x2(
+              std::numeric_limits<double>::infinity())) == "inf");
+  REQUIRE(mf::to_string(mf::float64x2(
+              -std::numeric_limits<double>::infinity())) == "-inf");
+  REQUIRE(mf::to_string(mf::float64x2(
+              std::numeric_limits<double>::quiet_NaN())) == "nan");
+
+  // Round-trip a DD value: compute π as DD, format to 32 digits, parse
+  // back via __float128 strtoflt128, and require the relative error to be
+  // below 1e-31 (one DD ulp floor).
+  mf::float64x2 pi;
+  pi._limbs[0] = 3.141592653589793;
+  pi._limbs[1] = 1.2246467991473532e-16;  // DD π
+  std::string s = mf::to_string(pi, 32);
+  q_t parsed = strtoflt128(s.c_str(), nullptr);
+  q_t pi_q = to_q(pi);
+  q_t rel = fabsq((parsed - pi_q) / pi_q);
+  REQUIRE(rel < 1e-31q);
+
+  // Format shape: one leading digit, decimal point, 31 digits, 'e', sign,
+  // two-digit exponent. Total length for 32 digits = 1 + 1 + 31 + 1 + 1 + 2 = 37.
+  REQUIRE(s.size() == 37);
+  REQUIRE(s[1] == '.');
+  REQUIRE(s[33] == 'e');
+  REQUIRE(s[34] == '+');
+
+  // Precision clamping: request too few or too many, normalize to [1,34].
+  REQUIRE(mf::to_string(mf::float64x2(1.5), 0).size() >= 5);
+  REQUIRE(mf::to_string(mf::float64x2(1.5), 100).size() > 34);  // 34 digits fits
+
+  // ostream: default precision of 6 should upgrade to 32 automatically.
+  std::ostringstream os;
+  os << pi;
+  REQUIRE(os.str() == s);
+
+  // Explicit precision override via os.precision() honored when > 17.
+  std::ostringstream os2;
+  os2.precision(20);
+  os2 << pi;
+  REQUIRE(os2.str().size() == 1 + 1 + 19 + 1 + 1 + 2);  // 25
+  REQUIRE(os2.str()[21] == 'e');
+
+  // Negative values: leading minus.
+  REQUIRE(mf::to_string(mf::float64x2(-2.5), 3)[0] == '-');
+
+  // Rounding at the boundary: 0.999999... with 3 digits → "1.00e+00".
+  mf::float64x2 almost_one;
+  almost_one._limbs[0] = 0.9999999999999999;
+  almost_one._limbs[1] = 0.0;
+  std::string r = mf::to_string(almost_one, 3);
+  REQUIRE(r == "1.00e+00");
 }
 
 // Non-finite division must produce a DD where BOTH limbs are non-finite, so
@@ -751,6 +816,128 @@ static void test_complex_accessors(Stats &stats) {
 }
 
 // =============================================================================
+// Complex DD transcendentals added in the 1.0 API completion pass:
+//   cexpm1, clog2, clog1p, csinpi, ccospi.
+// (clog10 already existed.) We compare against libquadmath references:
+//   cexpm1(z) ↔ cexpq(z) − 1
+//   clog2(z)  ↔ clogq(z)/log(2)
+//   clog1p(z) ↔ clogq(1 + z)
+//   csinpi(z) ↔ csinq(π·z), with exact-integer z: exactly (0, 0).
+//   ccospi(z) ↔ ccosq(π·z), with exact-integer z: exactly (±1, 0).
+static void test_complex_new_transcendentals(Stats &stats) {
+  using cq_t = __complex128;
+  auto to_cmf = [](q_t re, q_t im) {
+    mf::float64x2 r = from_q(re), i = from_q(im);
+    complex64x2_t z;
+    z.re.hi = r._limbs[0]; z.re.lo = r._limbs[1];
+    z.im.hi = i._limbs[0]; z.im.lo = i._limbs[1];
+    return z;
+  };
+  auto check_c = [&stats](char const *name, complex64x2_t got, cq_t ref,
+                          q_t tol) {
+    q_t re_got = (q_t)got.re.hi + (q_t)got.re.lo;
+    q_t im_got = (q_t)got.im.hi + (q_t)got.im.lo;
+    q_t ref_mag = cabsq(ref);
+    q_t scale = ref_mag > 1 ? ref_mag : (q_t)1;
+    q_t err = fabsq(re_got - crealq(ref)) + fabsq(im_got - cimagq(ref));
+    q_t rel = err / scale;
+    if (rel > tol) {
+      std::printf("FAIL %s rel=%g tol=%g\n", name, (double)rel, (double)tol);
+      ++g_failures;
+    }
+    ++g_checks;
+    stats.update(rel);
+  };
+
+  q_t const pi_q = M_PIq;
+
+  // Small-|z| checkpoints where cexpm1 / clog1p should give full DD
+  // precision. Also a couple of larger magnitudes and the signed axes.
+  struct Case { q_t re, im; };
+  std::vector<Case> cases = {
+      { (q_t)0,        (q_t)0        },
+      { (q_t)1e-20,    (q_t)0        },
+      { (q_t)0,        (q_t)1e-20    },
+      { (q_t)1e-10,    (q_t)2e-10    },
+      { (q_t)0.25,     (q_t)0.5      },
+      { (q_t)-0.5,     (q_t)0.25     },
+      { (q_t)1.5,      (q_t)-0.75    },
+      { (q_t)-3.0,     (q_t)2.0      },
+      { (q_t)0,        pi_q          },  // i·π: e^z = -1, so expm1 = -2.
+  };
+
+  for (Case c : cases) {
+    complex64x2_t z = to_cmf(c.re, c.im);
+    cq_t zq;
+    __real__ zq = c.re;
+    __imag__ zq = c.im;
+
+    // cexpm1(z) vs cexpq(z) - 1. Tolerance 1e-28 — two fused sincos plus
+    // half-angle, so ~2-3× the cexp worst case.
+    complex64x2_t em1 = cexpm1dd(z);
+    cq_t ref_em1 = cexpq(zq) - 1;
+    check_c("cexpm1", em1, ref_em1, (q_t)1e-28);
+
+    // clog1p(z) vs clogq(1 + z). Tolerance 1e-29 — log1p + atan2.
+    complex64x2_t l1p = clog1pdd(z);
+    cq_t one_plus_z = zq;
+    __real__ one_plus_z = (q_t)1 + crealq(zq);
+    cq_t ref_l1p = clogq(one_plus_z);
+    // clog(0) is -inf; skip tolerance check there.
+    q_t ref_l1p_re = crealq(ref_l1p);
+    if (!isinfq(ref_l1p_re) && !isnanq(ref_l1p_re)) {
+      check_c("clog1p", l1p, ref_l1p, (q_t)1e-29);
+    }
+
+    // clog2(z) vs clogq(z) / ln 2. Skip z=0 (log(0) = -inf).
+    if (c.re != 0 || c.im != 0) {
+      complex64x2_t l2 = clog2dd(z);
+      cq_t ref_l2 = clogq(zq) / logq((q_t)2);
+      check_c("clog2", l2, ref_l2, (q_t)1e-29);
+    }
+  }
+
+  // Integer-argument sinpi/cospi: exact-zero imag for real integer z.
+  // csinpi(n+0i) must be exactly (0, 0) (parity check only — real sinpi
+  // already hits this; complex path must not add drift from π·b·sinhcosh).
+  for (int n = -3; n <= 3; ++n) {
+    complex64x2_t z = to_cmf((q_t)n, (q_t)0);
+    complex64x2_t s = csinpidd(z);
+    complex64x2_t c = ccospidd(z);
+    // sin(n·π) = 0 exactly; cos(n·π) = (-1)^n.
+    REQUIRE(s.re.hi == 0.0 && s.re.lo == 0.0);
+    REQUIRE(s.im.hi == 0.0 && s.im.lo == 0.0);
+    REQUIRE(c.re.hi == ((n & 1) ? -1.0 : 1.0));
+    REQUIRE(c.re.lo == 0.0);
+    REQUIRE(c.im.hi == 0.0 && c.im.lo == 0.0);
+  }
+
+  // Non-integer z: csinpi / ccospi vs csinq(π·z) / ccosq(π·z). The ref
+  // multiplies in __float128 so it has ~30 bits of headroom.
+  struct Case2 { q_t re, im; };
+  // Note: huge real arguments (|Re z| >> 1) are deliberately excluded —
+  // the __float128 reference computes csinq(M_PIq * z) which itself loses
+  // bits when M_PIq * Re(z) overflows ~70 bits, drowning our precision
+  // signal. csinpi's whole point is to avoid that on the DD side.
+  std::vector<Case2> trig_cases = {
+      { (q_t)0.25,  (q_t)0       },
+      { (q_t)0.5,   (q_t)0.3     },
+      { (q_t)10.75, (q_t)0       },
+      { (q_t)-0.1,  (q_t)0.7     },
+  };
+  for (Case2 c : trig_cases) {
+    complex64x2_t z = to_cmf(c.re, c.im);
+    cq_t piz;
+    __real__ piz = pi_q * c.re;
+    __imag__ piz = pi_q * c.im;
+    complex64x2_t s = csinpidd(z);
+    complex64x2_t cc = ccospidd(z);
+    check_c("csinpi", s, csinq(piz), (q_t)1e-28);
+    check_c("ccospi", cc, ccosq(piz), (q_t)1e-28);
+  }
+}
+
+// =============================================================================
 // atan cutover edge cases
 // =============================================================================
 //
@@ -858,7 +1045,7 @@ int main() {
   test_classification();
   test_nextafter_symmetry();
 
-  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn, lrp, cxa, bjn;
+  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn, lrp, cxa, bjn, cxn;
   test_unary(una);
   test_addition(add);
   test_subtraction(sub);
@@ -867,12 +1054,14 @@ int main() {
   test_division_nonfinite();
   test_atan2_signed_zero();
   test_csqrt_zero_branch();
+  test_io_to_string_and_stream();
   test_abs_fmin_fmax(abs_fmm);
   test_copysign(csgn);
   test_ldexp_scalbn_ilogb(ldx);
   test_atan_cutover(atn);
   test_lerp(lrp);
   test_complex_accessors(cxa);
+  test_complex_new_transcendentals(cxn);
   test_bessel_jn_miller_precision(bjn);
 
   std::printf("[multifloats_test] %d checks, %d failures\n", g_checks,
@@ -890,6 +1079,7 @@ int main() {
   print_stats("atan cutover", atn);
   print_stats("lerp", lrp);
   print_stats("cx accessors", cxa);
+  print_stats("cx new transc", cxn);
   print_stats("bessel jn (Miller)", bjn);
 
   return g_failures == 0 ? 0 : 1;

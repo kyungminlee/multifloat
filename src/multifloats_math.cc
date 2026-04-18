@@ -1948,6 +1948,76 @@ complex64x2_t clog10dd(complex64x2_t z) {
   return { to(from(l.re) * inv_ln10), to(from(l.im) * inv_ln10) };
 }
 
+// log2(z) = log(z) · (1/ln 2).
+complex64x2_t clog2dd(complex64x2_t z) {
+  static const float64x2 inv_ln2 =
+      float64x2(1.4426950408889634, 2.0355273740931033e-17);
+  complex64x2_t l = clogdd(z);
+  return { to(from(l.re) * inv_ln2), to(from(l.im) * inv_ln2) };
+}
+
+// log1p(z) = log(1 + z) without losing precision for |z| << 1. Uses
+// log1p on the real scalar form `|1+z|² - 1 = 2a + a² + b²`, which is
+// computed without the 1 ± 1 cancellation. The imaginary part is
+// `atan2(b, 1 + a)` — atan2 handles the branch cut and signed-zero
+// propagation directly. Matches libquadmath clog1pq.
+complex64x2_t clog1pdd(complex64x2_t z) {
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 u = (a + a) + a * a + b * b;          // 2a + a² + b²
+  float64x2 half(0.5, 0.0);
+  float64x2 r = half * log1p_full(u);
+  float64x2 phi = atan2_full(b, float64x2(1.0, 0.0) + a);
+  return { to(r), to(phi) };
+}
+
+// expm1(z) = e^z - 1 without losing precision for |z| << 1. Write
+//   Re = (e^a - 1) cos(b) + (cos(b) - 1)
+//      = expm1(a)·cos(b) − 2·sin²(b/2)
+//   Im = e^a · sin(b) = (1 + expm1(a)) · sin(b)
+// The half-angle form of (cos(b) − 1) keeps the real part full-DD for
+// small |b| where the direct `cos(b) − 1` cancels. Two fused sincos
+// pairs — cost is ~2× cexp for general z, matches cexp for |z| ≫ 1.
+complex64x2_t cexpm1dd(complex64x2_t z) {
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 ea_m1 = expm1_full(a);
+  float64x2 s, c;
+  sincos_full(b, s, c);
+  float64x2 shalf, chalf;
+  sincos_full(float64x2(0.5, 0.0) * b, shalf, chalf);
+  float64x2 cos_m1 = -((shalf * shalf) + (shalf * shalf));
+  float64x2 re = ea_m1 * c + cos_m1;
+  float64x2 ea = float64x2(1.0, 0.0) + ea_m1;
+  float64x2 im = ea * s;
+  return { to(re), to(im) };
+}
+
+// sin(π·z) = sin(π·a) cosh(π·b) + i cos(π·a) sinh(π·b). Using sinpi/cospi
+// on the real part keeps full DD precision for half-integer a (where
+// sin(π·a) is exactly 0 or ±1 but sin_full(π·a) loses bits to the range
+// reduction on π·a). The imaginary scaling π·b is a direct DD multiply.
+complex64x2_t csinpidd(complex64x2_t z) {
+  static const float64x2 pi_dd(pi_dd_hi, pi_dd_lo);
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 s = sinpi_full(a);
+  float64x2 c = cospi_full(a);
+  float64x2 pib = pi_dd * b;
+  float64x2 sh, ch;
+  sinhcosh_full(pib, sh, ch);
+  return { to(s * ch), to(c * sh) };
+}
+
+// cos(π·z) = cos(π·a) cosh(π·b) − i sin(π·a) sinh(π·b).
+complex64x2_t ccospidd(complex64x2_t z) {
+  static const float64x2 pi_dd(pi_dd_hi, pi_dd_lo);
+  float64x2 a = from(z.re), b = from(z.im);
+  float64x2 s = sinpi_full(a);
+  float64x2 c = cospi_full(a);
+  float64x2 pib = pi_dd * b;
+  float64x2 sh, ch;
+  sinhcosh_full(pib, sh, ch);
+  return { to(c * ch), to(-(s * sh)) };
+}
+
 // pow(z, w) = exp(w · log(z)). C99 G.6.4.1; 0^w folds to 0.
 complex64x2_t cpowdd(complex64x2_t z, complex64x2_t w) {
   if (z.re.hi == 0.0 && z.im.hi == 0.0) return { {0.0, 0.0}, {0.0, 0.0} };

@@ -35,14 +35,32 @@ Perf sentinels before/after: `div` 0.0013s, `atan2` 0.0072→0.0073s,
 
 ## Tier 2 — API completeness (blocks 1.0)
 
-- [ ] **5. C++ I/O** — `operator<<(ostream&, float64x2)` + `to_string`. `src/multifloats.hh`. **M**
-- [ ] **6. Fortran `sincos` / `sinhcosh`** — expose fused pairs already in C ABI. **S**
-- [ ] **7. Complex DD transcendentals** — `clog2dd`, `clog10dd`, `clog1pdd`,
-  `cexpm1dd`, `csinpidd`, `ccospidd` in C ABI + Fortran. **M**
-- [ ] **8. Matmul transA/transB/alpha/beta** — at minimum document current
-  behavior; ideally add GEMM-style flags. **L**
-- [ ] **9. Error-handling policy in README** — NaN in, NaN out; no errno; no
-  signalling. **S**
+- [x] **5. C++ I/O** — `to_string(float64x2, int precision=32)` + `operator<<`
+  in `multifloats` namespace (inline in header; archive exports only
+  extern "C" so C++ helpers must be header-resident). Scientific notation
+  with up to 34 digits; round-half-to-even with 2-digit guard. Regression
+  test `test_io_to_string_and_stream` covers nan/inf/signed-zero formats,
+  round-trip vs `__float128`, precision clamping, carry rollover.
+- [x] **6. Fortran `sincos` / `sinhcosh`** — exposed as pure elemental
+  subroutines delegating to `sincosdd` / `sinhcoshdd`. Added bit-equal vs
+  separate-call regression test (`test_sincos_sinhcosh` in
+  `test/precision.f90`, 5 samples incl. 0, negative, large).
+- [x] **7. Complex DD transcendentals** — added `clog2dd`, `clog1pdd`,
+  `cexpm1dd`, `csinpidd`, `ccospidd` in C ABI (clog10dd already existed);
+  all six exposed as Fortran generics (`log2`, `log10`, `log1p`, `expm1`,
+  `sinpi`, `cospi`). Also filled pre-existing real gaps (log2, log1p,
+  expm1 previously had `dd_*_full` kernels but no generic interface).
+  New C++ test `test_complex_new_transcendentals` (max_rel 1.1e-31 — DD
+  ulp) + Fortran `test_new_generic_intrinsics` covering all 9 identities.
+- [x] **8. Matmul transA/transB/alpha/beta** — documented the current
+  non-GEMM semantics explicitly in the C-ABI header and a new README
+  "Matmul API and GEMM relationship" section (no trans flags, no
+  alpha/beta, no LDA; contiguous column-major only). GEMM-style flag
+  extension is left as a future item — requires new panel dispatchers
+  for transposed shapes.
+- [x] **9. Error-handling policy in README** — Added dedicated "Error
+  handling" section documenting NaN-in-NaN-out, no errno, no fenv, no
+  exceptions, no signalling NaN, no input validation.
 
 ## Tier 3 — Performance
 

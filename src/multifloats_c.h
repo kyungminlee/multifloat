@@ -156,12 +156,17 @@ MULTIFLOATS_API void sinhcoshdd(float64x2_t a, float64x2_t *s, float64x2_t *c);
  * specializations in multifloats.hh delegate here where specialization
  * wins (exp, sin, cos, tan, sinh, cosh, tanh, atanh, acos). */
 MULTIFLOATS_API complex64x2_t cexpdd(complex64x2_t z);
+MULTIFLOATS_API complex64x2_t cexpm1dd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t clogdd(complex64x2_t z);
+MULTIFLOATS_API complex64x2_t clog2dd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t clog10dd(complex64x2_t z);
+MULTIFLOATS_API complex64x2_t clog1pdd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t cpowdd(complex64x2_t z, complex64x2_t w);
 MULTIFLOATS_API complex64x2_t csqrtdd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t csindd(complex64x2_t z);
+MULTIFLOATS_API complex64x2_t csinpidd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t ccosdd(complex64x2_t z);
+MULTIFLOATS_API complex64x2_t ccospidd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t ctandd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t casindd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t cacosdd(complex64x2_t z);
@@ -190,6 +195,23 @@ MULTIFLOATS_API float64x2_t   cimagdd(complex64x2_t z);
  *   matmuldd_mv: y(m)   = A(m,k) * x(k)
  *   matmuldd_vm: y(n)   = x(k)   * B(k,n)
  * Leading dimensions equal the first extent (no strides).
+ *
+ * Scope vs BLAS GEMM. These are *not* a direct replacement for DGEMM:
+ *
+ *   - transa / transb: no. Always treats both operands in storage order;
+ *     the caller must transpose the input arrays before the call if
+ *     needed. (In Fortran, `matmul(transpose(a), b)` materialises the
+ *     transpose, then the kernel walks the transposed buffer.)
+ *   - alpha / beta:    no. The output is overwritten, not accumulated
+ *     into. To compute `C := alpha*A*B + beta*C`, the caller must scale
+ *     `A` or `B`, run matmul, then combine with C explicitly.
+ *   - leading dimensions: always the first extent; no LDA/LDB/LDC.
+ *
+ * These constraints are deliberate: the compensated DD kernels use a
+ * register-blocked panel design that assumes contiguous column-major
+ * storage with the canonical shape. Adding transposed / strided / in-
+ * place-accumulating variants is plausible but would require a new set
+ * of panel dispatchers — tracked in the AUDIT_TODO.md roadmap.
  *
  * renorm_interval: if > 0, renormalize accumulators every N reductions
  * (matches DD_FMA_RENORM_INTERVAL in the Fortran layer — keeps s_lo

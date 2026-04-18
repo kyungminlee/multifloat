@@ -281,6 +281,70 @@ The infrastructure (operators, reductions, complex / array support,
 constructors, assignments) is already at full DD; only the per-function
 kernels for the items above remain.
 
+## Matmul API and GEMM relationship
+
+The `matmul` surface provides three shape-dispatched operations:
+
+| Op                | Signature                                    |
+| ----------------- | -------------------------------------------- |
+| `matmul(A, B)`    | `A(m,k) * B(k,n) → C(m,n)`                   |
+| `matmul(A, x)`    | `A(m,k) * x(k)   → y(m)`                     |
+| `matmul(x, B)`    | `x(k)   * B(k,n) → y(n)`                     |
+
+Both real (`float64x2`) and complex (`complex64x2`) operands are
+supported through the same Fortran generic. The C ABI exposes the three
+kernels directly as `matmuldd_mm` / `matmuldd_mv` / `matmuldd_vm`
+(complex matmul is composed in Fortran from four real matmuls).
+
+**Scope vs BLAS GEMM.** `multifloats::matmul` is *not* a drop-in
+replacement for DGEMM / CGEMM:
+
+- **No `transa` / `transb` flags.** Inputs are always interpreted in
+  storage order. Callers who need a transposed operand must
+  materialize the transpose first (`matmul(transpose(A), B)` in
+  Fortran, or pre-swap indices when setting up the buffer).
+- **No `alpha` / `beta` scaling.** The output is overwritten, not
+  accumulated into. `C := α·A·B + β·C` must be built by scaling an
+  operand and combining with the previous `C` externally.
+- **No leading dimension (LDA/LDB/LDC).** Storage is contiguous
+  column-major with leading dimension equal to the first extent.
+
+These constraints are deliberate: the compensated DD kernels use a
+register-blocked panel design that assumes contiguous column-major
+storage with the canonical shape. Relaxing them (e.g. GEMM-style
+trans/alpha/beta/LDA) is on the `AUDIT_TODO.md` roadmap for a future
+release; it requires a new set of panel dispatchers to cover the
+additional shapes.
+
+**BLAS shims.** `blas/wgemm.f90` and `blas/wtrsm.f90` provide
+`real(qp)`-mangled DGEMM/DTRSM-style wrappers that route to the DD
+kernels for the non-transposed cases (for use with LAPACK routines that
+need quad-precision substitutes).
+
+## Error handling
+
+`multifloats` follows a strict *NaN-in-NaN-out* policy. Invalid inputs
+propagate through the computation as IEEE 754 non-finite values rather
+than interrupting control flow:
+
+- **No `errno`.** `<cerrno>` is never read or written. `log(-1)` returns
+  a DD NaN; `errno` is left untouched.
+- **No `fenv` side effects.** The kernels do not call `feraiseexcept`,
+  `feclearexcept`, or depend on the floating-point rounding mode.
+- **No exceptions.** No C++ `throw`, no `std::terminate`, no
+  `__builtin_trap`. No Fortran `error stop`.
+- **No signaling NaN handling.** Any NaN (quiet or signalling) is
+  treated as data, and arithmetic kernels propagate it.
+- **No input validation.** Domain checks are limited to what IEEE 754
+  naturally produces — e.g. `sqrt(-x)` on a negative DD returns NaN
+  because the underlying `std::sqrt(hi)` returns NaN. There is no
+  pre-check that raises an error.
+
+This mirrors the behavior of `double` in C and `real(kind=16)` in
+Fortran and makes the kernels safe to call from hot loops, vectorized
+code, and parallel regions without synchronization on shared error
+state.
+
 ## Building
 
 Requires:

@@ -34,6 +34,8 @@ program test_multifloats_precision
   call test_assignments_from_dd(failures)
   call test_assignments_from_cdd(failures)
   call test_constructors(failures)
+  call test_sincos_sinhcosh(failures)
+  call test_new_generic_intrinsics(failures)
 
   if (failures /= 0) then
     write(*,'(a,i0)') 'FAIL: ', failures
@@ -807,6 +809,94 @@ contains
     x = one + float64x2(0.5_dp * e * e)
     call check_true('1 + 0.5 eps^2 finite', ieee_is_finite(x%limbs(1)) &
         .and. ieee_is_finite(x%limbs(2)), failures)
+  end subroutine
+
+  ! Fused sincos / sinhcosh must be bit-equal to separate sin/cos calls,
+  ! since both go through the same C kernel. Also exercise the elemental
+  ! array form on varied inputs (including negative, near-zero, large).
+  subroutine test_sincos_sinhcosh(failures)
+    integer, intent(inout) :: failures
+    real(dp), parameter :: samples(5) = [0.0_dp, 0.1_dp, -1.25_dp, 3.1_dp, 7.0_dp]
+    type(float64x2) :: xs(5), ss(5), cs(5), sref(5), cref(5)
+    integer :: i
+    character(len=32) :: tag
+
+    do i = 1, 5
+      xs(i) = float64x2(samples(i))
+    end do
+
+    ! Fused vs separate: must be bit-equal since both go through the same
+    ! kernel (sincos_full / sinhcosh_full in multifloats_math.cc).
+    call sincos(xs, ss, cs)
+    sref = sin(xs); cref = cos(xs)
+    do i = 1, 5
+      write(tag, '(a,i0)') 'sincos sin bit-eq [', i
+      call check_true(trim(tag)//']', &
+          ss(i)%limbs(1) == sref(i)%limbs(1) .and. &
+          ss(i)%limbs(2) == sref(i)%limbs(2), failures)
+      write(tag, '(a,i0)') 'sincos cos bit-eq [', i
+      call check_true(trim(tag)//']', &
+          cs(i)%limbs(1) == cref(i)%limbs(1) .and. &
+          cs(i)%limbs(2) == cref(i)%limbs(2), failures)
+    end do
+
+    call sinhcosh(xs, ss, cs)
+    sref = sinh(xs); cref = cosh(xs)
+    do i = 1, 5
+      write(tag, '(a,i0)') 'sinhcosh sinh bit-eq [', i
+      call check_true(trim(tag)//']', &
+          ss(i)%limbs(1) == sref(i)%limbs(1) .and. &
+          ss(i)%limbs(2) == sref(i)%limbs(2), failures)
+      write(tag, '(a,i0)') 'sinhcosh cosh bit-eq [', i
+      call check_true(trim(tag)//']', &
+          cs(i)%limbs(1) == cref(i)%limbs(1) .and. &
+          cs(i)%limbs(2) == cref(i)%limbs(2), failures)
+    end do
+  end subroutine
+
+  ! Generic intrinsics newly exposed in the 1.0 API completion pass:
+  ! real log2, log1p, expm1; complex log2, log10, log1p, expm1, sinpi,
+  ! cospi. Each check is a simple identity point.
+  subroutine test_new_generic_intrinsics(failures)
+    integer, intent(inout) :: failures
+    type(float64x2) :: x, r
+    type(complex64x2) :: z, cr
+    real(qp) :: xq
+
+    ! Real DD: log2(8)=3, log1p(0)=0, expm1(0)=0.
+    x = float64x2(8.0_dp); r = log2(x)
+    call check_real_close('log2(8)', r, 3.0_qp, failures)
+    x = float64x2(0.0_dp); r = log1p(x)
+    call check_real_close('log1p(0)', r, 0.0_qp, failures)
+    x = float64x2(0.0_dp); r = expm1(x)
+    call check_real_close('expm1(0)', r, 0.0_qp, failures)
+
+    ! Small-input log1p / expm1: require full-DD precision.
+    xq = 1.0e-20_qp
+    x = float64x2(real(xq, dp)); r = log1p(x)
+    call check_real_close('log1p(1e-20)', r, xq, failures)
+    r = expm1(x)
+    call check_real_close('expm1(1e-20)', r, xq, failures)
+
+    ! Complex DD identity points.
+    z = complex64x2(2.0_dp, 0.0_dp); cr = log2(z)
+    call check_complex_close('clog2(2)', cr, (1.0_qp, 0.0_qp), failures)
+    z = complex64x2(10.0_dp, 0.0_dp); cr = log10(z)
+    call check_complex_close('clog10(10)', cr, (1.0_qp, 0.0_qp), failures)
+    z = complex64x2(0.0_dp, 0.0_dp); cr = log1p(z)
+    call check_complex_close('clog1p(0)', cr, (0.0_qp, 0.0_qp), failures)
+    z = complex64x2(0.0_dp, 0.0_dp); cr = expm1(z)
+    call check_complex_close('cexpm1(0)', cr, (0.0_qp, 0.0_qp), failures)
+
+    ! Half-integer sinpi / cospi: exact zeros and ±1.
+    z = complex64x2(0.5_dp, 0.0_dp); cr = sinpi(z)
+    call check_complex_close('csinpi(0.5)', cr, (1.0_qp, 0.0_qp), failures)
+    z = complex64x2(0.5_dp, 0.0_dp); cr = cospi(z)
+    call check_complex_close('ccospi(0.5)', cr, (0.0_qp, 0.0_qp), failures)
+    z = complex64x2(1.0_dp, 0.0_dp); cr = sinpi(z)
+    call check_complex_close('csinpi(1)', cr, (0.0_qp, 0.0_qp), failures)
+    z = complex64x2(1.0_dp, 0.0_dp); cr = cospi(z)
+    call check_complex_close('ccospi(1)', cr, (-1.0_qp, 0.0_qp), failures)
   end subroutine
 
 end program test_multifloats_precision
