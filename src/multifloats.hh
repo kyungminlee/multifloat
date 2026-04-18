@@ -427,19 +427,27 @@ MultiFloat<T, N> trunc(MultiFloat<T, N> const &x) {
 
 template <typename T, std::size_t N>
 MultiFloat<T, N> round(MultiFloat<T, N> const &x) {
-  // Round half away from zero, matching std::round. Mirrors nearbyint's
-  // structure: round hi first, then disambiguate lo. Correctness hinge:
-  // when hi is exactly half-integer, std::round rounds away from zero
-  // unconditionally, but the true DD value may lie on the other side of
-  // the half-boundary depending on lo's sign — undo the step in that case.
+  // Round half away from zero, matching std::round. Two half-integer
+  // hazards handled here:
+  //   * hi itself half-integer (e.g. 2.5): std::round jumps away from zero,
+  //     undone when lo lies on the other side of the half-boundary.
+  //   * hi exact integer with lo == ±0.5 (possible once ulp(hi) ≥ 1, i.e.
+  //     |hi| ≥ 2^53): if sign(lo) opposes sign(hi), the true value is
+  //     closer to zero, so the correct rounded value is hi itself rather
+  //     than hi ± 1 that std::round(lo) would add.
   MultiFloat<T, N> r;
   if constexpr (N == 1) {
     r._limbs[0] = std::round(x._limbs[0]);
   } else {
     T hi = std::round(x._limbs[0]);
     if (hi == x._limbs[0]) {
+      T lo = x._limbs[1];
+      T rlo;
+      if      (lo == T( 0.5) && hi <  T(0)) rlo = T(0);
+      else if (lo == T(-0.5) && hi >  T(0)) rlo = T(0);
+      else                                  rlo = std::round(lo);
       r._limbs[0] = hi;
-      r._limbs[1] = std::round(x._limbs[1]);
+      r._limbs[1] = rlo;
       detail::renorm_fast(r._limbs[0], r._limbs[1]);
     } else {
       T diff = x._limbs[0] - hi;
@@ -476,14 +484,36 @@ MultiFloat<T, N> rint(MultiFloat<T, N> const &x) {
   return nearbyint(x);
 }
 
+namespace detail {
+// Shared half-integer correction for lround / llround. Given i = std::[l]lround(x_hi),
+// adjust ±1 based on how lo crosses the half-integer boundary of the true value.
+template <typename Int, typename T, std::size_t N>
+Int lround_adjust(MultiFloat<T, N> const &x, Int i) {
+  if constexpr (N == 2) {
+    T hi = x._limbs[0];
+    T lo = x._limbs[1];
+    T diff = hi - T(i);
+    if (diff == T(0)) {
+      // hi exact integer; lo (bounded by ulp(hi)/2) decides.
+      if      (lo >  T( 0.5))                 ++i;
+      else if (lo <  T(-0.5))                 --i;
+      else if (lo == T( 0.5) && hi >= T(0))   ++i;
+      else if (lo == T(-0.5) && hi <= T(0))   --i;
+    } else if (diff == T(-0.5) && lo < T(0)) --i;
+    else if   (diff == T( 0.5) && lo > T(0)) ++i;
+  }
+  return i;
+}
+} // namespace detail
+
 template <typename T, std::size_t N>
 long lround(MultiFloat<T, N> const &x) {
-  return std::lround(round(x)._limbs[0]);
+  return detail::lround_adjust<long>(x, std::lround(x._limbs[0]));
 }
 
 template <typename T, std::size_t N>
 long long llround(MultiFloat<T, N> const &x) {
-  return std::llround(round(x)._limbs[0]);
+  return detail::lround_adjust<long long>(x, std::llround(x._limbs[0]));
 }
 
 template <typename T, std::size_t N>
