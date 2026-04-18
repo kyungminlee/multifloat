@@ -14,7 +14,7 @@ already; these are the ones that needed explicit review.
 - [x] **C2. Matmul periodic renorm uses unsafe `fast_two_sum`.**
       Fixed: introduced `dd_renorm_inl` (a full two_sum) in
       `src/multifloats_math.cc`; `dd_finalize_inl`, the periodic renorm
-      in `dd_gaxpy_mv_panel`, and the periodic renorm in `matmul_vmdd`
+      in `dd_gaxpy_mv_panel`, and the periodic renorm in `matmuldd_vm`
       all route through it. Removed duplicated fast_two_sum open-code.
       Fuzz suite + benchmarks unchanged (tiny constant overhead on renorm
       boundary only).
@@ -62,7 +62,7 @@ already; these are the ones that needed explicit review.
 
 ## Speed
 
-- [x] **S1. `matmul_mmdd` re-streams A per B column.**
+- [x] **S1. `matmuldd_mm` re-streams A per B column.**
       Fixed: introduced `dd_gemm_panel<MR=8, NR=2>` in
       `src/multifloats_math.cc`; each p-step loads A[:,p] once into
       registers and reuses across the 2-wide B tile. Row / column tails

@@ -1633,7 +1633,7 @@ static inline void dd_gaxpy_mv_panel(const float64x2_t *__restrict__ a,
 
 // Cold tail handler: 1..7 leftover rows. Kept out-of-line so the hot
 // dispatcher stays small enough for the compiler to inline panel<8>
-// into matmul_mvdd — otherwise the 7 extra template instantiations
+// into matmuldd_mv — otherwise the 7 extra template instantiations
 // would bloat the caller and push the accumulators out of registers.
 __attribute__((noinline))
 static void dd_gaxpy_mv_tail(const float64x2_t *__restrict__ a,
@@ -2058,7 +2058,7 @@ complex64x2_t catanhdd(complex64x2_t z) {
 // MR panels + a 1..7 tail. mm calls the same mv dispatch per output
 // column.
 
-void matmul_mmdd(const float64x2_t *__restrict__ a, const float64x2_t *__restrict__ b,
+void matmuldd_mm(const float64x2_t *__restrict__ a, const float64x2_t *__restrict__ b,
                   float64x2_t *__restrict__ c, int64_t m, int64_t k, int64_t n,
                   int64_t renorm_interval) {
   // NR-blocked mm: the MR-row × NR-col tile loads A[:,p] once per p and
@@ -2087,7 +2087,7 @@ void matmul_mmdd(const float64x2_t *__restrict__ a, const float64x2_t *__restric
   }
 }
 
-void matmul_mvdd(const float64x2_t *__restrict__ a, const float64x2_t *__restrict__ x,
+void matmuldd_mv(const float64x2_t *__restrict__ a, const float64x2_t *__restrict__ x,
                   float64x2_t *__restrict__ y, int64_t m, int64_t k,
                   int64_t renorm_interval) {
   dd_gaxpy_mv_dispatch(a, x, y, m, k, m, renorm_interval);
@@ -2095,7 +2095,7 @@ void matmul_mvdd(const float64x2_t *__restrict__ a, const float64x2_t *__restric
 
 // vm: y[j] = sum_p x[p] * B[p, j]. Column-major B makes B[:, j]
 // contiguous at fixed j, so one scalar accumulator per output is optimal.
-void matmul_vmdd(const float64x2_t *__restrict__ x, const float64x2_t *__restrict__ b,
+void matmuldd_vm(const float64x2_t *__restrict__ x, const float64x2_t *__restrict__ b,
                   float64x2_t *__restrict__ y, int64_t k, int64_t n,
                   int64_t renorm_interval) {
   const bool simple = (renorm_interval <= 0) || (k <= renorm_interval);

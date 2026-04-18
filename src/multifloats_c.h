@@ -169,23 +169,23 @@ MULTIFLOATS_API complex64x2_t cacoshdd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t catanhdd(complex64x2_t z);
 
 /* Matrix multiply (column-major, Fortran layout).
- *   matmul_mmdd: C(m,n) = A(m,k) * B(k,n)
- *   matmul_mvdd: y(m)   = A(m,k) * x(k)
- *   matmul_vmdd: y(n)   = x(k)   * B(k,n)
+ *   matmuldd_mm: C(m,n) = A(m,k) * B(k,n)
+ *   matmuldd_mv: y(m)   = A(m,k) * x(k)
+ *   matmuldd_vm: y(n)   = x(k)   * B(k,n)
  * Leading dimensions equal the first extent (no strides).
  *
  * renorm_interval: if > 0, renormalize accumulators every N reductions
  * (matches MF_FMA_RENORM_INTERVAL in the Fortran layer — keeps s_lo
  * bounded for large k). Pass 0 to renormalize only at the end. */
-MULTIFLOATS_API void matmul_mmdd(const float64x2_t *a, const float64x2_t *b,
+MULTIFLOATS_API void matmuldd_mm(const float64x2_t *a, const float64x2_t *b,
                          float64x2_t *c,
                          int64_t m, int64_t k, int64_t n,
                          int64_t renorm_interval);
-MULTIFLOATS_API void matmul_mvdd(const float64x2_t *a, const float64x2_t *x,
+MULTIFLOATS_API void matmuldd_mv(const float64x2_t *a, const float64x2_t *x,
                          float64x2_t *y,
                          int64_t m, int64_t k,
                          int64_t renorm_interval);
-MULTIFLOATS_API void matmul_vmdd(const float64x2_t *x, const float64x2_t *b,
+MULTIFLOATS_API void matmuldd_vm(const float64x2_t *x, const float64x2_t *b,
                          float64x2_t *y,
                          int64_t k, int64_t n,
                          int64_t renorm_interval);
