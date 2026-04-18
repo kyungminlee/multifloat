@@ -823,6 +823,59 @@ MFD2 dd_erfc_full(MFD2 const &x) {
   return neg ? MFD2(2.0) - res : res;
 }
 
+// erfc_scaled(x) = exp(x²) · erfc(x).
+// For |x| >= 1.25, substitute erfc(x) = (1/x)·exp(-x² - 0.5625 + R(1/x²))
+// so the x² terms cancel: erfc_scaled(|x|) = (1/|x|) · exp(R - 0.5625).
+// This avoids the exp(x²)·(tiny) overflow/underflow pair that the direct
+// product would hit for large |x|. For the negative branch,
+//   erfc_scaled(-|x|) = 2·exp(x²) - erfc_scaled(|x|)
+// and exp(x²) itself can overflow; guard that.
+// For |x| < 1.25, both factors are moderate and we compute the product
+// directly.
+MFD2 dd_erfc_scaled_full(MFD2 const &x) {
+  if (!std::isfinite(x._limbs[0])) {
+    MFD2 r;
+    if (x._limbs[0] > 0.0)      r._limbs[0] = 0.0;                                            // erfc_scaled(+inf) = 0
+    else if (x._limbs[0] < 0.0) r._limbs[0] = std::numeric_limits<double>::infinity();        // erfc_scaled(-inf) = +inf
+    else                         r._limbs[0] = x._limbs[0];                                    // NaN
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  bool neg = x._limbs[0] < 0.0;
+  MFD2 ax = neg ? -x : x;
+  if (ax._limbs[0] < 1.25) {
+    return dd_exp_full(x * x) * dd_erfc_full(x);
+  }
+  // Asymptotic branch.
+  MFD2 x2 = ax * ax;
+  MFD2 z = MFD2(1.0) / x2;
+  int i = static_cast<int>(8.0 / ax._limbs[0]);
+  if (i > 7) i = 7;
+  MFD2 p;
+  switch (i) {
+  case 0: p = dd_neval(z, erfc_AN1_hi, erfc_AN1_lo, 9)  / dd_deval(z, erfc_AD1_hi, erfc_AD1_lo, 8);  break;
+  case 1: p = dd_neval(z, erfc_AN2_hi, erfc_AN2_lo, 11) / dd_deval(z, erfc_AD2_hi, erfc_AD2_lo, 10); break;
+  case 2: p = dd_neval(z, erfc_AN3_hi, erfc_AN3_lo, 11) / dd_deval(z, erfc_AD3_hi, erfc_AD3_lo, 10); break;
+  case 3: p = dd_neval(z, erfc_AN4_hi, erfc_AN4_lo, 10) / dd_deval(z, erfc_AD4_hi, erfc_AD4_lo, 10); break;
+  case 4: p = dd_neval(z, erfc_AN5_hi, erfc_AN5_lo, 10) / dd_deval(z, erfc_AD5_hi, erfc_AD5_lo, 9);  break;
+  case 5: p = dd_neval(z, erfc_AN6_hi, erfc_AN6_lo, 9)  / dd_deval(z, erfc_AD6_hi, erfc_AD6_lo, 9);  break;
+  case 6: p = dd_neval(z, erfc_AN7_hi, erfc_AN7_lo, 9)  / dd_deval(z, erfc_AD7_hi, erfc_AD7_lo, 9);  break;
+  default:p = dd_neval(z, erfc_AN8_hi, erfc_AN8_lo, 9)  / dd_deval(z, erfc_AD8_hi, erfc_AD8_lo, 8);  break;
+  }
+  MFD2 res = dd_exp_full(p - MFD2(0.5625)) / ax;
+  if (neg) {
+    MFD2 exp_x2 = dd_exp_full(x2);
+    if (!std::isfinite(exp_x2._limbs[0])) {
+      MFD2 r;
+      r._limbs[0] = std::numeric_limits<double>::infinity();
+      r._limbs[1] = 0.0;
+      return r;
+    }
+    res = MFD2(2.0) * exp_x2 - res;
+  }
+  return res;
+}
+
 // ---- tgamma / lgamma -------------------------------------------------------
 // Native DD Stirling asymptotic with shift recurrence and reflection.
 // Every operation runs in double-double so no libm floor is imposed on
@@ -1547,6 +1600,7 @@ dd_t dd_atanh(dd_t a) { return to(dd_atanh_full(from(a))); }
 // Error functions
 dd_t dd_erf(dd_t a)   { return to(dd_erf_full(from(a))); }
 dd_t dd_erfc(dd_t a)  { return to(dd_erfc_full(from(a))); }
+dd_t dd_erfcx(dd_t a) { return to(dd_erfc_scaled_full(from(a))); }
 
 // Gamma functions
 dd_t dd_tgamma(dd_t a) { return to(dd_tgamma_full(from(a))); }

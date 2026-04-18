@@ -1263,11 +1263,11 @@ def write_cpp(groups, f):
 # Output: Fortran
 # =============================================================================
 
-# Only the constants the Fortran module still references after the C
-# delegation. The 8-way erfc asymptotic rationals in dd_erfc_scaled_full are
-# the sole Fortran users; everything else has a C counterpart in dd_*_full.
-F90_KEPT_NAMES = {f'erfc_AN{i}' for i in range(1, 9)} \
-               | {f'erfc_AD{i}' for i in range(1, 9)}
+# Fortran no longer references any generated DD constants — every math
+# routine delegates to the C++ kernels via the extern "C" dd_* surface.
+# Kept as an empty set so the `include 'dd_constants.f90.inc'` still
+# compiles and can be rehydrated if a future Fortran-side kernel is added.
+F90_KEPT_NAMES = set()
 
 
 def write_f90(groups, f):

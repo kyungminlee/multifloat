@@ -78,9 +78,12 @@ DD_API dd_t dd_asinh(dd_t a);
 DD_API dd_t dd_acosh(dd_t a);
 DD_API dd_t dd_atanh(dd_t a);
 
-/* Error functions */
+/* Error functions. dd_erfcx is the scaled complementary error function
+ *   dd_erfcx(x) = exp(x^2) * dd_erfc(x)
+ * (standard name in Faddeeva/Julia/SciPy; Fortran calls it erfc_scaled). */
 DD_API dd_t dd_erf(dd_t a);
 DD_API dd_t dd_erfc(dd_t a);
+DD_API dd_t dd_erfcx(dd_t a);
 
 /* Gamma functions */
 DD_API dd_t dd_tgamma(dd_t a);
