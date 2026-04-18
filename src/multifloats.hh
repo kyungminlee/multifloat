@@ -670,6 +670,28 @@ constexpr MultiFloat<T, N> fdim(MultiFloat<T, N> const &x,
   return (x > y) ? (x - y) : MultiFloat<T, N>();
 }
 
+// C++20 std::lerp: exact at the endpoints, monotonic in t, and does not
+// overshoot when a and b have the same sign and t is in [0, 1].
+template <typename T, std::size_t N>
+MultiFloat<T, N> lerp(MultiFloat<T, N> const &a, MultiFloat<T, N> const &b,
+                      MultiFloat<T, N> const &t) {
+  if ((a._limbs[0] <= T(0) && b._limbs[0] >= T(0)) ||
+      (a._limbs[0] >= T(0) && b._limbs[0] <= T(0))) {
+    // Opposite signs (or one is zero): no cancellation risk.
+    return t * b + (MultiFloat<T, N>(T(1)) - t) * a;
+  }
+  if (t == MultiFloat<T, N>(T(1))) {
+    return b;  // exact endpoint per C++20 spec
+  }
+  MultiFloat<T, N> x = a + t * (b - a);
+  // Enforce monotonicity at the b end when t is past 1 or when rounding
+  // nudges x beyond b — matches libstdc++/libc++ behavior.
+  if ((t._limbs[0] > T(1)) == (b > a)) {
+    return (b > x) ? b : x;
+  }
+  return (x > b) ? b : x;
+}
+
 // =============================================================================
 // detail:: inline helpers for DD polynomial evaluation
 //

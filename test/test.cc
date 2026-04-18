@@ -380,6 +380,71 @@ static void test_ldexp_scalbn_ilogb(Stats &stats) {
 }
 
 // =============================================================================
+// lerp — C++20 specification properties
+// =============================================================================
+//
+// `lerp(a, b, t)` must satisfy:
+//   1. lerp(a, b, 0) == a  (exact)
+//   2. lerp(a, b, 1) == b  (exact)
+//   3. lerp(a, a, t) == a  (exact, for any finite t)
+//   4. monotonicity: if t1 < t2 then lerp(a, b, t1) <= lerp(a, b, t2) when a<b
+//   5. accuracy: for t ∈ [0, 1] and same-sign a,b the result has no cancellation
+//   6. NaN propagation: if any argument is NaN the result is NaN
+static void test_lerp(Stats &stats) {
+  MF2 const cases[][2] = {
+      {MF2(0.0), MF2(1.0)},
+      {MF2(-1.0), MF2(1.0)},   // opposite signs
+      {MF2(1.0), MF2(2.0)},    // same sign, ascending
+      {MF2(-2.0), MF2(-1.0)},  // same sign, both negative
+      {MF2(3.0), MF2(3.0)},    // a == b
+      {from_q(M_PIq), from_q(M_Eq)},
+      {from_q(scalbnq((q_t)1, 50)), from_q(scalbnq((q_t)1, -50))},
+  };
+  double const ts[] = {0.0, 0.25, 0.5, 0.75, 1.0, -0.5, 1.5, 2.0};
+
+  for (auto const &p : cases) {
+    MF2 const &a = p[0];
+    MF2 const &b = p[1];
+    q_t qa = to_q(a), qb = to_q(b);
+    // Endpoint exactness (spec requirement, not tolerance-based).
+    REQUIRE(mf::lerp(a, b, MF2(0.0)) == a);
+    REQUIRE(mf::lerp(a, b, MF2(1.0)) == b);
+    // a == b: every t returns a.
+    if (a == b) {
+      for (double t : ts) {
+        REQUIRE(mf::lerp(a, b, MF2(t)) == a);
+      }
+      continue;
+    }
+    // Value check vs __float128 reference at intermediate t.
+    for (double t : ts) {
+      MF2 r = mf::lerp(a, b, MF2(t));
+      q_t expected = qa + (q_t)t * (qb - qa);
+      // For t in [0,1], lerp is exact to DD precision.
+      // For extrapolation, allow the standard DD add/mul tolerance.
+      check_q("lerp", r, expected, 1e-30, stats, &a, &b);
+    }
+  }
+
+  // NaN propagation.
+  MF2 nan_val;
+  nan_val._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+  nan_val._limbs[1] = 0.0;
+  REQUIRE(mf::isnan(mf::lerp(nan_val, MF2(1.0), MF2(0.5))));
+  REQUIRE(mf::isnan(mf::lerp(MF2(0.0), nan_val, MF2(0.5))));
+  REQUIRE(mf::isnan(mf::lerp(MF2(0.0), MF2(1.0), nan_val)));
+
+  // Monotonicity sweep on a well-conditioned same-sign pair.
+  MF2 a(1.0), b(2.0);
+  MF2 prev = mf::lerp(a, b, MF2(0.0));
+  for (int i = 1; i <= 100; ++i) {
+    MF2 cur = mf::lerp(a, b, MF2((double)i / 100.0));
+    REQUIRE(cur >= prev);
+    prev = cur;
+  }
+}
+
+// =============================================================================
 // nextafter edge cases (power-of-2 boundaries)
 // =============================================================================
 //
@@ -574,7 +639,7 @@ int main() {
   test_classification();
   test_nextafter_symmetry();
 
-  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn;
+  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn, lrp;
   test_unary(una);
   test_addition(add);
   test_subtraction(sub);
@@ -584,6 +649,7 @@ int main() {
   test_copysign(csgn);
   test_ldexp_scalbn_ilogb(ldx);
   test_atan_cutover(atn);
+  test_lerp(lrp);
 
   std::printf("[multifloats_test] %d checks, %d failures\n", g_checks,
               g_failures);
@@ -598,6 +664,7 @@ int main() {
   print_stats("copysign", csgn);
   print_stats("ldexp/etc", ldx);
   print_stats("atan cutover", atn);
+  print_stats("lerp", lrp);
 
   return g_failures == 0 ? 0 : 1;
 }
