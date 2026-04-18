@@ -2,6 +2,7 @@
 #include "dd_constants.hh"
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 // All DD math kernels have internal linkage (anonymous namespace).
 // Only the extern "C" dd_* wrappers at the bottom are exported.
@@ -1385,6 +1386,147 @@ MFD2 dd_bessel_y1_full(MFD2 const &x) {
   return multifloats::sqrt(tpi / x) * (p * s + q * c);
 }
 
+// ---- Integer-order Bessel Jn / Yn (recurrence from j0/j1 / y0/y1) ----------
+//
+// Jn: forward recurrence  J_{i+1}(x) = (2i/x) J_i(x) − J_{i-1}(x)  is stable
+// for i ≤ |x|.  For i > |x| it blows up, so we use Miller's algorithm —
+// backward recurrence from a sufficiently high start index (determined by a
+// continued-fraction convergence criterion), with periodic rescaling to avoid
+// overflow of the unnormalized sequence, then normalized against J_0 or J_1
+// (whichever has larger magnitude).  Mirrors Numerical Recipes §6.5.
+//
+// Yn: forward recurrence is always stable (|Y_n| grows with n for fixed x),
+// so no Miller's algorithm is needed.
+
+static MFD2 dd_bessel_jn_full(int n, MFD2 x) {
+  // Track sign flips from the identities
+  //   J_{-n}(x) = (-1)^n J_n(x)     and     J_n(-x) = (-1)^n J_n(x).
+  int parity = 0;
+  if (n < 0) { n = -n; parity ^= (n & 1); }
+  if (n == 0) return dd_bessel_j0_full(x);
+  if (n == 1) {
+    MFD2 r = dd_bessel_j1_full(x);
+    return parity ? -r : r;
+  }
+  if (x._limbs[0] < 0.0) { x = -x; parity ^= (n & 1); }
+
+  double xx = x._limbs[0];
+  if (xx == 0.0 || !std::isfinite(xx)) return MFD2(0.0);
+
+  MFD2 result;
+  if (static_cast<double>(n) <= xx) {
+    // Forward recurrence.
+    MFD2 a = dd_bessel_j0_full(x);
+    MFD2 b = dd_bessel_j1_full(x);
+    for (int i = 1; i < n; ++i) {
+      MFD2 temp = b;
+      b = MFD2(static_cast<double>(2 * i)) / x * b - a;
+      a = temp;
+    }
+    result = b;
+  } else {
+    // Continued-fraction start: iterate until q1 crosses 1e17. The index k at
+    // which that happens is the safe extra depth for Miller's backward sweep.
+    MFD2 w = MFD2(static_cast<double>(2 * n) / xx);
+    MFD2 h = MFD2(2.0 / xx);
+    MFD2 q0 = w;
+    MFD2 z = w + h;
+    MFD2 q1 = w * z - MFD2(1.0);
+    int k = 1;
+    while (q1._limbs[0] < 1e17) {
+      ++k;
+      z = z + h;
+      MFD2 tmp = z * q1 - q0;
+      q0 = q1;
+      q1 = tmp;
+    }
+    // Downward Lentz from index 2(n+k) to 2n.
+    MFD2 t(0.0);
+    for (int i = 2 * (n + k); i >= 2 * n; i -= 2) {
+      t = MFD2(1.0) / (MFD2(static_cast<double>(i)) / x - t);
+    }
+    MFD2 a = t;
+    MFD2 b(1.0);
+    // Decide whether this problem size can overflow during descent.
+    MFD2 v = MFD2(2.0 / xx);
+    MFD2 log_arg = MFD2(static_cast<double>(n)) *
+                   dd_log_full(multifloats::abs(v * MFD2(static_cast<double>(n))));
+    bool rescale = log_arg._limbs[0] >= 1.1356e4;
+    for (int i = n - 1; i >= 1; --i) {
+      MFD2 temp = b;
+      b = MFD2(static_cast<double>(2 * i)) * b / x - a;
+      a = temp;
+      if (rescale && b._limbs[0] > 1e100) {
+        a = a / b;
+        t = t / b;
+        b = MFD2(1.0);
+      }
+    }
+    MFD2 z0 = dd_bessel_j0_full(x);
+    MFD2 z1 = dd_bessel_j1_full(x);
+    if (std::abs(z0._limbs[0]) >= std::abs(z1._limbs[0])) {
+      result = t * z0 / b;
+    } else {
+      result = t * z1 / a;
+    }
+  }
+  return parity ? -result : result;
+}
+
+static MFD2 dd_bessel_yn_full(int n, MFD2 x) {
+  // Y_{-n}(x) = (-1)^n Y_n(x). No x-sign identity — Y is undefined on x < 0.
+  int parity = 0;
+  if (n < 0) { n = -n; parity ^= (n & 1); }
+  double xx = x._limbs[0];
+  if (xx <= 0.0) {
+    MFD2 r;
+    r._limbs[0] = (xx == 0.0) ? -std::numeric_limits<double>::infinity()
+                              :  std::numeric_limits<double>::quiet_NaN();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (n == 0) {
+    MFD2 r = dd_bessel_y0_full(x);
+    return parity ? -r : r;
+  }
+  if (n == 1) {
+    MFD2 r = dd_bessel_y1_full(x);
+    return parity ? -r : r;
+  }
+  if (!std::isfinite(xx)) return MFD2(0.0);
+  MFD2 a = dd_bessel_y0_full(x);
+  MFD2 b = dd_bessel_y1_full(x);
+  for (int i = 1; i < n; ++i) {
+    MFD2 temp = b;
+    b = MFD2(static_cast<double>(2 * i)) / x * b - a;
+    a = temp;
+    if (!std::isfinite(b._limbs[0])) break;
+  }
+  return parity ? -b : b;
+}
+
+// Range variant: compute Y_{n1}, Y_{n1+1}, …, Y_{n2}(x) into `out` via a
+// single forward recurrence sweep. Cheaper than n2−n1+1 independent calls.
+// Caller guarantees out[] has room for n2−n1+1 elements.
+static void dd_bessel_yn_range_full(int n1, int n2, MFD2 x, MFD2 *out) {
+  int size = n2 - n1 + 1;
+  if (size <= 0) return;
+  MFD2 a = dd_bessel_y0_full(x);
+  MFD2 b = dd_bessel_y1_full(x);
+  if (n1 == 0) out[0] = a;
+  if (n1 <= 1 && n2 >= 1) out[1 - n1] = b;
+  for (int n = 2; n <= n2; ++n) {
+    MFD2 temp = b;
+    b = MFD2(static_cast<double>(2 * (n - 1))) / x * b - a;
+    a = temp;
+    if (n >= n1) out[n - n1] = b;
+    if (!std::isfinite(b._limbs[0])) {
+      for (int j = std::max(n - n1 + 1, 0); j < size; ++j) out[j] = b;
+      return;
+    }
+  }
+}
+
 } // anonymous namespace
 
 // =============================================================================
@@ -1647,6 +1789,17 @@ dd_t dd_j0(dd_t a) { return to(dd_bessel_j0_full(from(a))); }
 dd_t dd_j1(dd_t a) { return to(dd_bessel_j1_full(from(a))); }
 dd_t dd_y0(dd_t a) { return to(dd_bessel_y0_full(from(a))); }
 dd_t dd_y1(dd_t a) { return to(dd_bessel_y1_full(from(a))); }
+
+// Integer-order Bessel functions (recurrence from j0/j1, y0/y1).
+dd_t dd_jn(int n, dd_t a) { return to(dd_bessel_jn_full(n, from(a))); }
+dd_t dd_yn(int n, dd_t a) { return to(dd_bessel_yn_full(n, from(a))); }
+void dd_yn_range(int n1, int n2, dd_t a, dd_t *out) {
+  int size = n2 - n1 + 1;
+  if (size <= 0) return;
+  std::vector<MF2> buf(size);
+  dd_bessel_yn_range_full(n1, n2, from(a), buf.data());
+  for (int i = 0; i < size; ++i) out[i] = to(buf[i]);
+}
 
 // Fused sincos / sinhcosh. Out-pointer style (C has no multi-value return).
 void dd_sincos(dd_t a, dd_t *s, dd_t *c) {

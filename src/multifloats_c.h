@@ -124,11 +124,17 @@ MULTIFLOATS_API dd_t dd_erfcx(dd_t a);
 MULTIFLOATS_API dd_t dd_tgamma(dd_t a);
 MULTIFLOATS_API dd_t dd_lgamma(dd_t a);
 
-/* Bessel functions (POSIX naming) */
+/* Bessel functions (POSIX naming). dd_jn / dd_yn: integer-order recurrence
+ * seeded from dd_j0 / dd_j1 (Miller's backward recurrence for Jn when n > x).
+ * dd_yn_range: single forward-recurrence sweep filling n2 − n1 + 1 outputs
+ * into `out`; cheaper than n2 − n1 + 1 independent dd_yn calls. */
 MULTIFLOATS_API dd_t dd_j0(dd_t a);
 MULTIFLOATS_API dd_t dd_j1(dd_t a);
 MULTIFLOATS_API dd_t dd_y0(dd_t a);
 MULTIFLOATS_API dd_t dd_y1(dd_t a);
+MULTIFLOATS_API dd_t dd_jn(int n, dd_t a);
+MULTIFLOATS_API dd_t dd_yn(int n, dd_t a);
+MULTIFLOATS_API void dd_yn_range(int n1, int n2, dd_t a, dd_t *out);
 
 /* Fused sincos / sinhcosh. One range-reduction + Taylor pair produces
  * both outputs, roughly halving the transcendental cost for call sites
