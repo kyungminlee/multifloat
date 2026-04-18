@@ -685,7 +685,8 @@ module multifloats
 #:set C_DELEGATE_BINARY_MAP = [ &
     ('dd_atan2_full',   'dd_atan2'),   &
     ('dd_atan2pi_full', 'dd_atan2pi'), &
-    ('dd_hypot_full',   'dd_hypot') ]
+    ('dd_hypot_full',   'dd_hypot'),   &
+    ('dd_fmod_full',    'dd_fmod') ]
 
     interface
 #:for _ffull, csym in C_DELEGATE_UNARY_MAP
@@ -1793,61 +1794,7 @@ $:C_DELEGATE_BINARY(ffull, csym)
             end if
         end block
 #:elif func == 'mod'
-        ! Fast iterative reduction for exponent gaps ≤ 53 (quotients
-        ! up to ~2^53). For larger gaps, fall back to the divide-based
-        ! path which computes trunc(x/y) without iterative cancellation.
-        block
-            logical :: x_neg
-            type(float64x2) :: ax, ay, r
-            real(dp) :: q
-            integer :: ex, ey, diff
-            x_neg = (x%limbs(1) < 0.0_dp)
-            if (x_neg) then
-                ax%limbs(1) = -x%limbs(1); ax%limbs(2) = -x%limbs(2)
-            else
-                ax = x
-            end if
-            if (y%limbs(1) < 0.0_dp) then
-                ay%limbs(1) = -y%limbs(1); ay%limbs(2) = -y%limbs(2)
-            else
-                ay = y
-            end if
-            if (ax < ay) then
-                res = x
-            else
-                ex = exponent(ax%limbs(1))
-                ey = exponent(ay%limbs(1))
-                diff = ex - ey
-                if (diff > 53) then
-                    ! Large gap: full DD divide path (correct for any range)
-                    res = x - dd_trunc(x / y) * y
-                else
-                    ! Small gap: floor-multiple reduction (no DD divide).
-                    ! Use aint (returns real) rather than floor (returns
-                    ! default integer, which overflows for q > 2^31 and
-                    ! saturates negative — forcing the slow one-at-a-time
-                    ! subtract path to loop ~r/ay times). r and ay are
-                    ! positive here so aint == floor.
-                    r = ax
-                    do while (r >= ay)
-                        q = aint(r%limbs(1) / ay%limbs(1))
-                        if (q <= 1.0_dp) then
-                            r = r - ay
-                        else
-                            r = r - mf_mul_dp(ay, q)
-                        end if
-                        if (r%limbs(1) < 0.0_dp) r = r + ay
-                        if (r%limbs(1) == 0.0_dp .and. r%limbs(2) == 0.0_dp) exit
-                    end do
-                    if (x_neg) then
-                        res%limbs(1) = -r%limbs(1)
-                        res%limbs(2) = -r%limbs(2)
-                    else
-                        res = r
-                    end if
-                end if
-            end if
-        end block
+        res = dd_fmod_full(x, y)
 #:elif func == 'modulo'
         ! modulo via mod + sign adjustment
         res = ${n1}$_mod_${n2}$(a, b)

@@ -577,28 +577,29 @@ constexpr MultiFloat<T, N> fma(MultiFloat<T, N> const &x,
 
 template <typename T, std::size_t N>
 MultiFloat<T, N> fmod(MultiFloat<T, N> const &x, MultiFloat<T, N> const &y) {
-  // For small quotients (exponent gap <= 53): floor-multiple reduction
-  // without DD divide. For large quotients: divide-based path.
+  // Exponent gap > 53: quotient exceeds ~2^53, so one DD divide + trunc
+  // is cheaper and more accurate than looping.
+  // Otherwise: iteratively subtract floor(r_hi / ay_hi)·ay until r < ay.
+  // In practice the loop runs 1-3 iterations; it is robust to a
+  // leading-limb floor that undershoots by one (the loop closes the gap),
+  // unlike a single-pass reduction.
   bool x_neg = x._limbs[0] < T(0);
   MultiFloat<T, N> ax = x_neg ? -x : x;
   MultiFloat<T, N> ay = (y._limbs[0] < T(0)) ? -y : y;
 
   if (ax < ay) return x;
 
-  int diff = std::ilogb(ax._limbs[0]) - std::ilogb(ay._limbs[0]);
   MultiFloat<T, N> r;
-
-  if (diff > 53) {
+  if (std::ilogb(ax._limbs[0]) - std::ilogb(ay._limbs[0]) > 53) {
     r = ax - trunc(ax / ay) * ay;
   } else {
-    T q = std::floor(ax._limbs[0] / ay._limbs[0]);
-    if (q <= T(1)) {
-      r = ax - ay;
-    } else {
-      r = ax - ay * MultiFloat<T, N>(q);
+    r = ax;
+    while (r >= ay) {
+      T q = std::trunc(r._limbs[0] / ay._limbs[0]);
+      r = (q <= T(1)) ? (r - ay) : (r - ay * MultiFloat<T, N>(q));
+      if (r._limbs[0] < T(0)) r = r + ay;
+      if (r._limbs[0] == T(0) && r._limbs[1] == T(0)) break;
     }
-    if (r._limbs[0] < T(0)) r = r + ay;
-    if (!(r < ay)) r = r - ay;
   }
 
   return x_neg ? -r : r;
