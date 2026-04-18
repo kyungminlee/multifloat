@@ -7,10 +7,12 @@
 // Built with g++ + libquadmath (Apple Clang lacks __float128).
 
 #include "multifloats.hh"
+#include "multifloats_c.h"
 
 #include <quadmath.h>
 
 #include <cmath>
+#include <complex>
 #include <cstdio>
 #include <limits>
 #include <vector>
@@ -532,6 +534,115 @@ static void test_nextafter_symmetry() {
 }
 
 // =============================================================================
+// Complex accessors and structural ops (cabs / carg / cproj / conj / real / imag)
+// =============================================================================
+//
+// These are the C ABI symbols added to match libquadmath's surface.
+// Reference is __complex128 from libquadmath. Each check runs the DD
+// path (via the extern "C" symbol) and compares against cabsq / cargq
+// / cprojq / conjq / crealq / cimagq.
+static void test_complex_accessors(Stats &stats) {
+  using cq_t = __complex128;
+  auto to_cq = [](float64x2_t a) {
+    return (q_t)a.hi + (q_t)a.lo;
+  };
+
+  // Diverse representative points: axes, all four quadrants, tiny and
+  // huge magnitudes, signed zero / inf / nan in each component.
+  struct Case { q_t re; q_t im; };
+  std::vector<Case> cases = {
+      {(q_t)0, (q_t)0},  {(q_t)1, (q_t)0},  {(q_t)-1, (q_t)0},
+      {(q_t)0, (q_t)1},  {(q_t)0, (q_t)-1}, {(q_t)1, (q_t)1},
+      {(q_t)-1, (q_t)1}, {(q_t)-1, (q_t)-1}, {(q_t)1, (q_t)-1},
+      {(q_t)3, (q_t)4},  // classic 3-4-5.
+      {scalbnq((q_t)1, 600), scalbnq((q_t)1, 600)},   // overflow-range hypot.
+      {scalbnq((q_t)1, -600), scalbnq((q_t)1, -600)}, // underflow-range hypot.
+      {M_PIq, M_Eq},
+  };
+
+  for (Case c : cases) {
+    MF2 re = from_q(c.re);
+    MF2 im = from_q(c.im);
+    complex64x2_t z = {
+        {re._limbs[0], re._limbs[1]},
+        {im._limbs[0], im._limbs[1]},
+    };
+
+    cq_t cq;
+    __real__ cq = c.re;
+    __imag__ cq = c.im;
+    // cabs: |z|
+    {
+      MF2 got;
+      float64x2_t r = cabsdd(z);
+      got._limbs[0] = r.hi;
+      got._limbs[1] = r.lo;
+      check_q("cabs", got, cabsq(cq), 1e-30, stats);
+    }
+    // carg: atan2(im, re); libquadmath's cargq takes __complex128.
+    {
+      MF2 got;
+      float64x2_t r = cargdd(z);
+      got._limbs[0] = r.hi;
+      got._limbs[1] = r.lo;
+      check_q("carg", got, cargq(cq), 1e-30, stats);
+    }
+    // creal / cimag: exact field accessors — must be bitwise equal.
+    {
+      float64x2_t rre = crealdd(z);
+      float64x2_t rim = cimagdd(z);
+      REQUIRE(rre.hi == z.re.hi && rre.lo == z.re.lo);
+      REQUIRE(rim.hi == z.im.hi && rim.lo == z.im.lo);
+    }
+    // conj: (re, -im) bitwise (signs of both limbs flipped).
+    {
+      complex64x2_t c2 = conjdd(z);
+      REQUIRE(c2.re.hi == z.re.hi && c2.re.lo == z.re.lo);
+      // Signed zero: conj should flip +0 ↔ -0 on the imag part.
+      REQUIRE(to_cq(c2.im) == -to_cq(z.im) ||
+              (z.im.hi == 0.0 && z.im.lo == 0.0));
+    }
+  }
+
+  // cproj / conj edge cases with non-finite inputs.
+  double const pinf = std::numeric_limits<double>::infinity();
+  double const nan = std::numeric_limits<double>::quiet_NaN();
+  struct InfCase {
+    double re;
+    double im;
+    double expect_re;
+    double expect_im;  // cproj result (sign of im preserved).
+  };
+  InfCase const inf_cases[] = {
+      {pinf, 1.0, pinf, +0.0},
+      {1.0, pinf, pinf, +0.0},
+      {-pinf, -2.0, pinf, -0.0},
+      {1.0, -pinf, pinf, -0.0},
+      {nan, pinf, pinf, +0.0},  // inf on any part collapses.
+      {1.0, 2.0, 1.0, 2.0},     // finite: identity.
+      {nan, nan, nan, nan},     // all-nan: identity (no inf).
+  };
+  for (InfCase ic : inf_cases) {
+    complex64x2_t z = {{ic.re, 0.0}, {ic.im, 0.0}};
+    complex64x2_t r = cprojdd(z);
+    if (std::isnan(ic.expect_re)) {
+      REQUIRE(std::isnan(r.re.hi));
+    } else {
+      REQUIRE(r.re.hi == ic.expect_re);
+      // Signed-zero on imag is the whole point of cproj: verify bit-exact.
+      if (ic.expect_im == 0.0) {
+        REQUIRE(r.im.hi == 0.0);
+        REQUIRE(std::signbit(r.im.hi) == std::signbit(ic.expect_im));
+      } else if (std::isnan(ic.expect_im)) {
+        REQUIRE(std::isnan(r.im.hi));
+      } else {
+        REQUIRE(r.im.hi == ic.expect_im);
+      }
+    }
+  }
+}
+
+// =============================================================================
 // atan cutover edge cases
 // =============================================================================
 //
@@ -639,7 +750,7 @@ int main() {
   test_classification();
   test_nextafter_symmetry();
 
-  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn, lrp;
+  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn, lrp, cxa;
   test_unary(una);
   test_addition(add);
   test_subtraction(sub);
@@ -650,6 +761,7 @@ int main() {
   test_ldexp_scalbn_ilogb(ldx);
   test_atan_cutover(atn);
   test_lerp(lrp);
+  test_complex_accessors(cxa);
 
   std::printf("[multifloats_test] %d checks, %d failures\n", g_checks,
               g_failures);
@@ -665,6 +777,7 @@ int main() {
   print_stats("ldexp/etc", ldx);
   print_stats("atan cutover", atn);
   print_stats("lerp", lrp);
+  print_stats("cx accessors", cxa);
 
   return g_failures == 0 ? 0 : 1;
 }

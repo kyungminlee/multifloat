@@ -1491,4 +1491,34 @@ MULTIFLOATS_CX_SPECIALIZE(acos)
 
 #undef MULTIFLOATS_CX_SPECIALIZE
 
+// Real-returning / identity specializations that delegate to the
+// matching c*dd symbol. `abs` and `arg` match libquadmath's overflow-
+// safe hypot / atan2 paths. `proj` handles the Riemann-sphere case.
+template <>
+inline multifloats::MultiFloat<double, 2>
+abs(complex<multifloats::MultiFloat<double, 2>> const &z) {
+  ::complex64x2_t in = {multifloats::detail::to_f64x2(z.real()),
+                        multifloats::detail::to_f64x2(z.imag())};
+  return multifloats::detail::from_f64x2(::cabsdd(in));
+}
+
+template <>
+inline multifloats::MultiFloat<double, 2>
+arg(complex<multifloats::MultiFloat<double, 2>> const &z) {
+  ::complex64x2_t in = {multifloats::detail::to_f64x2(z.real()),
+                        multifloats::detail::to_f64x2(z.imag())};
+  return multifloats::detail::from_f64x2(::cargdd(in));
+}
+
+template <>
+inline complex<multifloats::MultiFloat<double, 2>>
+proj(complex<multifloats::MultiFloat<double, 2>> const &z) {
+  ::complex64x2_t in = {multifloats::detail::to_f64x2(z.real()),
+                        multifloats::detail::to_f64x2(z.imag())};
+  ::complex64x2_t out = ::cprojdd(in);
+  return complex<multifloats::MultiFloat<double, 2>>(
+      multifloats::detail::from_f64x2(out.re),
+      multifloats::detail::from_f64x2(out.im));
+}
+
 }  // namespace std

@@ -173,6 +173,18 @@ MULTIFLOATS_API complex64x2_t casinhdd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t cacoshdd(complex64x2_t z);
 MULTIFLOATS_API complex64x2_t catanhdd(complex64x2_t z);
 
+/* Complex magnitude / argument / projection / conjugate / accessors.
+ * cabsdd = |z|  (overflow-safe hypot).
+ * cargdd = arg(z) in (-pi, pi].
+ * cprojdd = projection onto the Riemann sphere (C99 7.3.9.4):
+ *   infinities collapse to (+inf, copysign(0, imag)), else identity. */
+MULTIFLOATS_API float64x2_t   cabsdd(complex64x2_t z);
+MULTIFLOATS_API float64x2_t   cargdd(complex64x2_t z);
+MULTIFLOATS_API complex64x2_t cprojdd(complex64x2_t z);
+MULTIFLOATS_API complex64x2_t conjdd(complex64x2_t z);
+MULTIFLOATS_API float64x2_t   crealdd(complex64x2_t z);
+MULTIFLOATS_API float64x2_t   cimagdd(complex64x2_t z);
+
 /* Matrix multiply (column-major, Fortran layout).
  *   matmuldd_mm: C(m,n) = A(m,k) * B(k,n)
  *   matmuldd_mv: y(m)   = A(m,k) * x(k)

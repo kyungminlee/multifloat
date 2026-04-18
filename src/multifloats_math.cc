@@ -2112,6 +2112,43 @@ complex64x2_t catanhdd(complex64x2_t z) {
            to(half * atan2_full(b + b, x)) };
 }
 
+// |z| via the scale-aware path shared with clogdd: avoids overflow when
+// |z| exceeds DBL_MAX even though hypot(a,b) itself would saturate.
+float64x2_t cabsdd(complex64x2_t z) {
+  float64x2 a = from(z.re), b = from(z.im);
+  return to(multifloats::hypot(a, b));
+}
+
+// arg(z) = atan2(im, re), with the standard branch cut on the negative
+// real axis; signed zero in im selects ±pi.
+float64x2_t cargdd(complex64x2_t z) {
+  float64x2 a = from(z.re), b = from(z.im);
+  return to(atan2_full(b, a));
+}
+
+// Riemann-sphere projection (C99 7.3.9.4): if either component is
+// infinite the result is (+inf, copysign(0, im)); otherwise z is
+// returned unchanged. NaN on a finite part is left alone.
+complex64x2_t cprojdd(complex64x2_t z) {
+  if (std::isinf(z.re.hi) || std::isinf(z.im.hi)) {
+    float64x2_t inf = { std::numeric_limits<double>::infinity(), 0.0 };
+    float64x2_t zim = { std::copysign(0.0, z.im.hi), 0.0 };
+    return { inf, zim };
+  }
+  return z;
+}
+
+// Conjugate: flip the sign of every limb of the imaginary part so the
+// DD value negates exactly (no roundoff, preserves the low limb).
+complex64x2_t conjdd(complex64x2_t z) {
+  return { z.re, { -z.im.hi, -z.im.lo } };
+}
+
+// Real/imag accessors. Trivial but exposed as linkable symbols for
+// parity with libquadmath's crealq / cimagq.
+float64x2_t crealdd(complex64x2_t z) { return z.re; }
+float64x2_t cimagdd(complex64x2_t z) { return z.im; }
+
 // Matrix multiply (column-major).
 //
 // Inner accumulator uses Neumaier-style compensation on the DD-product stream:
