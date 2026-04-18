@@ -14,7 +14,9 @@ using multifloats::float64x2;
 // Forward declarations for internal cross-references
 float64x2 exp_full(float64x2 const &x);
 float64x2 exp2_full(float64x2 const &x);
+float64x2 expm1_full(float64x2 const &x);
 float64x2 log_full(float64x2 const &x);
+float64x2 log1p_full(float64x2 const &x);
 float64x2 sin_full(float64x2 const &x);
 float64x2 cos_full(float64x2 const &x);
 float64x2 sin_eval(float64x2 const &r);
@@ -146,6 +148,72 @@ float64x2 log10_full(float64x2 const &x) {
   float64x2 l2 = log2_full(x);
   if (!std::isfinite(l2._limbs[0])) return l2;
   return l2 * float64x2(log10_2_hi, log10_2_lo);
+}
+
+// ---- expm1 / log1p ---------------------------------------------------------
+// Both functions have a narrow cancellation regime near their input zero
+// (exp(x)-1 for small x, log(1+x) for small x). Outside that regime the
+// naive composition is already DD-accurate, so we gate on |x| and fall
+// through to exp_full / log_full there. Inside, a dedicated Taylor /
+// atanh-narrow polynomial preserves every bit.
+
+float64x2 expm1_full(float64x2 const &x) {
+  // Non-finite: expm1(+inf) = +inf, expm1(-inf) = -1, expm1(NaN) = NaN.
+  if (!std::isfinite(x._limbs[0])) {
+    float64x2 r;
+    if (x._limbs[0] > 0.0)      r._limbs[0] = x._limbs[0];       // +inf
+    else if (x._limbs[0] < 0.0) r._limbs[0] = -1.0;               // -inf
+    else                        r._limbs[0] = x._limbs[0];       // NaN
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  // For |x| >= 0.5, exp(x) moves far enough from 1 that the subtraction
+  // retains ~DD precision; defer to the existing kernel (which also
+  // handles overflow / subnormal tails).
+  if (std::abs(x._limbs[0]) >= 0.5) {
+    return exp_full(x) - float64x2(1.0);
+  }
+  // Small |x|: direct Taylor. expm1(x) = x * Σ x^k / (k+1)!.
+  float64x2 p = horner(x, expm1_taylor_hi, expm1_taylor_lo, 25);
+  return x * p;
+}
+
+float64x2 log1p_full(float64x2 const &x) {
+  // Non-finite: log1p(+inf) = +inf, log1p(NaN) = NaN. log1p(-inf) reaches
+  // the domain check below via (1 + -inf = -inf).
+  if (!std::isfinite(x._limbs[0])) {
+    float64x2 r;
+    r._limbs[0] = std::log1p(x._limbs[0]);
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  // Domain: 1 + x >= 0 with equality only for x == -1 (→ -inf).
+  float64x2 arg = float64x2(1.0) + x;
+  if (arg._limbs[0] <= 0.0) {
+    float64x2 r;
+    r._limbs[1] = 0.0;
+    if (arg._limbs[0] == 0.0 && arg._limbs[1] == 0.0) {
+      r._limbs[0] = -std::numeric_limits<double>::infinity();
+    } else if (arg._limbs[0] < 0.0 ||
+               (arg._limbs[0] == 0.0 && arg._limbs[1] < 0.0)) {
+      r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    } else {
+      // arg is a positive subnormal with hi == 0: fall through.
+      return log_full(arg);
+    }
+    return r;
+  }
+  // For |x| >= 0.25, log(1+x) is well-conditioned; reuse log_full.
+  if (std::abs(x._limbs[0]) >= 0.25) {
+    return log_full(arg);
+  }
+  // Small |x|: log1p(x) = 2·atanh(t) with t = x/(2+x). Baking the 2
+  // into the coefficient table (log1p_taylor[k] = 2/(2k+1)) gives the
+  // full value in a single t-multiply.
+  float64x2 t = x / (float64x2(2.0) + x);
+  float64x2 t2 = t * t;
+  float64x2 p = horner(t2, log1p_taylor_hi, log1p_taylor_lo, 18);
+  return t * p;
 }
 
 // ---- sinpi / cospi / tanpi / sin / cos / tan -------------------------------
@@ -494,8 +562,11 @@ float64x2 pow_full(float64x2 const &x, float64x2 const &y) {
 
 // ---- atan (table lookup + rational polynomial, from libquadmath atanq.c) ---
 // arctan(t) = t + t^3 * P(t^2) / Q(t^2),  |t| <= 0.09375
-// Argument reduced via 84-entry table: arctan(x) = atantbl[k] + arctan(t)
-// where t = (x - k/8) / (1 + x*k/8).
+// Argument reduced via 87-entry table: arctan(x) = atantbl[k] + arctan(t).
+// Table branch (|x| < 32/3): k = floor(8|x|+0.25), t = (x - k/8)/(1 + x*k/8);
+//   worst-case |t| = 1/(16*(1 + (k/8)^2)) stays well below 0.09375.
+// Large branch (|x| >= 32/3): k = 86 (pi/2), t = -1/|x|; cutover placed at
+//   32/3 so worst-case |t| = 3/32 = 0.09375 hits the fitted edge exactly.
 float64x2 atan_full(float64x2 const &x) {
   if (!std::isfinite(x._limbs[0])) {
     float64x2 r;
@@ -513,8 +584,8 @@ float64x2 atan_full(float64x2 const &x) {
 
   int k;
   float64x2 t;
-  if (ax_d >= 10.25) {
-    k = 83;
+  if (ax_d >= 32.0 / 3.0) {
+    k = 86;
     t = float64x2(-1.0) / ax;
   } else {
     k = static_cast<int>(8.0 * ax_d + 0.25);
@@ -1745,9 +1816,11 @@ float64x2_t fmadd(float64x2_t a, float64x2_t b, float64x2_t c) { return to(multi
 // Exponential / logarithmic
 float64x2_t expdd(float64x2_t a)   { return to(exp_full(from(a))); }
 float64x2_t exp2dd(float64x2_t a)  { return to(exp2_full(from(a))); }
+float64x2_t expm1dd(float64x2_t a) { return to(expm1_full(from(a))); }
 float64x2_t logdd(float64x2_t a)   { return to(log_full(from(a))); }
 float64x2_t log2dd(float64x2_t a)  { return to(log2_full(from(a))); }
 float64x2_t log10dd(float64x2_t a) { return to(log10_full(from(a))); }
+float64x2_t log1pdd(float64x2_t a) { return to(log1p_full(from(a))); }
 
 // Trigonometric
 float64x2_t sindd(float64x2_t a)   { return to(sin_full(from(a))); }

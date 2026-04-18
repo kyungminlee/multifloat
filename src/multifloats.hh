@@ -589,11 +589,13 @@ MultiFloat<T, N> nextafter(MultiFloat<T, N> const &x,
   if constexpr (N == 1) {
     r._limbs[0] = std::nextafter(x._limbs[0], y._limbs[0]);
   } else {
-    // Approximate one DD ulp ≈ ulp(hi) * 2^-53.
+    // One DD ulp ≈ ulp_up(|hi|) * 2^-53.  Always use the upward ulp
+    // of |hi|; the downward ulp halves at a power-of-2 boundary, so
+    // picking it there would make the step 2× too small and break
+    // the round-trip identity nextafter(nextafter(x, +inf), -inf) == x.
+    T ax = std::abs(x._limbs[0]);
     T inf = std::numeric_limits<T>::infinity();
-    T target = (x < y) ? inf : -inf;
-    T next_hi = std::nextafter(x._limbs[0], target);
-    T ulp = std::abs(next_hi - x._limbs[0]);
+    T ulp = std::nextafter(ax, inf) - ax;
     T eps = std::ldexp(ulp, -53);
     return (x < y) ? x + MultiFloat<T, N>(eps) : x - MultiFloat<T, N>(eps);
   }
@@ -980,6 +982,8 @@ MultiFloat<T, N> expm1(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::expm1(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::from_f64x2(::expm1dd(detail::to_f64x2(x)));
   } else {
     return exp(x) - MultiFloat<T, N>(T(1));
   }
@@ -1034,6 +1038,8 @@ MultiFloat<T, N> log1p(MultiFloat<T, N> const &x) {
   if constexpr (N == 1) {
     r._limbs[0] = std::log1p(x._limbs[0]);
     return r;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return detail::from_f64x2(::log1pdd(detail::to_f64x2(x)));
   } else {
     return log(x + MultiFloat<T, N>(T(1)));
   }

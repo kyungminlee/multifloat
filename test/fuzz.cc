@@ -138,7 +138,7 @@ static bool is_full_dd(char const *op) {
       "add", "sub", "mul", "div", "sqrt", "abs", "neg",
       "add_fd", "mul_df", "fmin", "fmax", "copysign", "fdim",
       "hypot", "trunc", "round", "scalbn", "min3", "max3",
-      "exp", "log", "log10", "pow", "pow_md", "pow_dm", "pow_int",
+      "exp", "expm1", "log", "log10", "log1p", "pow", "pow_md", "pow_dm", "pow_int",
       "sin", "cos", "tan",
       "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
       "asin", "acos", "atan", "atan2",
@@ -458,6 +458,15 @@ int main(int argc, char **argv) {
       if (q_isfinite(q1) && q1 > (q_t)0) {
         check("log", mf::log(f1), logq(q1), q1, (q_t)0);
         check("log10", mf::log10(f1), log10q(q1), q1, (q_t)0);
+      }
+      if (q_isfinite(q1)) {
+        q_t qem = expm1q(q1);
+        if (q_isfinite(qem)) {
+          check("expm1", mf::expm1(f1), qem, q1, (q_t)0);
+        }
+      }
+      if (q_isfinite(q1) && q1 > (q_t)-1) {
+        check("log1p", mf::log1p(f1), log1pq(q1), q1, (q_t)0);
       }
 
       // Trig: keep magnitudes moderate.

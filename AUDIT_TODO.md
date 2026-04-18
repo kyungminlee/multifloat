@@ -198,13 +198,28 @@ already; these are the ones that needed explicit review.
 
 Deferred (flag for user review before applying):
 
-- [ ] `src/multifloats.hh` `nextafter` — below a power of 2 the down-side
-      `ulp` halves, so `eps = ldexp(ulp, -53)` undercounts by 2×.
-      Fix changes semantics (may skip a DD-representable neighbor), so it
-      wants a deliberate decision + a targeted test.
-- [ ] `src/multifloats_math.cc` atan cutover `|x|≥10.25` — puts
-      `|t|=1/|x|` past the rational's 0.09375 validity edge; shift to
-      `|x|≥10+2/3`. Needs a fuzz re-sweep to confirm no new worst-case.
+- [x] `src/multifloats.hh` `nextafter` — fixed: at `|hi| = 2^k` the
+      downward ulp halves (2^(k-53) vs upward 2^(k-52)), which made
+      the down-step 2× too small and broke the round-trip identity.
+      Switched to use the upward ulp of `|hi|` for both directions,
+      so `eps = 2^-105 · |hi|` is sign-symmetric. Net behavior change
+      is limited to the power-of-2 hi-limb rays: the old code stopped
+      at `(2^k, -2^-106)` stepping down from `(2^k, 0)`; the new code
+      goes to `(2^k, -2^-105)`, matching the up-side and making
+      `nextafter(nextafter(x, +inf), -inf) == x`. Added
+      `test_nextafter_symmetry` covering powers of 2 (both signs),
+      non-power-of-2 values, equal-operand identity, and non-trivial
+      DD seeds — every case verifies direction, round-trip, and
+      up/down step equality.
+- [x] `src/multifloats_math.cc` atan cutover — moved from `|x|≥10.25`
+      to `|x|≥32/3`, bringing worst-case `|t|=1/|x|` from 0.0976 back
+      onto the rational's fitted edge of 3/32 = 0.09375. Extended
+      `atan_table` from 84 to 87 entries (k=0..85 plus π/2); large
+      branch now uses `k=86`. Added `test_atan_cutover` in
+      `test/test.cc` with 5453 targeted checks covering each new table
+      cell, all k/8 centers and midpoints, the cutover bit-neighbors,
+      and `atan(x)+atan(1/x)=π/2` at the boundary. Max rel_err stays
+      at ~2e-32; cpp_fuzz (1M inputs against atanq) unchanged.
 - [~] `fsrc/multifloats.fypp` `ax%limbs = -ax%limbs` sites. **Unfounded:**
       checked the generated assembly for both whole-array and per-limb
       forms on gfortran-15 arm64 at both `-O2` and `-O3`. Both emit

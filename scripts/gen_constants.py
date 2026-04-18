@@ -97,6 +97,28 @@ def gen_atanh_taylor(n=15):
     return [mpf(1) / (2*k + 1) for k in range(n)]
 
 
+def gen_expm1_taylor(n=25):
+    """expm1(x)/x Taylor: c[k] = 1/(k+1)!
+
+    expm1(x) = x * (1 + x/2! + x²/3! + ... + x^(n-1)/n!). For |x| < 0.5 with
+    n=25, the truncation x^n/(n+1)! ≈ 0.5^25/26! ≈ 6e-35 sits well under
+    DD precision (2^-106 ≈ 1.2e-32).
+    """
+    return [mpf(1) / factorial(k + 1) for k in range(n)]
+
+
+def gen_log1p_taylor(n=18):
+    """log1p narrow-path: log1p(y) = t * Σ c[k] · t^(2k),  t = y/(2+y).
+
+    Starts from log1p(y) = 2·atanh(y/(2+y)); baking the leading 2 into the
+    coefficients lets Horner return the full value in one t-multiply. For
+    |y| < 0.25 (|t| < 0.112), n=18 drives the tail below DD precision.
+
+    c[k] = 2/(2k+1)
+    """
+    return [mpf(2) / (2*k + 1) for k in range(n)]
+
+
 def gen_stirling_coefs(n=13):
     """c[k] = B_{2k} / (2k*(2k-1)), k=1..n"""
     return [bernoulli(2*k) / (2*k * (2*k - 1)) for k in range(1, n + 1)]
@@ -636,6 +658,13 @@ def collect_all():
     array('log2_wide', gen_log2_coefs(9),
           'log2 wide: c[k] = 2/((2k+1)*ln2)')
 
+    # --- expm1 / log1p (Taylor-direct, for |x| below the threshold where
+    #     exp(x)-1 / log(1+x) would cancel) ---
+    array('expm1_taylor', gen_expm1_taylor(25),
+          'expm1(x)/x Taylor: c[k] = 1/(k+1)!')
+    array('log1p_taylor', gen_log1p_taylor(18),
+          'log1p narrow: c[k] = 2/(2k+1) for t = y/(2+y) expansion')
+
     # log2 table
     centers, values = gen_log2_table(32)
     dp_array('log2_centers', centers, 'log2 lookup centers')
@@ -656,11 +685,13 @@ def collect_all():
           'atanh(x)/x Taylor: c[k] = 1/(2k+1)')
 
     # --- atan: table lookup + rational polynomial (from libquadmath atanq.c) ---
-    # arctan(k/8), k = 0..82, plus pi/2 at index 83
+    # arctan(k/8), k = 0..85, plus pi/2 at index 86.
+    # Cutover to the `t = -1/|x|` branch is at |x| = 32/3 so that worst-case
+    # |t| = 3/32 = 0.09375 stays at the rational's fitted edge.
     from mpmath import atan as mpatan
-    atan_tbl = [mpatan(mpf(k) / 8) for k in range(83)] + [pi / 2]
+    atan_tbl = [mpatan(mpf(k) / 8) for k in range(86)] + [pi / 2]
     array('atan_table', atan_tbl,
-          'arctan(k/8), k=0..82, plus pi/2 (84 entries)')
+          'arctan(k/8), k=0..85, plus pi/2 (87 entries)')
 
     # arctan(t) = t + t^3 * P(t^2) / Q(t^2),  |t| <= 0.09375
     array('atan_P', [mpf(s) for s in [

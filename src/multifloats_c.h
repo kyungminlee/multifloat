@@ -79,12 +79,17 @@ MULTIFLOATS_API float64x2_t fdimdd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API float64x2_t copysigndd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API float64x2_t fmadd(float64x2_t a, float64x2_t b, float64x2_t c);
 
-/* Exponential / logarithmic */
+/* Exponential / logarithmic. `expm1dd` / `log1pdd` are the
+ * cancellation-safe variants for arguments near zero — direct Taylor
+ * / atanh-narrow kernels cover |x| below a threshold, larger |x|
+ * falls through to the standard `exp` / `log` paths. */
 MULTIFLOATS_API float64x2_t expdd(float64x2_t a);
 MULTIFLOATS_API float64x2_t exp2dd(float64x2_t a);
+MULTIFLOATS_API float64x2_t expm1dd(float64x2_t a);
 MULTIFLOATS_API float64x2_t logdd(float64x2_t a);
 MULTIFLOATS_API float64x2_t log2dd(float64x2_t a);
 MULTIFLOATS_API float64x2_t log10dd(float64x2_t a);
+MULTIFLOATS_API float64x2_t log1pdd(float64x2_t a);
 
 /* Trigonometric */
 MULTIFLOATS_API float64x2_t sindd(float64x2_t a);

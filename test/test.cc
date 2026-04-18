@@ -380,6 +380,182 @@ static void test_ldexp_scalbn_ilogb(Stats &stats) {
 }
 
 // =============================================================================
+// nextafter edge cases (power-of-2 boundaries)
+// =============================================================================
+//
+// At |hi| = 2^k the downward ulp(hi) halves (2^(k-53) vs the upward 2^(k-52)),
+// so the old formula eps = ldexp(ulp, -53) made the down-step 2× too small.
+// The fix: always base eps on the UP-side ulp of |hi|, so the step is
+// symmetric in both directions and nextafter(nextafter(x, +inf), -inf) == x.
+static void test_nextafter_symmetry() {
+  double const powers_of_two[] = {
+      0x1p-50, 0x1p-10, 0x1p-1, 0x1p0, 0x1p1, 0x1p2, 0x1p3, 0x1p10, 0x1p50,
+  };
+  MF2 const pinf(std::numeric_limits<double>::infinity());
+  MF2 const ninf(-std::numeric_limits<double>::infinity());
+
+  for (double p2 : powers_of_two) {
+    // Both signs — sign handling on the hi limb must not flip the ulp.
+    for (double sign : {+1.0, -1.0}) {
+      MF2 x(sign * p2);
+      MF2 up = mf::nextafter(x, pinf);
+      MF2 dn = mf::nextafter(x, ninf);
+
+      // Both steps must be nonzero (no collapse to x).
+      REQUIRE(up != x);
+      REQUIRE(dn != x);
+      // Step directions are correct.
+      REQUIRE(up > x);
+      REQUIRE(dn < x);
+      // Round-trip identity: step and return lands exactly on x.
+      REQUIRE(mf::nextafter(up, ninf) == x);
+      REQUIRE(mf::nextafter(dn, pinf) == x);
+      // Step magnitudes are symmetric in DD (not halved on one side).
+      q_t qx = to_q(x);
+      q_t qup = to_q(up);
+      q_t qdn = to_q(dn);
+      q_t up_step = qup - qx;
+      q_t dn_step = qx - qdn;
+      // Equality as q_t: we set up_step/dn_step to match bit-for-bit.
+      REQUIRE(up_step == dn_step);
+      // Step equals expected eps = 2^-105 * p2 (i.e., DD-rel ulp × |x|).
+      q_t expected = scalbnq((q_t)p2, -105);
+      REQUIRE(up_step == expected);
+    }
+  }
+
+  // Non-power-of-2 values: step up and down should be equal (trivially —
+  // ulp is unambiguous there) and round-trip still identity.
+  double const non_p2[] = {
+      1.5, 1.25, 1.125, 3.0, 5.0, 7.0, 0.75, 0.375, 0x1.23456789abcdep10,
+  };
+  for (double v : non_p2) {
+    for (double sign : {+1.0, -1.0}) {
+      MF2 x(sign * v);
+      MF2 up = mf::nextafter(x, pinf);
+      MF2 dn = mf::nextafter(x, ninf);
+      REQUIRE(up != x);
+      REQUIRE(dn != x);
+      REQUIRE(mf::nextafter(up, ninf) == x);
+      REQUIRE(mf::nextafter(dn, pinf) == x);
+      q_t up_step = to_q(up) - to_q(x);
+      q_t dn_step = to_q(x) - to_q(dn);
+      REQUIRE(up_step == dn_step);
+    }
+  }
+
+  // Identity: x == y implies nextafter returns y unchanged (exact).
+  for (double p2 : powers_of_two) {
+    MF2 x(p2);
+    REQUIRE(mf::nextafter(x, x) == x);
+  }
+
+  // Non-trivial DD inputs (hi and lo both present): round-trip should hold.
+  q_t const seeds[] = {
+      (q_t)1 + scalbnq((q_t)1, -60),
+      M_PIq,
+      sqrtq((q_t)2) * scalbnq((q_t)1, 30),
+      (q_t)1 / (q_t)7,
+  };
+  for (q_t seed : seeds) {
+    MF2 x = from_q(seed);
+    MF2 up = mf::nextafter(x, pinf);
+    MF2 dn = mf::nextafter(x, ninf);
+    REQUIRE(mf::nextafter(up, ninf) == x);
+    REQUIRE(mf::nextafter(dn, pinf) == x);
+  }
+}
+
+// =============================================================================
+// atan cutover edge cases
+// =============================================================================
+//
+// The large-argument branch uses `t = -1/|x|` once `|x| >= 32/3`, which puts
+// worst-case `|t| = 3/32 = 0.09375` at the fitted edge of the rational fit.
+// The table branch spans k = 0..85 so the newly-reached cells (k = 83, 84, 85)
+// and all crossings between them need to be walked.
+static void test_atan_cutover(Stats &stats) {
+  // Enumerate exact boundary values (k/8 centers where t = 0 exactly),
+  // midpoints between them (worst table-branch |t|), and the new cutover.
+  double const boundaries[] = {
+      // Old cutover, now in table branch (k = 82 center).
+      10.25,
+      // New table entries: k/8 centers.
+      10.375,                 // k = 83
+      10.5,                   // k = 84
+      10.625,                 // k = 85
+      // Table-branch midpoints (maximum |t| within a cell).
+      10.3125,                // between k=82 and k=83
+      10.4375,                // between k=83 and k=84
+      10.5625,                // between k=84 and k=85
+      // New cutover: |x| = 32/3 -> large branch, |t| = 3/32 = 0.09375 exactly.
+      32.0 / 3.0,
+      // Large-branch values immediately beyond the cutover.
+      10.7, 11.0, 12.0, 15.0, 100.0, 1e10, 1e100, 1e300,
+      // Also pick up a value in the old 10.25..10.6667 gap that used to go
+      // through the large branch at |t| > 0.09375.
+      10.26, 10.3, 10.4, 10.5, 10.6, 10.65,
+  };
+
+  auto check_atan = [&](q_t qx) {
+    MF2 x = from_q(qx);
+    MF2 got = mf::atan(x);
+    q_t expected = atanq(qx);
+    // atan is always well-conditioned (|d/dx atan| <= 1), so tolerance is
+    // the standard DD kernel tier.
+    check_q("atan_cutover", got, expected, 1e-30, stats, &x);
+  };
+
+  for (double b : boundaries) {
+    // The point itself, its bit-neighbors, and a ±16 ulp ring on the DD-side.
+    q_t qb = (q_t)b;
+    check_atan(qb);
+    check_atan(-qb);
+    q_t up = qb, dn = qb;
+    for (int i = 0; i < 16; ++i) {
+      up = nextafterq(up, (q_t)std::numeric_limits<double>::infinity());
+      dn = nextafterq(dn, (q_t)-std::numeric_limits<double>::infinity());
+      check_atan(up);
+      check_atan(dn);
+      check_atan(-up);
+      check_atan(-dn);
+    }
+  }
+
+  // Dense sweep across the newly-reached table range, with nontrivial lo
+  // limbs so the kernel sees full-DD arguments (not just exact doubles).
+  for (int i = 0; i < 2000; ++i) {
+    // Uniform random in [10.25, 32/3).
+    double frac = (double)i / 2000.0;
+    q_t qx = (q_t)10.25 + ((q_t)(32.0 / 3.0) - (q_t)10.25) * (q_t)frac;
+    // Add a sub-ulp perturbation so the lo limb is exercised.
+    qx += scalbnq((q_t)1, -60) * (q_t)((i % 7) - 3);
+    check_atan(qx);
+    check_atan(-qx);
+  }
+
+  // Verify that the cutover value lands in the large branch: round-trip
+  // identity arctan(x) + arctan(1/x) = pi/2 for x > 0 at |x| = 32/3.
+  MF2 x = from_q((q_t)(32.0 / 3.0));
+  MF2 one(1.0);
+  MF2 y = one / x;
+  MF2 sum = mf::atan(x) + mf::atan(y);
+  q_t got = to_q(sum);
+  q_t expected = M_PIq / (q_t)2;
+  q_t diff = got - expected;
+  if (diff < 0) diff = -diff;
+  q_t mag = expected < 0 ? -expected : expected;
+  double rel = (double)(diff / mag);
+  ++g_checks;
+  stats.update(rel);
+  if (!(rel <= 1e-30)) {
+    ++g_failures;
+    std::fprintf(stderr,
+                 "FAIL [atan+arccotan=pi/2 at 32/3] rel_err=%g\n", rel);
+  }
+}
+
+// =============================================================================
 // Driver
 // =============================================================================
 
@@ -396,8 +572,9 @@ int main() {
   test_construction_and_conversion();
   test_equality_and_ordering();
   test_classification();
+  test_nextafter_symmetry();
 
-  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx;
+  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn;
   test_unary(una);
   test_addition(add);
   test_subtraction(sub);
@@ -406,6 +583,7 @@ int main() {
   test_abs_fmin_fmax(abs_fmm);
   test_copysign(csgn);
   test_ldexp_scalbn_ilogb(ldx);
+  test_atan_cutover(atn);
 
   std::printf("[multifloats_test] %d checks, %d failures\n", g_checks,
               g_failures);
@@ -419,6 +597,7 @@ int main() {
   print_stats("abs/fmin/fmax", abs_fmm);
   print_stats("copysign", csgn);
   print_stats("ldexp/etc", ldx);
+  print_stats("atan cutover", atn);
 
   return g_failures == 0 ? 0 : 1;
 }
