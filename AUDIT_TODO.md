@@ -129,9 +129,32 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   unchanged. Proper support for huge arguments would require
   Payne–Hanek reduction, which is out of scope for this library (see
   `std::sin` for double-precision Payne–Hanek).
-- [ ] **P4 — `erfc_full` asymptotic x-split asymmetry.** `src/multifloats_math_special.inc:100-104`.
+- [x] **P4 — `erfc_full` asymptotic x-split asymmetry.** `src/multifloats_math_special.inc:100-104`.
   35-bit hi truncation makes `(s-ax)(s+ax)` asymmetric in precision. Severity:
   **low**.
+  _Closed — audit cause incorrect; real cause is upstream:_ at the
+  worst-case fuzz input (`x ≈ 7.29085`, erfc ≈ 328 ulp off), the
+  `diff_sq = (s - ax)·(s + ax)` computed via the 35-bit-truncated `s`
+  is **bit-exact** vs MPFR — the split trick is sound and its
+  symmetry is not a real issue. The 300-ulp erfc tail is entirely
+  inherited from `exp_full`: `exp(-53.72)` already has 279 ulp of
+  relative error (verified against MPFR at 200-bit precision), and
+  the asymptotic formula multiplies two `exp` calls, amplifying it.
+  Global fuzz confirms the root cause sits at the exp/log level:
+  `exp` max_rel 7.5e-30 (~304 ulp), `log` 6.97e-30 (~283 ulp),
+  `log10` 6.98e-30 (~283 ulp). Tracked separately as **P6** below.
+- [ ] **P6 — `exp_full` / `log_full` precision tail (~300 ulp).**
+  Discovered while investigating P4. The DD `exp`/`log` kernels emit
+  worst-case relative errors around 300 ulp on clean single-double
+  inputs (e.g. `exp(-53.72)`, `exp(1.0)`). Verified against MPFR,
+  so it is not a float128 reference artifact. The erfc asymptotic
+  branch, expm1, log10, pow, and every complex op that funnels
+  through exp/log inherit this ceiling. Likely origins:
+  `exp2_kernel`'s degree-13 Estrin evaluation plus the three-squaring
+  cube step (each `p = p*p` doubles any relative error, so 8× total
+  amplification), and the symmetric `log2_kernel` structure. Severity:
+  **high** — this is the dominant precision bottleneck for a large
+  fraction of special functions.
 
 ## Speed
 
