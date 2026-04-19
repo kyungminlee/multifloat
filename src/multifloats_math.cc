@@ -723,7 +723,9 @@ float64x2 atan2_full(float64x2 const &y, float64x2 const &x) {
   if (std::abs(x._limbs[0]) >= std::abs(y._limbs[0])) {
     res = atan_full(y / x);
     if (x._limbs[0] < 0.0) {
-      if (y._limbs[0] >= 0.0) res = res + pi_dd;
+      // Use signbit so y = -0 picks the −π branch (IEEE: -0 >= 0 is true,
+      // so `>= 0.0` mishandles the negative-real-axis branch cut).
+      if (!std::signbit(y._limbs[0])) res = res + pi_dd;
       else res = res - pi_dd;
     }
   } else {
@@ -2052,7 +2054,9 @@ complex64x2_t csqrtdd(complex64x2_t z) {
   } else {
     float64x2 s = multifloats::sqrt((mod - a) * half);
     float64x2 r = multifloats::abs(b) / (s + s);
-    float64x2 i = (b._limbs[0] < 0.0) ? -s : s;
+    // Use signbit so b = -0 picks the −s branch (IEEE: -0 < 0 is false,
+    // so `< 0.0` mishandles the negative-real-axis branch cut per C99 G.6.4.2).
+    float64x2 i = std::signbit(b._limbs[0]) ? -s : s;
     return { to(r), to(i) };
   }
 }

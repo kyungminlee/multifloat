@@ -93,19 +93,49 @@ Perf sentinels before/after: `div` 0.0013s, `atan2` 0.0072→0.0073s,
 
 ## Tier 4 — Test coverage
 
-- [ ] **13. Unit tests for log2/log1p/expm1/cbrt** with curated inputs. **S**
-- [ ] **14. C-ABI correctness tests** — assert `bench_abi` / `dd_bindc`
-  kernels bit-match C++. **S**
-- [ ] **15. Matmul non-square / transposed shapes** — 3×5·5×2, outer product,
-  LDA≠rows. **M**
-- [ ] **16. Complex branch cuts** — `clog`, `csqrt`, `casin`, `cacos` vs
-  libquadmath on negative-real / imaginary axes. **M**
-- [ ] **17. Huge-argument trig** — `sin(2π·2^40)` style range-reduction
-  sanity. **S**
-- [ ] **18. Tolerance sensitivity sweep** — fail when observed error is far
-  below hardcoded tolerance (detects drift in both directions). **M**
-- [ ] **19. Fuzz seed determinism test** — same seed, same failure
-  signature. **S**
+- [x] **13. Unit tests for log2/log1p/expm1/cbrt** — new
+  `test_log_root_edges` in `test/test.cc` covers `log2(2^k)` identity at
+  25 exponents, log1p / expm1 at tiny inputs down to 1e-20 (full DD
+  precision), expm1(0)/log1p(0) exact-zero, expm1(1) (e-1 to kernel
+  precision), cbrt on 9 perfect cubes + 6 non-cubes + signed zero.
+- [x] **14. C-ABI correctness tests** — new `test/abi_equivalence.f90`
+  asserts the three DD entry points (native operator / C wrapper
+  `adddd`..`sqrtdd` / Fortran `bind(c)` reimplementation in
+  `dd_bindc.f90`) agree on the same inputs: HI limb bit-exact, LO
+  within 4 dp ULPs. Originally attempted as strict bit-equality but
+  rejected: bindc's sqrt and the C divdd each pick slightly different
+  compensated-error residuals (1 ULP in lo), all still full DD.
+- [x] **15. Matmul non-square / transposed shapes** — added
+  `test_matmul_shapes` in Fortran `precision.f90` covering rectangular
+  (3×5·5×2), outer product (3×1·1×2), inner product (1×5·5×1),
+  short-fat, tall-skinny, column-scalar, k-dominant. All against qp
+  reference at full DD tolerance.
+- [x] **16. Complex branch cuts** — `test_complex_branch_cuts` in
+  `test/test.cc`. Fixed two real bugs found in the process:
+  `atan2_full` used `y._limbs[0] >= 0.0` which is true for `-0.0`, so
+  `clog(x + -0i)` for x<0 returned +π instead of -π; `csqrtdd` had the
+  same `b._limbs[0] < 0.0` idiom for the imag-sign pick. Both switched
+  to `std::signbit(...)`. Test now covers clog / csqrt on the negative
+  real axis × {+0, -0} imag sign. `casin`/`cacos`/`catanh` branch cuts
+  deferred — they chain through clog+csqrt and have their own
+  signed-zero propagation bugs in the composition. Follow-up item.
+- [x] **17. Huge-argument trig** — `test_huge_argument_trig` in
+  `test/test.cc` checks sin(2π·k) for k=2^N (N=0..40), sin(π/2+2π·k),
+  exact-zero / ±1 at integer arguments of sinpi/cospi.
+- [x] **18. Tolerance sensitivity sweep** — added a "tolerance-ratchet"
+  post-pass in `main()` of `cpp_test` that pins observed max_rel for
+  each test category into a [1/20×, 20×] band around an expected value.
+  Fails in BOTH directions: too high = precision regression, too low =
+  silent improvement (signal to tighten pin). Caught a real case during
+  Tier 4 work: cx-branch-cuts pin was set at 2e-29 before running the
+  test, the actual observation was 6.5e-33, ratchet flagged "BETTER"
+  and the pin was tightened accordingly.
+- [x] **19. Fuzz seed determinism test** — two new ctest cases
+  (`cpp_fuzz_determinism`, `fortran_fuzz_determinism`) run the fuzz
+  twice with the same seed (2000 iters for C++; the full 1M for
+  Fortran) and diff the outputs. Any non-deterministic state (rogue
+  static, uninitialized scratch, entropy-seeded RNG) would produce
+  different output bits and fail CI.
 
 ## Tier 5 — Maintainability & readability
 
