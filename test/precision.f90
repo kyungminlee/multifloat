@@ -36,6 +36,7 @@ program test_multifloats_precision
   call test_constructors(failures)
   call test_sincos_sinhcosh(failures)
   call test_new_generic_intrinsics(failures)
+  call test_matmul_shapes(failures)
 
   if (failures /= 0) then
     write(*,'(a,i0)') 'FAIL: ', failures
@@ -897,6 +898,82 @@ contains
     call check_complex_close('csinpi(1)', cr, (0.0_qp, 0.0_qp), failures)
     z = complex64x2(1.0_dp, 0.0_dp); cr = cospi(z)
     call check_complex_close('ccospi(1)', cr, (-1.0_qp, 0.0_qp), failures)
+  end subroutine
+
+  ! Matmul shape coverage (AUDIT_TODO #15). The panel kernels are
+  ! dispatched on (M, K, N); these cases hit the common shapes that
+  ! production code sees:
+  !   - strictly rectangular (3×5 · 5×2)
+  !   - outer product (3×1 · 1×2, k=1 edge case)
+  !   - inner product-style (1×5 · 5×1, m=n=1)
+  !   - tall-skinny / short-fat
+  subroutine test_matmul_shapes(failures)
+    integer, intent(inout) :: failures
+    real(dp) :: a_dp(10, 10), b_dp(10, 10)
+    integer :: i, j
+
+    ! Fill the dp scratch with deterministic pseudo-random values.
+    do j = 1, 10
+      do i = 1, 10
+        a_dp(i, j) = real(i + 3*j - 7, dp) * 0.125_dp
+        b_dp(i, j) = real(2*i - j + 5, dp) * 0.0625_dp
+      end do
+    end do
+
+    call check_matmul_case(a_dp, b_dp, 3, 5, 2, "3x5 * 5x2 (rectangular)",    failures)
+    call check_matmul_case(a_dp, b_dp, 3, 1, 2, "3x1 * 1x2 (outer product)",  failures)
+    call check_matmul_case(a_dp, b_dp, 1, 5, 1, "1x5 * 5x1 (inner product)",  failures)
+    call check_matmul_case(a_dp, b_dp, 1, 5, 7, "1x5 * 5x7 (short-fat)",      failures)
+    call check_matmul_case(a_dp, b_dp, 7, 5, 1, "7x5 * 5x1 (tall-skinny)",    failures)
+    call check_matmul_case(a_dp, b_dp, 5, 1, 1, "5x1 * 1x1 (column-scalar)",  failures)
+    call check_matmul_case(a_dp, b_dp, 2, 7, 3, "2x7 * 7x3 (k>max(m,n))",     failures)
+  end subroutine
+
+  subroutine check_matmul_case(a_dp, b_dp, m, k, n, label, failures)
+    real(dp), intent(in) :: a_dp(:,:), b_dp(:,:)
+    integer, intent(in) :: m, k, n
+    character(*), intent(in) :: label
+    integer, intent(inout) :: failures
+    type(float64x2) :: a(m, k), b(k, n), c(m, n)
+    real(qp) :: aq(m, k), bq(k, n), cq_ref(m, n), err, mag, rel
+    integer :: i, j, p
+
+    do j = 1, k
+      do i = 1, m
+        a(i,j) = float64x2(a_dp(i,j))
+        aq(i,j) = real(a_dp(i,j), qp)
+      end do
+    end do
+    do j = 1, n
+      do i = 1, k
+        b(i,j) = float64x2(b_dp(i,j))
+        bq(i,j) = real(b_dp(i,j), qp)
+      end do
+    end do
+    ! qp reference
+    cq_ref = 0.0_qp
+    do j = 1, n
+      do p = 1, k
+        do i = 1, m
+          cq_ref(i,j) = cq_ref(i,j) + aq(i,p) * bq(p,j)
+        end do
+      end do
+    end do
+
+    c = matmul(a, b)
+    err = 0.0_qp
+    mag = 1.0_qp
+    do j = 1, n
+      do i = 1, m
+        err = max(err, abs(dd_to_qp(c(i,j)) - cq_ref(i,j)))
+        mag = max(mag, abs(cq_ref(i,j)))
+      end do
+    end do
+    rel = err / mag
+    if (rel > 1.0e-30_qp) then
+      failures = failures + 1
+      write(*,'(a,1x,a,1x,es12.4)') 'FAIL', trim(label), real(rel, dp)
+    end if
   end subroutine
 
 end program test_multifloats_precision

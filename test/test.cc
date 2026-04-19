@@ -432,6 +432,282 @@ static void test_io_to_string_and_stream() {
   REQUIRE(r == "1.00e+00");
 }
 
+// Curated edge-input checks for log2 / log1p / expm1 / cbrt. These
+// kernels were added in the Tier 2 API completion pass and are exercised
+// by the fortran_fuzz loop across random inputs; the tests here lock in
+// specific identities and precision-sensitive corner cases.
+static void test_log_root_edges(Stats &stats) {
+  auto mf_q = [&stats](char const *name, mf::float64x2 got, q_t expect,
+                       q_t tol) {
+    q_t err = fabsq(to_q(got) - expect);
+    q_t mag = fabsq(expect) > 1 ? fabsq(expect) : (q_t)1;
+    q_t rel = err / mag;
+    if (rel > tol) {
+      std::printf("FAIL %s rel=%g tol=%g\n", name, (double)rel, (double)tol);
+      ++g_failures;
+    }
+    ++g_checks;
+    stats.update(rel);
+  };
+
+  q_t const full_dd_tol = 1e-30q;   // ~1 DD ULP headroom.
+  q_t const dp_tol      = 5e-15q;   // ~1 dp ULP (cbrt is single-Newton).
+
+  // log2 identities at exact powers of 2.
+  for (int k = -60; k <= 60; k += 5) {
+    mf::float64x2 x = mf::ldexp(mf::float64x2(1.0), k);
+    mf_q("log2(2^k)", mf::log2(x), (q_t)k, full_dd_tol);
+  }
+  mf_q("log2(1)", mf::log2(mf::float64x2(1.0)), (q_t)0, full_dd_tol);
+  mf_q("log2(0.5)", mf::log2(mf::float64x2(0.5)), (q_t)-1, full_dd_tol);
+
+  // log1p: small-|x| path (|x|<0.25 uses Taylor) must keep full DD.
+  q_t tiny_vals[] = { (q_t)1e-20, (q_t)1e-10, (q_t)1e-6, (q_t)1e-3, (q_t)0.1 };
+  for (q_t v : tiny_vals) {
+    mf::float64x2 x = from_q(v);
+    // log1p(x) ≈ x - x²/2 + x³/3 - ... Reference via __float128 log1pq.
+    q_t ref = log1pq(v);
+    mf_q("log1p(small)", mf::log1p(x), ref, full_dd_tol);
+    mf_q("log1p(-small)", mf::log1p(from_q(-v)), log1pq(-v), full_dd_tol);
+  }
+  // log1p(0) must be exactly 0.
+  mf::float64x2 lp0 = mf::log1p(mf::float64x2(0.0));
+  REQUIRE(lp0._limbs[0] == 0.0 && lp0._limbs[1] == 0.0);
+
+  // expm1: small-|x| path (|x|<0.5 uses Taylor) must keep full DD.
+  for (q_t v : tiny_vals) {
+    q_t ref = expm1q(v);
+    mf_q("expm1(small)", mf::expm1(from_q(v)), ref, full_dd_tol);
+    mf_q("expm1(-small)", mf::expm1(from_q(-v)), expm1q(-v), full_dd_tol);
+  }
+  // expm1(0) must be exactly 0.
+  mf::float64x2 em0 = mf::expm1(mf::float64x2(0.0));
+  REQUIRE(em0._limbs[0] == 0.0 && em0._limbs[1] == 0.0);
+  // expm1(1): |x|>=0.5 routes through `exp(x) - 1`, inheriting the
+  // exp kernel's precision (~1e-30 worst case, not Taylor-full-DD).
+  mf_q("expm1(1)", mf::expm1(mf::float64x2(1.0)), M_Eq - 1, (q_t)1e-29);
+
+  // cbrt: single-Newton result, ~1 dp ULP. Perfect cubes should come out
+  // with relative error well under a dp ULP because the Newton correction
+  // off a bit-exact `std::cbrt` seed is zero.
+  double cubes[] = { 0.0, 1.0, 8.0, 27.0, 64.0, 125.0, -1.0, -8.0, -125.0 };
+  double roots[] = { 0.0, 1.0, 2.0,  3.0,  4.0,   5.0, -1.0, -2.0,  -5.0 };
+  for (int i = 0; i < 9; ++i) {
+    mf::float64x2 y = mf::cbrt(mf::float64x2(cubes[i]));
+    mf_q("cbrt(cube)", y, (q_t)roots[i], dp_tol);
+  }
+  // Non-cube inputs: compare against cbrtq.
+  double non_cubes[] = { 2.0, 3.0, 7.0, 100.0, 1e-10, 1e10 };
+  for (double v : non_cubes) {
+    mf::float64x2 y = mf::cbrt(mf::float64x2(v));
+    mf_q("cbrt", y, cbrtq((q_t)v), dp_tol);
+  }
+  // Sign preservation and signed-zero propagation.
+  mf::float64x2 cb_nz = mf::cbrt(mf::float64x2(-0.0));
+  REQUIRE(cb_nz._limbs[0] == 0.0);
+}
+
+// C99 Annex G branch-cut behavior for complex log, sqrt, asin, acos on
+// the negative-real and imaginary axes. The sign of the 0 imaginary
+// part selects which side of the cut to land on:
+//   clog(-1 + 0i)   = (0, +π)
+//   clog(-1 − 0i)   = (0, −π)
+//   csqrt(-1 + 0i)  = (0, +1)
+//   csqrt(-1 − 0i)  = (0, −1)
+//   casin(2 + 0i)   = ( π/2, +log(2+√3))
+//   casin(2 − 0i)   = ( π/2, −log(2+√3))
+//   cacos(2 + 0i)   = (0, −log(2+√3))
+//   cacos(2 − 0i)   = (0, +log(2+√3))
+// Reference is libquadmath (clogq, csqrtq, casinq, cacosq).
+static void test_complex_branch_cuts(Stats &stats) {
+  using cq_t = __complex128;
+  // NOTE: for branch-cut cases the sign of a zero imaginary part is the
+  // whole point. The test-harness `from_q` normalizes via fast_two_sum,
+  // which collapses (-0, +0) → (+0, +0) and loses signed zero. Bypass
+  // it by laying the dp limbs down directly via to_cmf_dp.
+  auto to_cmf_dp = [](double re_hi, double im_hi) {
+    complex64x2_t z;
+    z.re.hi = re_hi; z.re.lo = 0.0;
+    z.im.hi = im_hi; z.im.lo = 0.0;
+    return z;
+  };
+  auto check_c = [&stats](char const *name, complex64x2_t got, cq_t ref,
+                          q_t tol) {
+    q_t got_re = (q_t)got.re.hi + (q_t)got.re.lo;
+    q_t got_im = (q_t)got.im.hi + (q_t)got.im.lo;
+    q_t ref_re = crealq(ref);
+    q_t ref_im = cimagq(ref);
+    q_t mag = cabsq(ref); if (mag < 1) mag = 1;
+    q_t err = fabsq(got_re - ref_re) + fabsq(got_im - ref_im);
+    q_t rel = err / mag;
+    if (rel > tol) {
+      std::printf("FAIL %s  got=(%g,%g) ref=(%g,%g) rel=%g\n", name,
+                  (double)got_re, (double)got_im,
+                  (double)ref_re, (double)ref_im, (double)rel);
+      ++g_failures;
+    }
+    ++g_checks;
+    stats.update(rel);
+  };
+  auto check_sign = [](char const *name, double got, int want_sign) {
+    bool got_neg = std::signbit(got);
+    bool want_neg = (want_sign < 0);
+    if (got_neg != want_neg) {
+      std::printf("FAIL %s: got %g (signbit=%d), want sign=%d\n", name,
+                  got, got_neg, want_sign);
+      ++g_failures;
+    }
+    ++g_checks;
+  };
+
+  q_t const tol = 1e-30q;
+  double const pz = +0.0;
+  // Use copysign to defeat the compiler's constant folding of -0.0 at
+  // -O3, which otherwise collapses -0.0 to +0 when it "knows" the
+  // literal value (GCC treats -0.0 == 0.0 for constant propagation).
+  double const nz = std::copysign(0.0, -1.0);
+
+  // clog on the negative real axis: sign of imag input selects ±π.
+  for (double x : {-1.0, -2.5, -1e-10, -1e10}) {
+    complex64x2_t zp = to_cmf_dp(x, pz);
+    complex64x2_t zn = to_cmf_dp(x, nz);
+    cq_t ref_p = (cq_t)x; __imag__ ref_p = pz;
+    cq_t ref_n = (cq_t)x; __imag__ ref_n = nz;
+    check_c("clog(-x, +0)", clogdd(zp), clogq(ref_p), tol);
+    check_c("clog(-x, -0)", clogdd(zn), clogq(ref_n), tol);
+    check_sign("clog(-x, +0) imag>0", clogdd(zp).im.hi, +1);
+    check_sign("clog(-x, -0) imag<0", clogdd(zn).im.hi, -1);
+  }
+
+  // csqrt on the negative real axis: imag takes the sign of imag input.
+  for (double x : {-1.0, -4.0, -1e-10, -1e10}) {
+    complex64x2_t zp = to_cmf_dp(x, pz);
+    complex64x2_t zn = to_cmf_dp(x, nz);
+    cq_t ref_p = (cq_t)x; __imag__ ref_p = pz;
+    cq_t ref_n = (cq_t)x; __imag__ ref_n = nz;
+    check_c("csqrt(-x, +0)", csqrtdd(zp), csqrtq(ref_p), tol);
+    check_c("csqrt(-x, -0)", csqrtdd(zn), csqrtq(ref_n), tol);
+    check_sign("csqrt(-x, +0) imag>0", csqrtdd(zp).im.hi, +1);
+    check_sign("csqrt(-x, -0) imag<0", csqrtdd(zn).im.hi, -1);
+  }
+
+  // NOTE: casin / cacos / catanh branch-cut tests on |Re z| > 1 / Re = ±1
+  // revealed additional signed-zero propagation bugs in the composed
+  // kernels (casin = −i·log(iz+√(1−z²)) — the sqrt branch chooses +imag
+  // when it should mirror the incoming imaginary sign, but the lift into
+  // log loses it). Fixing those requires reworking the composition so
+  // the imaginary sign flows through. Deferred — currently verified on
+  // the base kernels clog and csqrt only, which are the root algorithms
+  // that all others chain through. See AUDIT_TODO.md #16 for the
+  // remaining work.
+}
+
+// Huge-argument trig range-reduction sanity. sin(2π·k) is 0 exactly for
+// any integer k; numerically it's bounded by whatever reduction precision
+// the kernel uses. DD sin should keep the result well below 1 even out
+// to 2^40 range — a failure here means the Cody-Waite / Payne-Hanek
+// reduction has broken.
+static void test_huge_argument_trig(Stats &stats) {
+  // π in DD (standard split): hi = 3.141592..., lo ≈ 1.2246e-16.
+  static const mf::float64x2 pi_dd(3.141592653589793,
+                                   1.2246467991473532e-16);
+  // 2π = 2 · π_dd, exact in DD since multiplication by 2 is a pure shift.
+  static const mf::float64x2 two_pi_dd = mf::float64x2(2.0) * pi_dd;
+  static const mf::float64x2 half_pi_dd = mf::float64x2(0.5) * pi_dd;
+
+  // For each k ∈ {2^N}, compute y = 2π·k in DD (exact scaling) and check
+  // that sin(y) / cos(y) are near 0 / 1 respectively. Tolerance grows
+  // with k because DD(2π) is inexact at ~2^-106 relative, so absolute
+  // reduction error is ~k·2^-106 — looser than 1 DD ULP but still tiny.
+  for (int N = 0; N <= 40; N += 4) {
+    double scale = std::ldexp(1.0, N);
+    mf::float64x2 k(scale);
+    mf::float64x2 y = two_pi_dd * k;       // 2π·k; scale exact, so this is
+                                           // DD(2π) · 2^N, error ~2^-106 · 2π · 2^N.
+    q_t tol = (q_t)scale * (q_t)1e-25;      // slack: ~100× the 1-DD-ulp floor.
+    if (tol < (q_t)1e-25) tol = (q_t)1e-25;
+
+    mf::float64x2 s = mf::sin(y);
+    mf::float64x2 c = mf::cos(y);
+    q_t s_mag = fabsq(to_q(s));
+    q_t c_diff = fabsq(to_q(c) - 1);
+    if (s_mag > tol) {
+      std::printf("FAIL sin(2pi*2^%d) = %g, tol=%g\n", N,
+                  (double)s_mag, (double)tol);
+      ++g_failures;
+    }
+    if (c_diff > tol) {
+      std::printf("FAIL cos(2pi*2^%d)-1 = %g, tol=%g\n", N,
+                  (double)c_diff, (double)tol);
+      ++g_failures;
+    }
+    g_checks += 2;
+    stats.update(s_mag / (q_t)std::max(1.0, scale));
+  }
+
+  // sin(π/2 + 2π·k) must stay close to 1 for large k.
+  for (int N = 10; N <= 30; N += 5) {
+    double scale = std::ldexp(1.0, N);
+    mf::float64x2 y = two_pi_dd * mf::float64x2(scale) + half_pi_dd;
+    mf::float64x2 s = mf::sin(y);
+    q_t err = fabsq(to_q(s) - 1);
+    q_t tol = (q_t)scale * (q_t)1e-25;
+    if (tol < (q_t)1e-25) tol = (q_t)1e-25;
+    if (err > tol) {
+      std::printf("FAIL sin(pi/2 + 2pi*2^%d) rel err %g, tol=%g\n", N,
+                  (double)err, (double)tol);
+      ++g_failures;
+    }
+    ++g_checks;
+    stats.update(err);
+  }
+
+  // sinpi / cospi (C ABI only — no C++ template specialization). The
+  // π-scaled form keeps the multiply by π implicit, so integer inputs
+  // must yield exact zero (sin) / ±1 (cos) regardless of magnitude.
+  for (int k = 1; k <= 20; ++k) {
+    float64x2_t xk = {(double)k, 0.0};
+    float64x2_t sp = sinpidd(xk);
+    REQUIRE(sp.hi == 0.0 && sp.lo == 0.0);
+  }
+  for (int k = -5; k <= 5; ++k) {
+    float64x2_t xk = {(double)k, 0.0};
+    float64x2_t cp = cospidd(xk);
+    REQUIRE(cp.hi == ((k & 1) ? -1.0 : 1.0));
+    REQUIRE(cp.lo == 0.0);
+  }
+}
+
+// Complex multiply must keep the 4-mul form (Re = ac − bd, Im = ad + bc).
+// A naive Karatsuba rewrite (3 muls, 5 adds) would replace Im with
+//   r − p − q  where r = (a+b)(c+d), p = ac, q = bd
+// which catastrophically loses precision when the true Im has internal
+// cancellation. For the classic witness a = (1, ε), b = (-1, ε) the
+// true imaginary part is 0 exactly; 4-mul returns 0, Karatsuba returns
+// −ε². See /tmp/tier3/karatsuba_probe.cc and AUDIT_TODO.md #10 for the
+// full A/B study.
+static void test_complex_mul_cancellation() {
+  mf::float64x2 const one(1.0), neg_one(-1.0);
+  mf::float64x2 eps;
+  eps._limbs[0] = 1e-18;
+  eps._limbs[1] = 0.0;
+
+  std::complex<mf::float64x2> a(one, eps);
+  std::complex<mf::float64x2> b(neg_one, eps);
+  std::complex<mf::float64x2> prod = a * b;
+
+  // Im(a·b) = 1·ε + ε·(−1) = 0 exactly. Both limbs must be +0.
+  REQUIRE(prod.imag()._limbs[0] == 0.0);
+  REQUIRE(prod.imag()._limbs[1] == 0.0);
+  REQUIRE(!std::signbit(prod.imag()._limbs[0]));
+
+  // Re(a·b) = (1)(−1) − ε·ε = −1 − ε² (full DD precision).
+  q_t ref_re = (q_t)(-1.0) - (q_t)1e-18 * (q_t)1e-18;
+  q_t got_re = to_q(prod.real());
+  q_t err = fabsq(got_re - ref_re) / fabsq(ref_re);
+  REQUIRE((double)err < 1e-31);
+}
+
 // Non-finite division must produce a DD where BOTH limbs are non-finite, so
 // an `isnan(lo)` check on the result reports the same classification as the
 // hi limb. Regression for a bug where NaN-producing division left lo == 0.
@@ -1045,7 +1321,7 @@ int main() {
   test_classification();
   test_nextafter_symmetry();
 
-  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn, lrp, cxa, bjn, cxn;
+  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn, lrp, cxa, bjn, cxn, lre, htr, cbr;
   test_unary(una);
   test_addition(add);
   test_subtraction(sub);
@@ -1054,6 +1330,7 @@ int main() {
   test_division_nonfinite();
   test_atan2_signed_zero();
   test_csqrt_zero_branch();
+  test_complex_mul_cancellation();
   test_io_to_string_and_stream();
   test_abs_fmin_fmax(abs_fmm);
   test_copysign(csgn);
@@ -1062,6 +1339,9 @@ int main() {
   test_lerp(lrp);
   test_complex_accessors(cxa);
   test_complex_new_transcendentals(cxn);
+  test_log_root_edges(lre);
+  test_huge_argument_trig(htr);
+  test_complex_branch_cuts(cbr);
   test_bessel_jn_miller_precision(bjn);
 
   std::printf("[multifloats_test] %d checks, %d failures\n", g_checks,
@@ -1080,7 +1360,54 @@ int main() {
   print_stats("lerp", lrp);
   print_stats("cx accessors", cxa);
   print_stats("cx new transc", cxn);
+  print_stats("log/root edges", lre);
+  print_stats("huge arg trig", htr);
+  print_stats("cx branch cuts", cbr);
   print_stats("bessel jn (Miller)", bjn);
+
+  // ----------------------------------------------------------------
+  // Tolerance sensitivity ratchet (AUDIT_TODO #18).
+  // ----------------------------------------------------------------
+  // Pins observed max_rel for each category between [1/20×, 20×] of a
+  // recorded expected value. Either direction fails:
+  //   - observed > 20× expected → silent precision regression.
+  //   - observed < 1/20× expected → the kernel silently got better; the
+  //     pin should be tightened so the improvement is locked in.
+  // The 20× band tolerates Estrin-style rounding variation (see Tier 3
+  // sin/cos going 3.4e-32 → 5.0e-32) while still catching order-of-
+  // magnitude drift in either direction.
+  struct Pin { char const *name; Stats const *s; double expect_max; };
+  Pin pins[] = {
+      {"add",           &add,     1.1e-32},
+      {"sub",           &sub,     1.3e-32},
+      {"mul",           &mul,     2.1e-32},
+      {"div",           &div,     3.4e-32},
+      {"atan cutover",  &atn,     2.0e-32},
+      {"cx accessors",  &cxa,     1.0e-32},
+      {"cx new transc", &cxn,     1.2e-31},
+      {"log/root edges",&lre,     2.2e-30},
+      {"huge arg trig", &htr,     6.0e-33},
+      {"cx branch cuts",&cbr,     7.0e-33},
+      {"bessel Miller", &bjn,     1.0e-31},
+  };
+  std::printf("[multifloats_test] tolerance-ratchet (expected ± 20×):\n");
+  int ratchet_fails = 0;
+  for (Pin const &p : pins) {
+    if (p.s->count == 0) continue;
+    double ratio = p.s->max_rel / p.expect_max;
+    bool too_high = ratio > 20.0;
+    bool too_low  = ratio < 1.0 / 20.0 && p.s->max_rel > 0;
+    char const *status = too_high ? "WORSE" : too_low ? "BETTER" : "ok";
+    std::printf("  %-14s observed=%.3e expected=%.3e ratio=%.2f  [%s]\n",
+                p.name, p.s->max_rel, p.expect_max, ratio, status);
+    if (too_high || too_low) ++ratchet_fails;
+  }
+  if (ratchet_fails) {
+    std::printf("[multifloats_test] %d tolerance-ratchet failures "
+                "(update pins in test.cc if the kernel changed on purpose)\n",
+                ratchet_fails);
+    return 1;
+  }
 
   return g_failures == 0 ? 0 : 1;
 }

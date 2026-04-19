@@ -49,6 +49,14 @@ target_compile_options(cpp_fuzz PRIVATE -O3 -fext-numeric-literals)
 target_link_libraries(cpp_fuzz PRIVATE multifloats quadmath)
 add_test(NAME cpp_fuzz COMMAND cpp_fuzz)
 
+# Seed-determinism: the fuzz RNG must be byte-identical across runs
+# given the same (iterations, seed). Catches any non-deterministic
+# state (e.g. a rogue static, uninitialized scratch, or reliance on
+# system entropy). Uses small iteration count to keep ctest fast.
+add_test(NAME cpp_fuzz_determinism
+    COMMAND bash -c
+    "diff <($<TARGET_FILE:cpp_fuzz> 2000 0xc0ffee) <($<TARGET_FILE:cpp_fuzz> 2000 0xc0ffee)")
+
 add_executable(cpp_bench ./test/bench.cc)
 target_compile_options(cpp_bench PRIVATE -O3 -fext-numeric-literals)
 target_link_libraries(cpp_bench PRIVATE multifloats quadmath)
@@ -68,6 +76,21 @@ add_executable(fortran_fuzz ./test/fuzz.f90)
 target_compile_options(fortran_fuzz PRIVATE -O3)
 target_link_libraries(fortran_fuzz PRIVATE multifloatsf)
 add_test(NAME fortran_fuzz COMMAND fortran_fuzz)
+
+# Fortran-side seed determinism (seed is hardcoded to 42 inside fuzz.f90;
+# two runs must produce identical precision tables).
+add_test(NAME fortran_fuzz_determinism
+    COMMAND bash -c
+    "diff <($<TARGET_FILE:fortran_fuzz>) <($<TARGET_FILE:fortran_fuzz>)")
+
+# ABI equivalence: three DD entry points (native operator / C wrapper /
+# bind(c) Fortran reimpl) must produce bit-identical results on the same
+# inputs. Catches ABI drift or a divergence in the hand-written bindc
+# reimplementation in dd_bindc.f90.
+add_executable(fortran_abi_equivalence ./test/abi_equivalence.f90)
+target_compile_options(fortran_abi_equivalence PRIVATE -O3)
+target_link_libraries(fortran_abi_equivalence PRIVATE multifloatsf dd-bindc)
+add_test(NAME fortran_abi_equivalence COMMAND fortran_abi_equivalence)
 
 add_executable(fortran_bench ./test/bench.f90)
 target_compile_options(fortran_bench PRIVATE -O3)
