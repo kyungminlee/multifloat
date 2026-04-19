@@ -39,21 +39,26 @@ add_subdirectory(fsrc)  # project(multifloatsf) → libmultifloatsf-<compiler>.a
 # =============================================================================
 
 # C++ tests — use __float128 / libquadmath as reference (GCC only).
+# Test names are prefixed precision_* / fuzz_* / perf_* so that
+# `ctest -R precision_` or `ctest -R fuzz_` picks one category at a
+# time. Executable target names are unchanged (no rename cost for
+# downstream tooling / CI configs).
+
 add_executable(cpp_test ./test/test.cc)
 target_compile_options(cpp_test PRIVATE -O3 -fext-numeric-literals)
 target_link_libraries(cpp_test PRIVATE multifloats quadmath)
-add_test(NAME cpp_test COMMAND cpp_test)
+add_test(NAME precision_cpp COMMAND cpp_test)
 
 add_executable(cpp_fuzz ./test/fuzz.cc)
 target_compile_options(cpp_fuzz PRIVATE -O3 -fext-numeric-literals)
 target_link_libraries(cpp_fuzz PRIVATE multifloats quadmath)
-add_test(NAME cpp_fuzz COMMAND cpp_fuzz)
+add_test(NAME fuzz_cpp COMMAND cpp_fuzz)
 
 # Seed-determinism: the fuzz RNG must be byte-identical across runs
 # given the same (iterations, seed). Catches any non-deterministic
 # state (e.g. a rogue static, uninitialized scratch, or reliance on
 # system entropy). Uses small iteration count to keep ctest fast.
-add_test(NAME cpp_fuzz_determinism
+add_test(NAME fuzz_cpp_determinism
     COMMAND bash -c
     "diff <($<TARGET_FILE:cpp_fuzz> 2000 0xc0ffee) <($<TARGET_FILE:cpp_fuzz> 2000 0xc0ffee)")
 
@@ -65,21 +70,21 @@ target_link_libraries(cpp_bench PRIVATE multifloats quadmath)
 add_executable(fortran_precision ./test/precision.f90)
 target_compile_options(fortran_precision PRIVATE -O3)
 target_link_libraries(fortran_precision PRIVATE multifloatsf)
-add_test(NAME fortran_precision COMMAND fortran_precision)
+add_test(NAME precision_fortran COMMAND fortran_precision)
 
 add_executable(fortran_test ./test/test.f90)
 target_compile_options(fortran_test PRIVATE -O3)
 target_link_libraries(fortran_test PRIVATE multifloatsf)
-add_test(NAME fortran_test COMMAND fortran_test)
+add_test(NAME precision_fortran_unit COMMAND fortran_test)
 
 add_executable(fortran_fuzz ./test/fuzz.f90)
 target_compile_options(fortran_fuzz PRIVATE -O3)
 target_link_libraries(fortran_fuzz PRIVATE multifloatsf)
-add_test(NAME fortran_fuzz COMMAND fortran_fuzz)
+add_test(NAME fuzz_fortran COMMAND fortran_fuzz)
 
 # Fortran-side seed determinism (seed is hardcoded to 42 inside fuzz.f90;
 # two runs must produce identical precision tables).
-add_test(NAME fortran_fuzz_determinism
+add_test(NAME fuzz_fortran_determinism
     COMMAND bash -c
     "diff <($<TARGET_FILE:fortran_fuzz>) <($<TARGET_FILE:fortran_fuzz>)")
 
@@ -90,7 +95,7 @@ add_test(NAME fortran_fuzz_determinism
 add_executable(fortran_abi_equivalence ./test/abi_equivalence.f90)
 target_compile_options(fortran_abi_equivalence PRIVATE -O3)
 target_link_libraries(fortran_abi_equivalence PRIVATE multifloatsf dd-bindc)
-add_test(NAME fortran_abi_equivalence COMMAND fortran_abi_equivalence)
+add_test(NAME precision_abi_equivalence COMMAND fortran_abi_equivalence)
 
 add_executable(fortran_bench ./test/bench.f90)
 target_compile_options(fortran_bench PRIVATE -O3)

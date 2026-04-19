@@ -188,6 +188,12 @@ Perf sentinels before/after: `div` 0.0013s, `atan2` 0.0072→0.0073s,
   even without `-flto`. Perf bit-identical to pre-split; all 8 ctest
   targets pass. Files: `multifloats_math_{exp_log, trig, hyp,
   inv_trig, special, bessel, matmul, abi_scalar, abi_complex}.inc`.
-- [ ] **27. Categorize ctest names** (`precision_*`, `fuzz_*`, `perf_*`). **S**
+- [x] **27. Categorize ctest names** — renamed ctest `NAME` to
+  prefixed form: `precision_cpp`, `precision_fortran`,
+  `precision_fortran_unit`, `precision_abi_equivalence`, `fuzz_cpp`,
+  `fuzz_cpp_determinism`, `fuzz_fortran`, `fuzz_fortran_determinism`.
+  Executable target names left alone (no CI-config breakage).
+  `ctest -R precision_` or `ctest -R fuzz_` now selects one
+  category.
 - [ ] **28. Clean up `work-gemini/`** + `external/` unused samples. **S**
 - [ ] **29. PR CI workflow** (currently only tag builds). **S**
