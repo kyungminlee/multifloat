@@ -226,7 +226,7 @@ float64x2 expm1_full(float64x2 const &x) {
     return exp_full(x) - float64x2(1.0);
   }
   // Small |x|: direct Taylor. expm1(x) = x * Σ x^k / (k+1)!.
-  float64x2 p = horner(x, expm1_taylor_hi, expm1_taylor_lo, 25);
+  float64x2 p = neval(x, expm1_taylor_hi, expm1_taylor_lo, 24);
   return x * p;
 }
 
@@ -267,7 +267,7 @@ float64x2 log1p_full(float64x2 const &x) {
   // full value in a single t-multiply.
   float64x2 t = x / (float64x2(2.0) + x);
   float64x2 t2 = t * t;
-  float64x2 p = horner(t2, log1p_taylor_hi, log1p_taylor_lo, 18);
+  float64x2 p = neval(t2, log1p_taylor_hi, log1p_taylor_lo, 17);
   return t * p;
 }
 

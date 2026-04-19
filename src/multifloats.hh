@@ -870,6 +870,48 @@ inline float64x2 neval(float64x2 const &x, double const *hi, double const *lo,
     float64x2 p1215 = p1213 + p1415 * x2;
     return p03 + p47 * x4 + (p811 + p1215 * x4) * x8;
   }
+  case 17: {
+    float64x2 x16 = x8 * x8;
+    float64x2 p01 = c(0) + c(1) * x;
+    float64x2 p23 = c(2) + c(3) * x;
+    float64x2 p45 = c(4) + c(5) * x;
+    float64x2 p67 = c(6) + c(7) * x;
+    float64x2 p89 = c(8) + c(9) * x;
+    float64x2 p1011 = c(10) + c(11) * x;
+    float64x2 p1213 = c(12) + c(13) * x;
+    float64x2 p1415 = c(14) + c(15) * x;
+    float64x2 p1617 = c(16) + c(17) * x;
+    float64x2 p03 = p01 + p23 * x2;
+    float64x2 p47 = p45 + p67 * x2;
+    float64x2 p811 = p89 + p1011 * x2;
+    float64x2 p1215 = p1213 + p1415 * x2;
+    float64x2 p0_15 = p03 + p47 * x4 + (p811 + p1215 * x4) * x8;
+    return p0_15 + p1617 * x16;
+  }
+  case 24: {
+    float64x2 x16 = x8 * x8;
+    float64x2 p01 = c(0) + c(1) * x;
+    float64x2 p23 = c(2) + c(3) * x;
+    float64x2 p45 = c(4) + c(5) * x;
+    float64x2 p67 = c(6) + c(7) * x;
+    float64x2 p89 = c(8) + c(9) * x;
+    float64x2 p1011 = c(10) + c(11) * x;
+    float64x2 p1213 = c(12) + c(13) * x;
+    float64x2 p1415 = c(14) + c(15) * x;
+    float64x2 p03 = p01 + p23 * x2;
+    float64x2 p47 = p45 + p67 * x2;
+    float64x2 p811 = p89 + p1011 * x2;
+    float64x2 p1215 = p1213 + p1415 * x2;
+    float64x2 p0_15 = p03 + p47 * x4 + (p811 + p1215 * x4) * x8;
+    float64x2 p1617 = c(16) + c(17) * x;
+    float64x2 p1819 = c(18) + c(19) * x;
+    float64x2 p2021 = c(20) + c(21) * x;
+    float64x2 p2223 = c(22) + c(23) * x;
+    float64x2 p1619 = p1617 + p1819 * x2;
+    float64x2 p2023 = p2021 + p2223 * x2;
+    float64x2 p16_24 = p1619 + p2023 * x4 + c(24) * x8;
+    return p0_15 + p16_24 * x16;
+  }
   default: {
     float64x2 y = c(n);
     for (int i = n - 1; i >= 0; --i)

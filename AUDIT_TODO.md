@@ -298,9 +298,15 @@ fixes land. File:line references are snapshots taken at the time of the audit.
 
 ## Speed
 
-- [ ] **S1 — `neval` Estrin ladder stops at degree 14.** `src/multifloats.hh:747-865`.
-  `expm1_taylor` (degree 24) and `log1p_taylor` (degree 17) fall back to
-  Horner, ~40–50% extra FLOPs on cold-tail paths. Severity: **low**.
+- [x] **S1 — `neval` Estrin ladder stops at degree 14.** `src/multifloats.hh:747-865`.
+  `expm1_taylor` (degree 24) and `log1p_taylor` (degree 17) fell back to
+  Horner. Severity: **low**.
+  _Resolved (2026-04-19):_ added `neval` cases 17 and 24 (x16 = x8·x8 + a
+  second-tier Estrin block), and switched `expm1_full` / `log1p_full` from
+  `horner` to `neval`. Precision max_dd bit-identical on every op.
+  Bench: `expm1` 3.92× → 4.33× (+10%), `log1p` 5.96× → 6.45× (+8%),
+  `atanh` 6.16× → 6.67× (+8%, inherits log1p via P9),
+  `asinh` 8.80× → 8.96× (+2%, hits log1p for |x|<1). All 9 ctests pass.
 - [ ] **S2 — Bessel `pq0/pq1` 7-deep branch trees.** `src/multifloats_math_bessel.inc:7-41`.
   Replace with small lookup keyed by `xinv_d/8`. Severity: **low** (cold path).
 - [ ] **S3 — `hypot` per-limb `ldexp`.** `src/multifloats.hh:1027-1029`.
