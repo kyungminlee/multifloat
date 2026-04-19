@@ -149,7 +149,13 @@ Perf sentinels before/after: `div` 0.0013s, `atan2` 0.0072→0.0073s,
 
 ## Tier 5 — Maintainability & readability
 
-- [ ] **20. CHANGELOG.md + migration guide** for 44b3a64 prefix rename. **S**
+- [x] **20. CHANGELOG.md + migration guide** — new `CHANGELOG.md`
+  (Keep-a-Changelog format, SemVer). Unreleased section documents
+  the 44b3a64 prefix rename with an old-→-new migration table
+  (`mf_*`→`dd_*`, `cx_*`→`cdd_*`, `MF_*`→`DD_*`, `complex128x2`→
+  `complex64x2`, plus the half-dozen explicit public names) and
+  summarizes all Tier 1–5 audit additions / fixes. [0.1.0] section
+  pins the historical name surface.
 - [x] **21. Unify test helpers** — consolidated `to_q` / `from_q` /
   `q_rel_err` / `qstr` / `q_isnan` / `q_isfinite` into
   `test/test_common.hh` (namespace `multifloats_test`). `test.cc`,
