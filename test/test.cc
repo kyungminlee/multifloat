@@ -8,8 +8,7 @@
 
 #include "multifloats.hh"
 #include "multifloats_c.h"
-
-#include <quadmath.h>
+#include "test_common.hh"
 
 #include <cmath>
 #include <complex>
@@ -20,52 +19,11 @@
 #include <vector>
 
 namespace mf = multifloats;
-
-// =============================================================================
-// __float128 reference helpers
-// =============================================================================
-
-using q_t = __float128;
-
-static q_t to_q(mf::float64x2 const &x) {
-  return (q_t)x._limbs[0] + (q_t)x._limbs[1];
-}
-
-static mf::float64x2 from_q(q_t v) {
-  double hi = (double)v;
-  if (!std::isfinite(hi)) {
-    mf::float64x2 r;
-    r._limbs[0] = hi;
-    r._limbs[1] = hi;
-    return r;
-  }
-  double lo = (double)(v - (q_t)hi);
-  // fast_two_sum normalization (|hi| >= |lo| holds by construction).
-  double s = hi + lo;
-  double err = lo - (s - hi);
-  mf::float64x2 r;
-  r._limbs[0] = s;
-  r._limbs[1] = err;
-  return r;
-}
-
-static double q_rel_err(q_t got, q_t expected) {
-  if (expected == 0) {
-    return (got == 0) ? 0.0 : (double)fabsq(got);
-  }
-  q_t diff = got - expected;
-  if (diff < 0) {
-    diff = -diff;
-  }
-  q_t mag = expected < 0 ? -expected : expected;
-  return (double)(diff / mag);
-}
-
-static char const *qstr(q_t v) {
-  static char buf[64];
-  quadmath_snprintf(buf, sizeof(buf), "%.30Qg", v);
-  return buf;
-}
+using multifloats_test::q_t;
+using multifloats_test::to_q;
+using multifloats_test::from_q;
+using multifloats_test::q_rel_err;
+using multifloats_test::qstr;
 
 // =============================================================================
 // Stats / reporting

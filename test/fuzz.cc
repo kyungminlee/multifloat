@@ -18,8 +18,7 @@
 // Built with g++ + libquadmath.
 
 #include "multifloats.hh"
-
-#include <quadmath.h>
+#include "test_common.hh"
 
 #include <cmath>
 #include <cstdint>
@@ -29,56 +28,13 @@
 #include <random>
 
 namespace mf = multifloats;
-using q_t = __float128;
-
-// =============================================================================
-// __float128 reference helpers
-// =============================================================================
-
-static q_t to_q(mf::float64x2 const &x) {
-  return (q_t)x._limbs[0] + (q_t)x._limbs[1];
-}
-
-// Project a q_t value down to a normalized double-double (the same way the
-// Fortran test's `to_f64x2` does — hi = nearest double, lo = rounding error,
-// then fast_two_sum renormalize).
-static mf::float64x2 to_mf2(q_t v) {
-  double hi = (double)v;
-  if (!std::isfinite(hi)) {
-    mf::float64x2 r;
-    r._limbs[0] = hi;
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  double lo = (double)(v - (q_t)hi);
-  double s = hi + lo;
-  double b = s - hi;
-  mf::float64x2 r;
-  r._limbs[0] = s;
-  r._limbs[1] = lo - b;
-  return r;
-}
-
-static bool q_isnan(q_t x) { return isnanq(x); }
-static bool q_isfinite(q_t x) { return finiteq(x); }
-
-static double q_rel_err(q_t got, q_t expected) {
-  q_t diff = got - expected;
-  if (diff < 0) {
-    diff = -diff;
-  }
-  q_t mag = expected < 0 ? -expected : expected;
-  if (mag == 0) {
-    return (double)diff;
-  }
-  return (double)(diff / mag);
-}
-
-static char const *qstr(q_t v) {
-  static char buf[64];
-  quadmath_snprintf(buf, sizeof(buf), "%.30Qg", v);
-  return buf;
-}
+using multifloats_test::q_t;
+using multifloats_test::to_q;
+using multifloats_test::from_q;
+using multifloats_test::q_rel_err;
+using multifloats_test::q_isfinite;
+using multifloats_test::q_isnan;
+using multifloats_test::qstr;
 
 // =============================================================================
 // Per-op statistics table (keyed by op name)
@@ -385,8 +341,8 @@ int main(int argc, char **argv) {
   for (long i = 1; i <= iterations; ++i) {
     q_t q1, q2;
     rng.generate_pair(q1, q2);
-    mf::float64x2 f1 = to_mf2(q1);
-    mf::float64x2 f2 = to_mf2(q2);
+    mf::float64x2 f1 = from_q(q1);
+    mf::float64x2 f2 = from_q(q2);
     double d1 = (double)q1;
     double d2 = (double)q2;
 
@@ -530,7 +486,7 @@ int main(int argc, char **argv) {
       // 3-argument min/max via nested fmin/fmax.
       if (q_isfinite(q1) && q_isfinite(q2)) {
         q_t q3 = (q1 + q2) * (q_t)0.5q;
-        mf::float64x2 f3 = to_mf2(q3);
+        mf::float64x2 f3 = from_q(q3);
         q_t min12 = q1 < q2 ? q1 : q2;
         q_t q_min3 = min12 < q3 ? min12 : q3;
         q_t max12 = q1 < q2 ? q2 : q1;

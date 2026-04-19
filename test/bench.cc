@@ -16,8 +16,7 @@
 //     even for one-cycle operations.
 
 #include "multifloats.hh"
-
-#include <quadmath.h>
+#include "test_common.hh"
 
 #include <chrono>
 #include <cmath>
@@ -27,7 +26,8 @@
 #include <random>
 
 namespace mf = multifloats;
-using q_t = __float128;
+using multifloats_test::q_t;
+using multifloats_test::from_q;
 using clk = std::chrono::steady_clock;
 
 // =============================================================================
@@ -50,23 +50,6 @@ static double f_sink = 0.0;
 // Plumbing
 // =============================================================================
 
-static mf::float64x2 to_mf2(q_t v) {
-  double hi = (double)v;
-  if (!std::isfinite(hi)) {
-    mf::float64x2 r;
-    r._limbs[0] = hi;
-    r._limbs[1] = hi;
-    return r;
-  }
-  double lo = (double)(v - (q_t)hi);
-  double s = hi + lo;
-  double err = lo - (s - hi);
-  mf::float64x2 r;
-  r._limbs[0] = s;
-  r._limbs[1] = err;
-  return r;
-}
-
 static void init_data() {
   std::mt19937_64 rng(42ULL);
   std::uniform_real_distribution<double> u(0.0, 1.0);
@@ -79,7 +62,7 @@ static void init_data() {
   auto make_dd = [&](double hi) -> std::pair<q_t, mf::float64x2> {
     double lo = hi * std::ldexp(udd(rng), -52);
     q_t v = (q_t)hi + (q_t)lo;
-    return {v, to_mf2(v)};
+    return {v, from_q(v)};
   };
 
   // General arithmetic inputs in (-10, 10), nonzero (avoid div-by-0).

@@ -150,8 +150,11 @@ Perf sentinels before/after: `div` 0.0013s, `atan2` 0.0072→0.0073s,
 ## Tier 5 — Maintainability & readability
 
 - [ ] **20. CHANGELOG.md + migration guide** for 44b3a64 prefix rename. **S**
-- [ ] **21. Unify test helpers** — `to_q`, `from_mf2` into
-  `test/test_common.hh`. **S**
+- [x] **21. Unify test helpers** — consolidated `to_q` / `from_q` /
+  `q_rel_err` / `qstr` / `q_isnan` / `q_isfinite` into
+  `test/test_common.hh` (namespace `multifloats_test`). `test.cc`,
+  `fuzz.cc`, `bench.cc` now include the shared header; `to_mf2`
+  renamed to `from_q` for consistency. All 8 ctest targets pass.
 - [ ] **22. `dd_constants.hh` TOC + per-block provenance** (Taylor / Remez /
   libquadmath citations) via `scripts/gen_constants.py`. **S**
 - [ ] **23. Inline provenance comments** for polynomial evals in
