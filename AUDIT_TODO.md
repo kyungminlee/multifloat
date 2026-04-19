@@ -79,10 +79,15 @@ fixes land. File:line references are snapshots taken at the time of the audit.
 
 ## Maintainability & hygiene
 
-- [ ] **M1 — `SOVERSION` hardcoded, not coupled to `MULTIFLOATS_ABI_VERSION`.**
+- [x] **M1 — `SOVERSION` hardcoded, not coupled to `MULTIFLOATS_ABI_VERSION`.**
   `src/CMakeLists.txt:14-15` vs `src/multifloats_c.h:21`. A manual bump of the
   header constant without a matching CMake edit produces a wrongly-tagged
   shared library. Severity: **medium**.
+  _Resolved:_ `src/CMakeLists.txt` now uses `file(STRINGS …)` + a regex to
+  pull `MULTIFLOATS_ABI_VERSION` out of `multifloats_c.h` at configure
+  time and drives both `VERSION` and `SOVERSION` from it (fatal-errors if
+  the header define can't be found). Verified to parse as `2` against
+  the current header.
 - [ ] **M2 — Fortran bindings hand-mirrored from C ABI.** `fsrc/multifloats.fypp:114-145`
   vs `src/multifloats_c.h:219-230`. No build-time sync check. Severity: **medium**.
 - [ ] **M3 — `localize_symbols.sh` regex is fragile.** `src/CMakeLists.txt:25-27`,

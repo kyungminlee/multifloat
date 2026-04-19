@@ -7,12 +7,21 @@ target_include_directories(multifloats
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-# ABI bookkeeping — kept in sync with MULTIFLOATS_ABI_VERSION in multifloats_c.h.
-# SOVERSION is only honored on shared libraries; it is set anyway so a future
-# `BUILD_SHARED_LIBS=ON` build records the right soname without further edits.
+# ABI bookkeeping — parse MULTIFLOATS_ABI_VERSION straight out of the header
+# so a bump there is the single source of truth. Without this, SOVERSION and
+# the header constant drift silently and a future shared-library build would
+# ship a wrongly-tagged soname. SOVERSION is only honored on shared libraries,
+# but we set it anyway so `BUILD_SHARED_LIBS=ON` records the right soname.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/multifloats_c.h"
+     _mf_abi_line REGEX "^#define[ \t]+MULTIFLOATS_ABI_VERSION[ \t]+[0-9]+")
+if(NOT _mf_abi_line)
+    message(FATAL_ERROR "multifloats: could not find MULTIFLOATS_ABI_VERSION in multifloats_c.h")
+endif()
+string(REGEX REPLACE "^#define[ \t]+MULTIFLOATS_ABI_VERSION[ \t]+([0-9]+).*$"
+       "\\1" MULTIFLOATS_ABI_VERSION "${_mf_abi_line}")
 set_target_properties(multifloats PROPERTIES
-    VERSION   1.0.0
-    SOVERSION 1
+    VERSION   ${MULTIFLOATS_ABI_VERSION}.0.0
+    SOVERSION ${MULTIFLOATS_ABI_VERSION}
     # Hide all C++ symbols; only extern "C" dd_* functions are exported.
     CXX_VISIBILITY_PRESET    hidden
     VISIBILITY_INLINES_HIDDEN ON)
