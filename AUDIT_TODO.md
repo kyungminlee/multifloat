@@ -18,9 +18,13 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   `|x| ≥ 2^52`, the point where a double can no longer resolve the
   fractional part of `2x` (and well below the `∞` threshold that would
   cause the UB). All three entry points share the helper.
-- [ ] **C2 — `ctandd` divides by zero.** `src/multifloats_math_abi_complex.inc:185`.
+- [x] **C2 — `ctandd` divides by zero.** `src/multifloats_math_abi_complex.inc:185`.
   `den = ca*ca + sb*sb` has no zero guard; returns NaN/Inf via raw division
   instead of the C99 Annex G values. Severity: **high**.
+  _Resolved:_ added two guards before the divide. `den.hi == 0` ⇒ return
+  `(NaN, NaN)` (C99 Annex G.6.3.1 value at a real-axis pole). Non-finite
+  `den` (sinh overflow for `|Im z| ≳ 710`) ⇒ return `(0, sign(b)·i)`, the
+  mathematical limit of `tan(a + i·b)` as `|b| → ∞`.
 - [ ] **C3 — `cpowdd(0, w)` drops signed-zero info.** `src/multifloats_math_abi_complex.inc:128`.
   Zero check inspects only hi limbs; (−0, ε) is misclassified, sign of result
   violates C99 G.6.4.1. Severity: **medium**.

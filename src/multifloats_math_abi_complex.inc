@@ -183,6 +183,19 @@ complex64x2_t ctandd(complex64x2_t z) {
   sincos_full(a, sa, ca);
   sinhcosh_full(b, sb, cb);
   float64x2 den = ca * ca + sb * sb;
+  // Pole at a = π/2+kπ with b = 0 ⇒ den = 0 + 0 = 0. C99 Annex G.6.3.1
+  // says ctan at a real-axis pole is (NaN, NaN) — matches libquadmath ctanq.
+  if (den._limbs[0] == 0.0) {
+    double nan = std::numeric_limits<double>::quiet_NaN();
+    return { {nan, 0.0}, {nan, 0.0} };
+  }
+  // Overflow in sinh(b) for |b| ≳ 710 pushes den to +∞. The mathematical
+  // limit is tan(a + i·b) → i·sign(b) as |b| → ∞; bypass the division so
+  // the imaginary part doesn't come out as ∞/∞ = NaN.
+  if (!std::isfinite(den._limbs[0])) {
+    float64x2 im_sign(std::copysign(1.0, b._limbs[0]), 0.0);
+    return { to(float64x2(0.0, 0.0)), to(im_sign) };
+  }
   return { to((sa * ca) / den), to((sb * cb) / den) };
 }
 
