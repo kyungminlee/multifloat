@@ -41,7 +41,60 @@ float64x2 exp2_full(float64x2 const &x) {
 }
 
 float64x2 exp_full(float64x2 const &x) {
-  return exp2_full(x * float64x2(log2_e_hi, log2_e_lo));
+  float64x2 r;
+  if (!std::isfinite(x._limbs[0])) {
+    if (x._limbs[0] > 0.0) r._limbs[0] = x._limbs[0];            // +inf
+    else if (x._limbs[0] < 0.0) r._limbs[0] = 0.0;               // -inf -> 0
+    else r._limbs[0] = x._limbs[0];                              // NaN
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (x._limbs[0] > exp_max) {
+    r._limbs[0] = std::numeric_limits<double>::infinity();
+    r._limbs[1] = 0.0;
+    return r;
+  }
+  if (x._limbs[0] < exp_min) return float64x2();
+
+  // Cody-Waite range reduction: r = x - n*ln2 via three-piece split.
+  // n chosen from x/ln2 rounded to nearest integer; |r| <= ln2/2 ~ 0.347.
+  double n_d = std::nearbyint(x._limbs[0] * log2_e_hi);
+
+  // r = x - n*ln2 via three-piece CW subtraction, inlined as DD - double
+  // steps to avoid paying for full DD-DD subtracts against zero-lo operands.
+  // n_d*cw1 is exact in double (cw1 has 33-bit significand, |n_d| < 2^11).
+  double rh, rl, t;
+  two_sum(x._limbs[0], -(n_d * ln2_cw1), rh, t);
+  rl = t + x._limbs[1];
+  fast_two_sum(rh, rl, rh, rl);
+  // -= n*cw2, capturing the doubled-precision product via FMA.
+  double p_hi = n_d * ln2_cw2;
+  double p_lo = std::fma(n_d, ln2_cw2, -p_hi);
+  two_sum(rh, -p_hi, rh, t);
+  rl += t - p_lo;
+  fast_two_sum(rh, rl, rh, rl);
+  // -= n*cw3 (single double; matters because n*cw3 ~ 1e-24 for |n| ~ 1024).
+  two_sum(rh, -(n_d * ln2_cw3), rh, t);
+  rl += t;
+  float64x2 rr;
+  fast_two_sum(rh, rl, rr._limbs[0], rr._limbs[1]);
+
+  // e^rr via cube-from-eighth: evaluate exp(rr/8) by Taylor, cube thrice.
+  rr._limbs[0] = std::ldexp(rr._limbs[0], -3);
+  rr._limbs[1] = std::ldexp(rr._limbs[1], -3);
+  float64x2 p = neval(rr, exp_taylor_coefs_hi, exp_taylor_coefs_lo, 15);
+  p = p * p;
+  p = p * p;
+  p = p * p;
+
+  // Scale by 2^n (split into two ldexps so subnormals round cleanly).
+  int n = static_cast<int>(n_d);
+  int half_n = n / 2;
+  r._limbs[0] = std::ldexp(p._limbs[0], half_n);
+  r._limbs[1] = std::ldexp(p._limbs[1], half_n);
+  r._limbs[0] = std::ldexp(r._limbs[0], n - half_n);
+  r._limbs[1] = std::ldexp(r._limbs[1], n - half_n);
+  return r;
 }
 
 float64x2 log2_kernel(float64x2 const &x) {

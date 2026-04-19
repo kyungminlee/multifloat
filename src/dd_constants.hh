@@ -661,6 +661,43 @@ inline constexpr double exp2_coefs_lo[16] = {
 inline constexpr double exp2_min = -1080.0;
 inline constexpr double exp2_max = 1023.9999999999998;
 
+// Cody-Waite split of ln(2) for exp_full's range reduction.
+// cw1 has a 33-bit significand so n*cw1 is exact in double for |n| < 2^20,
+// far more than the |n| <= 1025 exp ever needs. Splitting ln2 across three
+// doubles (instead of a DD pair) gives the reduction r = x - n*ln2 a full
+// ~160-bit working precision, eliminating the cancellation-driven ~220-ulp
+// tail seen when reducing via the DD product n * (ln_2_hi, ln_2_lo).
+inline constexpr double ln2_cw1 =  6.93147180485539138317e-01;
+inline constexpr double ln2_cw2 =  7.44061711001239684738e-11;
+inline constexpr double ln2_cw3 = -1.31246983477038609466e-27;
+
+// exp's input clamps. exp(709.78...) = 2^1024 overflows; exp(-745.13...)
+// underflows to zero. exp_max leaves one ulp of headroom; exp_min is set
+// several units below the underflow edge so the subnormal tail is reached
+// through the kernel rather than the short-circuit.
+inline constexpr double exp_max =  7.09782712893383973e+02;
+inline constexpr double exp_min = -7.50000000000000000e+02;
+
+// e^r Taylor coefficients c_k = 1/k!, k = 0..15, in DD.
+inline constexpr double exp_taylor_coefs_hi[16] = {
+    1.00000000000000000e+00, 1.00000000000000000e+00,
+    5.00000000000000000e-01, 1.66666666666666657e-01,
+    4.16666666666666644e-02, 8.33333333333333322e-03,
+    1.38888888888888894e-03, 1.98412698412698413e-04,
+    2.48015873015873016e-05, 2.75573192239858925e-06,
+    2.75573192239858883e-07, 2.50521083854417202e-08,
+    2.08767569878681002e-09, 1.60590438368216133e-10,
+    1.14707455977297245e-11, 7.64716373181981641e-13};
+inline constexpr double exp_taylor_coefs_lo[16] = {
+    0.00000000000000000e+00,  0.00000000000000000e+00,
+    0.00000000000000000e+00,  9.25185853854297066e-18,
+    2.31296463463574266e-18,  1.15648231731787138e-19,
+   -5.30054395437357706e-20,  1.72095582934207053e-22,
+    2.15119478667758816e-23, -1.85839327404647208e-22,
+    2.37677146222502973e-23, -1.44881407093591197e-24,
+   -1.20734505911325997e-25,  1.25852945887520981e-26,
+    2.06555127528307454e-28,  7.03872877733453001e-30};
+
 // ==========================================================================
 // === SECTION: LOG2 ===
 // Source:  in-house Taylor (atanh-of-u)
