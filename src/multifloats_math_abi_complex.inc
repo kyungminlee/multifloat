@@ -125,7 +125,19 @@ complex64x2_t ccospidd(complex64x2_t z) {
 
 // pow(z, w) = exp(w · log(z)). C99 G.6.4.1; 0^w folds to 0.
 complex64x2_t cpowdd(complex64x2_t z, complex64x2_t w) {
-  if (z.re.hi == 0.0 && z.im.hi == 0.0) return { {0.0, 0.0}, {0.0, 0.0} };
+  // True zero requires *both* limbs of *both* components to be zero. The
+  // previous hi-only test misclassified subnormal DDs of the form
+  // (hi=+0, lo=ε) as zero and returned 0 instead of exp(w · log(ε)).
+  if (z.re.hi == 0.0 && z.re.lo == 0.0 &&
+      z.im.hi == 0.0 && z.im.lo == 0.0) {
+    return { {0.0, 0.0}, {0.0, 0.0} };
+  }
+  // Renormalize each component if its hi limb is zero but lo is not —
+  // otherwise clogdd's log2 short-circuit would see hi == 0 and return
+  // (−∞, …), propagating NaNs back through exp(w · log(z)). Same pattern
+  // as the log1p subnormal fix (audit C5).
+  if (z.re.hi == 0.0 && z.re.lo != 0.0) { z.re.hi = z.re.lo; z.re.lo = 0.0; }
+  if (z.im.hi == 0.0 && z.im.lo != 0.0) { z.im.hi = z.im.lo; z.im.lo = 0.0; }
   complex64x2_t l = clogdd(z);
   float64x2 lr = from(l.re), li = from(l.im);
   float64x2 wr = from(w.re), wi = from(w.im);

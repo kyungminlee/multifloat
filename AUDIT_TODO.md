@@ -25,9 +25,18 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   `(NaN, NaN)` (C99 Annex G.6.3.1 value at a real-axis pole). Non-finite
   `den` (sinh overflow for `|Im z| ≳ 710`) ⇒ return `(0, sign(b)·i)`, the
   mathematical limit of `tan(a + i·b)` as `|b| → ∞`.
-- [ ] **C3 — `cpowdd(0, w)` drops signed-zero info.** `src/multifloats_math_abi_complex.inc:128`.
+- [x] **C3 — `cpowdd(0, w)` drops signed-zero info.** `src/multifloats_math_abi_complex.inc:128`.
   Zero check inspects only hi limbs; (−0, ε) is misclassified, sign of result
   violates C99 G.6.4.1. Severity: **medium**.
+  _Resolved:_ two tightenings in `cpowdd`. (i) the "true zero" predicate
+  now requires both limbs of both components to be zero, so a subnormal
+  DD `(hi=0, lo=ε)` is no longer collapsed to zero. (ii) if either
+  component has `hi == 0 && lo != 0` after that check, promote `lo` to
+  `hi` (mirroring the log1p C5 fix) before calling `clogdd`, so the
+  downstream `log2_full` zero short-circuit doesn't poison the result
+  with NaNs. Verified via a targeted probe: `cpow((hi=0, lo=1e-300), 1)`
+  now returns `(1e-300, 0)` instead of `NaN + NaN·i` (previous fix-step)
+  or `0 + 0·i` (original bug).
 - [ ] **C4 — `casindd` branch-cut fixup ignores lo-limb sign.** `src/multifloats_math_abi_complex.inc:208`.
   `signbit(b._limbs[0])`-only; for `b=(+0,−ε)` imaginary sign flips wrong way
   on the real-axis cut. Severity: **medium**.
