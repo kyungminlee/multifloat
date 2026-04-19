@@ -176,6 +176,35 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   log path unchanged. Residual tails in `pow`, `asinh`, `atanh` are
   now cancellation issues upstream of exp/log, not the exp/log
   kernels themselves — tracked as P7/P8/P9 below.
+- [ ] **P7b — `pow_full` residual ~15.7 ulp_dd floor.** *(Analyzed 2026-04-19,
+  not fixed.)* After P7's TD range-reduction landed, pow still sits at
+  3.86e-31 (≈15.7 ulp_dd) max at fuzz seed 0x2a. **Root cause:** the
+  bottleneck is now `log2_kernel` itself — it returns DD, and the final
+  `v + t·p` DD sum (where `v = log2(center)`, magnitude up to ~0.97)
+  truncates at `ulp_dd·|v|` absolute bits. Once multiplied by `y` and fed
+  to `exp2_from_reduced`, this becomes `~ln2·ulp_dd·|y·log2(x)|` in the
+  output, ≈15 ulp_dd for the fuzz worst case `|y·log2(x)| ≈ 22`.
+  **Approaches tried and ruled out:**
+    1. Keeping `y·Lf` as triple-double (third limb of the product) —
+       no effect, because `Lf` itself is only DD so the third limb is noise.
+    2. Newton-style refinement `Lc = (m − 2^Lf)/2^Lf · log2(e)` — no effect,
+       because `2^Lf` matches `m` only to DD precision, so `m − 2^Lf` is
+       catastrophic cancellation with ~100% relative error.
+  **Viable paths forward (pick one):**
+    (a) Offline-generate `log2_values_extra[32]` (third-limb residual of each
+        tabulated `log2(center)` at ≥150-bit precision via MPFR), embed in
+        `dd_constants.hh`, and fold `y·v_extra[idx]` into the pow
+        accumulation. Expected: ~15.7 → ~1 ulp_dd. Needs: plumbing the
+        chosen `idx` out of `log2_kernel`, MPFR-based one-shot generator.
+    (b) Replace the 32-center table path with libquadmath-style single
+        rational Padé `[4/5]` on `[1, sqrt(3/2))` with peak err ~2e-37.
+        Still DD-output-limited but fewer DD ops accumulated. Expected:
+        ~15.7 → ~10 ulp_dd. Smaller win, less invasive.
+    (c) Full TD-internal `log2_kernel`: propagate a third limb through
+        the polynomial / rational evaluation. Expected: ~15.7 → ~1 ulp_dd.
+        Largest refactor.
+  Severity: **low** (15 ulp_dd on a ~32-significant-digit type is already
+  acceptable; deferred until a user reports a concrete need).
 - [x] **P7 — `pow_full` ~100-ulp tail.** `src/multifloats_math_exp_log.inc:193`.
   Composition `exp(y · log(x))`: once P6 brought `log` to ~1 ulp_dd,
   the bottleneck became the DD multiply `y · log(x)` for large `|y|`.
