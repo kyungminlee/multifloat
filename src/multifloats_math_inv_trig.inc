@@ -216,8 +216,17 @@ float64x2 asinh_full(float64x2 const &x) {
     float64x2 r = log_full(ax) + float64x2(ln_2_hi, ln_2_lo);
     return sign ? -r : r;
   }
-  float64x2 root = sqrt(ax * ax + float64x2(1.0));
-  float64x2 res = log_full(ax + root);
+  float64x2 axsq = ax * ax;
+  float64x2 root = sqrt(axsq + float64x2(1.0));
+  // For ax < 1, ax + root ≈ 1 → log cancels; route via log1p using
+  // (root - 1) = ax² / (root + 1). For ax ≥ 1, plain log is accurate.
+  float64x2 res;
+  if (ax._limbs[0] < 1.0) {
+    float64x2 rm1 = axsq / (root + float64x2(1.0));
+    res = log1p_full(ax + rm1);
+  } else {
+    res = log_full(ax + root);
+  }
   return sign ? -res : res;
 }
 

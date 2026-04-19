@@ -195,12 +195,15 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   `exp_full`. Bonus: `pow` also got **faster**, 5.21× → 6.45× vs
   libquadmath (we now share a single range-reduction with exp2 instead
   of running log+exp back-to-back).
-- [ ] **P8 — `asinh_full` ~50-ulp tail for negative arguments.**
-  asinh(x) = log(x + sqrt(x²+1)); for x very negative, `x + sqrt(x²+1)`
-  cancels catastrophically. Fuzz worst case 1.2e-30 (~48 ulp_dd). Use
-  the identity `asinh(x) = -asinh(-x)` or the reciprocal form
-  `log1p(x + (sqrt(x²+1) − 1))` on the cancelling branch. Severity:
-  **medium**.
+- [x] **P8 — `asinh_full` ~50-ulp tail.** *(Fixed 2026-04-19.)*
+  The existing code already folded sign (`ax = |x|`), so the root cause
+  wasn't `x + sqrt(x²+1)` cancelling — it was `log(ax + root)` where
+  `ax + root ≈ 1` for small ax (log-of-near-1 cancellation). Fix: for
+  `ax < 1`, compute `root - 1 = ax² / (root + 1)` accurately and return
+  `log1p(ax + (root - 1))`. For `ax ≥ 1` the plain `log(ax + root)` path
+  is preserved to avoid the log1p cost. Fuzz @ 200k: `asinh`
+  1.2e-30 → 5.5e-32 (~48 → ~2.2 ulp_dd, 22×). Speed: 9.43× → ~8.7× vs
+  libquadmath (~7% slower on the mixed-range bench).
 - [ ] **P9 — `atanh_full` ~40-ulp tail.** `0.5·log((1+x)/(1-x))`
   cancels at both |x| → 0 (where log1p should carry it) and |x| → 1
   (where the ratio explodes before the log). Fuzz worst case 9.4e-31.
