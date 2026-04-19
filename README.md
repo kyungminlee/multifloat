@@ -441,6 +441,26 @@ ctest --test-dir build --output-on-failure
 | `multifloats_test`      | C++      | Targeted vs-`__float128` precision checks for `src/multifloats.hh`. |
 | `multifloats_fuzz`      | C++      | C++ fuzz with the same precision-report machinery as the Fortran fuzz. |
 
+### Optional: MPFR-based 3-way precision test
+
+`-DBUILD_MPFR_TESTS=ON` enables `cpp_fuzz_mpfr` (registered as ctest
+`precision_mpfr_cpp`). It compares each operation against an
+arbitrary-precision [MPFR](https://www.mpfr.org/) reference at 200
+bits, reporting — per op — both `rel_err(libquadmath vs mpreal)` and
+`rel_err(multifloats DD vs mpreal)` side by side. This separates the
+~113-bit float128 floor from the DD kernel's own error, which the
+default `__float128`-based fuzz cannot distinguish.
+
+Dependencies: `libmpfr-dev` (system package). The
+[mpreal](https://github.com/advanpix/mpreal) C++ header is used if
+installed system-wide; otherwise it is fetched via CMake FetchContent.
+
+```sh
+cmake -DBUILD_MPFR_TESTS=ON -S . -B build
+cmake --build build --target cpp_fuzz_mpfr
+build/cpp_fuzz_mpfr 10000 42   # iterations, seed
+```
+
 ## Layout
 
 ```
