@@ -143,18 +143,58 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   Global fuzz confirms the root cause sits at the exp/log level:
   `exp` max_rel 7.5e-30 (~304 ulp), `log` 6.97e-30 (~283 ulp),
   `log10` 6.98e-30 (~283 ulp). Tracked separately as **P6** below.
-- [ ] **P6 — `exp_full` / `log_full` precision tail (~300 ulp).**
+- [x] **P6 — `exp_full` / `log_full` precision tail (~300 ulp).**
   Discovered while investigating P4. The DD `exp`/`log` kernels emit
   worst-case relative errors around 300 ulp on clean single-double
   inputs (e.g. `exp(-53.72)`, `exp(1.0)`). Verified against MPFR,
   so it is not a float128 reference artifact. The erfc asymptotic
   branch, expm1, log10, pow, and every complex op that funnels
-  through exp/log inherit this ceiling. Likely origins:
-  `exp2_kernel`'s degree-13 Estrin evaluation plus the three-squaring
-  cube step (each `p = p*p` doubles any relative error, so 8× total
-  amplification), and the symmetric `log2_kernel` structure. Severity:
-  **high** — this is the dominant precision bottleneck for a large
-  fraction of special functions.
+  through exp/log inherit this ceiling. Severity: **high**.
+  _Closed — three-part fix:_
+  (1) `exp2_min` lowered from −1022 to −1080 (`5eb1553`) so the
+  subnormal-output branch goes through the kernel instead of
+  short-circuiting to zero.
+  (2) `exp2_kernel` Taylor degree bumped 13 → 15 and `log2_wide` degree
+  8 → 10 (`0673187`) so the poly truncation drops well below the
+  cube-amplification ceiling.
+  (3) `exp_full` rewritten with a three-piece Cody–Waite split of ln2
+  (`a997932`), removing the `y = x·log2e` cancellation that was the
+  dominant source of the remaining ~220-ulp tail. The DD multiply
+  injected ~|x|·ε_dd absolute error into `y`; subtracting
+  `round(y.hi)` promoted that to ~1.8e-27 *relative*, which the cube
+  then amplified. CW keeps r = x − n·ln2 at full DD precision.
+  Result (cpp_fuzz_mpfr @ 200k iters, 200-bit mpreal reference):
+    exp    7.5e-30 → 2.5e-31   (~304 ulp → ~10 ulp)
+    expm1  5.2e-30 → 2.4e-31
+    log    7.0e-30 → 3.0e-32   (~283 ulp → ~1 ulp)
+    log10  7.0e-30 → 3.2e-32
+    log1p  5.2e-30 → 6.3e-32
+    sinh   5.2e-30 → 6.5e-31
+    cosh   5.2e-30 → 2.3e-31
+    tanh   5.2e-30 → 6.1e-31
+  Speed cost: `exp` benchmark 6.10× → 5.45× vs libquadmath (~11%);
+  log path unchanged. Residual tails in `pow`, `asinh`, `atanh` are
+  now cancellation issues upstream of exp/log, not the exp/log
+  kernels themselves — tracked as P7/P8/P9 below.
+- [ ] **P7 — `pow_full` ~100-ulp tail.** `src/multifloats_math_exp_log.inc:193`.
+  Composition `exp(y · log(x))`: once P6 brought `log` to ~1 ulp_dd,
+  the bottleneck became the DD multiply `y · log(x)` for large `|y|`.
+  At the fuzz worst case `pow` sits at 2.4e-30 (~100 ulp_dd).
+  Proper fix needs an extended-precision intermediate: evaluate
+  `log2(x)` and `y · log2(x)` with a ~triple-double-wide product, then
+  feed into `exp2`. Severity: **medium**.
+- [ ] **P8 — `asinh_full` ~50-ulp tail for negative arguments.**
+  asinh(x) = log(x + sqrt(x²+1)); for x very negative, `x + sqrt(x²+1)`
+  cancels catastrophically. Fuzz worst case 1.2e-30 (~48 ulp_dd). Use
+  the identity `asinh(x) = -asinh(-x)` or the reciprocal form
+  `log1p(x + (sqrt(x²+1) − 1))` on the cancelling branch. Severity:
+  **medium**.
+- [ ] **P9 — `atanh_full` ~40-ulp tail.** `0.5·log((1+x)/(1-x))`
+  cancels at both |x| → 0 (where log1p should carry it) and |x| → 1
+  (where the ratio explodes before the log). Fuzz worst case 9.4e-31.
+  Route small |x| through a Taylor / log1p path and large |x| through
+  `0.5·log1p(2x/(1-x))` with a careful denominator split. Severity:
+  **medium**.
 
 ## Speed
 
