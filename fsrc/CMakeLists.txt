@@ -33,7 +33,6 @@ add_custom_command(
         ${CMAKE_CURRENT_SOURCE_DIR}/multifloats.fypp
         ${_GENERATED_SRC}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/multifloats.fypp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/dd_constants.f90.inc
     VERBATIM)
 
 add_library(multifloatsf STATIC ${_GENERATED_SRC})

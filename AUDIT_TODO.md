@@ -157,8 +157,17 @@ Perf sentinels before/after: `div` 0.0013s, `atan2` 0.0072→0.0073s,
 - [ ] **23. Inline provenance comments** for polynomial evals in
   `multifloats_math.cc` (atan_P/Q, erf rationals). **S**
 - [ ] **24. README minimal examples** — 5-line Fortran, C, C++ snippets. **S**
-- [ ] **25. Delete or populate `dd_constants.f90.inc`** (7-line placeholder
-  today). **S**
+- [x] **25. Delete `dd_constants.f90.inc`** — was a 7-line
+  empty-comment placeholder. The generator script (`F90_KEPT_NAMES =
+  set()`) explicitly documented that the Fortran module no longer
+  needs any generated constants (all `DD_*` named constants are
+  materialized via the `DD_CONST` macro directly in the fypp, and
+  every math routine delegates to C++). Removed the file, the
+  `include 'dd_constants.f90.inc'` in `fsrc/multifloats.fypp`, the
+  `DEPENDS` entry in `fsrc/CMakeLists.txt`, and the Fortran-output
+  path (`F90_OUT`, `write_f90`) from `scripts/gen_constants.py`. Any
+  future need for Fortran-side generated constants can be rehydrated
+  in a follow-up commit.
 - [x] **26. Split `multifloats_math.cc`** — carved 2358-line file into
   9 topical `.inc` files that the single compiled TU pulls in via
   `#include`. Preserves all cross-kernel inlining (critical for
