@@ -28,6 +28,11 @@ enable_testing()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_program(FYPP_EXECUTABLE fypp REQUIRED)
 
+# MPFR precision tests — off by default; on-demand high-precision
+# reference (mpreal/MPFR) for comparing against quadmath and DD. Does
+# not affect the installed library.
+option(BUILD_MPFR_TESTS "Build MPFR-based precision tests (mpreal + libmpfr)" OFF)
+
 # =============================================================================
 # Library subprojects
 # =============================================================================
@@ -123,3 +128,29 @@ target_include_directories(dd-bindc PUBLIC ${CMAKE_BINARY_DIR}/fmod/test)
 add_executable(fortran_bench_abi ./test/bench_abi.f90)
 target_compile_options(fortran_bench_abi PRIVATE -O3)
 target_link_libraries(fortran_bench_abi PRIVATE multifloatsf dd-bindc)
+
+# =============================================================================
+# Optional MPFR-based precision tests
+# =============================================================================
+if(BUILD_MPFR_TESTS)
+    find_package(MPFR REQUIRED)
+
+    # mpreal — single-header C++ wrapper around MPFR. Try system install
+    # first; fall back to fetching from GitHub if the header is missing.
+    find_path(MPREAL_INCLUDE_DIR mpreal.h)
+    if(NOT MPREAL_INCLUDE_DIR)
+        include(FetchContent)
+        FetchContent_Declare(mpreal
+            GIT_REPOSITORY https://github.com/advanpix/mpreal.git
+            GIT_TAG        mpfrc++-3.7.0
+            GIT_SHALLOW    TRUE)
+        FetchContent_MakeAvailable(mpreal)
+        set(MPREAL_INCLUDE_DIR ${mpreal_SOURCE_DIR})
+    endif()
+
+    add_executable(cpp_fuzz_mpfr ./test/fuzz_mpfr.cc)
+    target_compile_options(cpp_fuzz_mpfr PRIVATE -O3 -fext-numeric-literals)
+    target_include_directories(cpp_fuzz_mpfr PRIVATE ${MPREAL_INCLUDE_DIR})
+    target_link_libraries(cpp_fuzz_mpfr PRIVATE multifloats quadmath MPFR::MPFR)
+    add_test(NAME precision_mpfr_cpp COMMAND cpp_fuzz_mpfr 10000 42)
+endif()
