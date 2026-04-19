@@ -55,6 +55,18 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   `residual._limbs[0] * (0.5 / s)` only; full DD division gives ~1–2 ulp
   improvement near perfect squares, and feeds `asin/acos` near ±1. Severity:
   **medium**.
+  _Attempted, reverted:_ three variants were tried on a pop-os fuzz run
+  (`sqrt` max_rel baseline 4.36e-32, n=450k).
+  (a) Full DD divide `residual / (2·s_dd)`: 1.90e-32 (2.3× better) but
+  sqrt bench dropped 52.6× → 23.7× and acosh dropped 8.6× → 6.6×.
+  (b) `residual * MultiFloat(0.5/s)` (DD × scalar): 2.60e-32 (1.7×
+  better) but sqrt bench dropped to 36.6× (~30% regression) and hypot
+  8.1× → 7.7×.
+  (c) Cheap `(residual.hi + residual.lo) * (0.5/s)`: no precision change
+  — lo limb is below the double rounding threshold once scaled by 0.5/s.
+  Plan stop-condition (>5% speedup regression) fires on (a) and (b), so
+  code was reverted. Needs a decision from the user on whether a ~30%
+  sqrt slowdown is acceptable for ~1.7× precision gain before re-landing.
 - [ ] **P2 — `asin/acos` near ±1.** `src/multifloats_math_inv_trig.inc:87,121,128`.
   Region-3 half-angle path inherits the P1 error; `asin(±1)` only matches π/2
   to double. Severity: **medium** (gated by P1).
