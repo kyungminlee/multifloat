@@ -372,12 +372,28 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   time and drives both `VERSION` and `SOVERSION` from it (fatal-errors if
   the header define can't be found). Verified to parse as `2` against
   the current header.
-- [ ] **M2 — Fortran bindings hand-mirrored from C ABI.** `fsrc/multifloats.fypp:114-145`
+- [x] **M2 — Fortran bindings hand-mirrored from C ABI.** `fsrc/multifloats.fypp:114-145`
   vs `src/multifloats_c.h:219-230`. No build-time sync check. Severity: **medium**.
-- [ ] **M3 — `localize_symbols.sh` regex is fragile.** `src/CMakeLists.txt:25-27`,
+  _Resolved (2026-04-19):_ added `scripts/check_fortran_abi_sync.sh` and
+  wired it as ctest `fortran_abi_sync`. For every `bind(c, name='*dd*')`
+  in the fypp-generated `build/fsrc/generated/multifloats.f90`, verify the
+  target symbol is declared with `MULTIFLOATS_API` in `multifloats_c.h`.
+  Verified catches drift: injecting `bind(c, name='sindd_BOGUS')` into
+  the generated file makes the test fail with the expected diagnostic.
+  The check is intentionally asymmetric — the C header remains a superset
+  because Fortran reimplements basic arithmetic (add/sub/mul/div/fma,
+  comparisons, complex helpers) natively.
+- [x] **M3 — `localize_symbols.sh` regex is fragile.** `src/CMakeLists.txt:25-27`,
   `src/localize_symbols.sh.in`. Pattern `dd(_[a-z]+)?$` silently mislabels any
   future non-`dd_*` export; Darwin vs Linux `nm` output differs. Severity:
   **medium**.
+  _Resolved (2026-04-19):_ rewrote the keep-list to come from
+  `multifloats_c.h` directly — `grep -oE "^MULTIFLOATS_API[^(]+\("` gives
+  the exact set of public symbols, bypassing any heuristic. The header
+  path is baked in at configure time via `@CMAKE_CURRENT_SOURCE_DIR@`.
+  Platform handling kept (Darwin/nmedit wants a leading-underscore list;
+  Linux/objcopy wants plain names). Verified: `libmultifloats.a` exports
+  exactly 95 T symbols, matching the 95 `MULTIFLOATS_API` declarations.
 - [x] **M4 — `dd_constants.hh` has no CMake regeneration rule.** `src/dd_constants.hh:1-4`.
   Stale constants can ship if `scripts/gen_constants.py` changes and the
   developer forgets to re-run it. Severity: **low**.
@@ -394,9 +410,20 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   split, the tgamma direct-Stirling switchover at x ≥ 13.5, and the
   lgamma shift recurrence on [13.5, 25). Cross-references P4 / P11 /
   P11b for readers chasing the numerical rationale.
-- [ ] **M6 — Generated Fortran not in VCS.** Reviewers can't see the actual
+- [x] **M6 — Generated Fortran not in VCS.** Reviewers can't see the actual
   interfaces without a local build. Consider committing the generated file or
   diffing it in CI. Severity: **low**.
+  _Closed — won't-fix with rationale (2026-04-19):_ committing generated
+  output is a known anti-pattern — every non-trivial `.fypp` edit would
+  produce a "regenerated file" diff alongside the real change, and a
+  developer who forgets to regenerate pushes a silently-stale tree. The
+  readability concern is real, though: the M2 fix above (ctest
+  `fortran_abi_sync`) already catches the class of drift reviewers would
+  most want to audit (C↔Fortran signature mismatch), and the fypp source
+  itself is short enough to read directly. If a reviewer needs the
+  expanded module for a one-off audit, `cmake --build build --target
+  multifloatsf && cat build/fsrc/generated/multifloats.f90` produces it
+  in seconds. No VCS pollution needed.
 
 ---
 
