@@ -1091,16 +1091,23 @@ MultiFloat<T, N> hypot(MultiFloat<T, N> const &x, MultiFloat<T, N> const &y) {
     MultiFloat<T, N> small = (ax > ay) ? ay : ax;
     if (big._limbs[0] == T(0)) return MultiFloat<T, N>();
     // Power-of-2 scale (exact) so big has exponent 0 before the square.
+    // Replace per-limb ldexp calls with multiplies by 2^(±e): for a power-
+    // of-2 multiplier and a non-subnormal result, `x * 2^k` and
+    // `ldexp(x, k)` are bit-identical, but the multiply is one FP op while
+    // ldexp is a libm call. `e` comes from `ilogb(big.hi)` on a finite
+    // non-zero input, so `|e| ≤ 1023`; `2^(-e)` and `2^e` are both finite.
     int e = std::ilogb(big._limbs[0]);
+    T down = std::ldexp(T(1), -e);
     for (std::size_t i = 0; i < N; ++i) {
-      big._limbs[i] = std::ldexp(big._limbs[i], -e);
-      small._limbs[i] = std::ldexp(small._limbs[i], -e);
+      big._limbs[i] *= down;
+      small._limbs[i] *= down;
     }
     MultiFloat<T, N> ratio = small / big;
     MultiFloat<T, N> root = big * sqrt(MultiFloat<T, N>(T(1)) + ratio * ratio);
     MultiFloat<T, N> r;
+    T up = std::ldexp(T(1), e);
     for (std::size_t i = 0; i < N; ++i) {
-      r._limbs[i] = std::ldexp(root._limbs[i], e);
+      r._limbs[i] = root._limbs[i] * up;
     }
     // Overflow: true result exceeds T's range. Zero the trailing limbs so
     // callers see a clean inf rather than (inf, NaN).

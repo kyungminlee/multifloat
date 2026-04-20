@@ -328,8 +328,16 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   a slight adverse drift. The 3-compare tree the compiler already emits is
   not the bottleneck — `neval`/`deval` over a 9–11-term DD rational plus
   `sincos_full` + DD `sqrt` dominate totally. Change rolled back.
-- [ ] **S3 — `hypot` per-limb `ldexp`.** `src/multifloats.hh:1027-1029`.
-  Eight libm calls where one scale would do. Severity: **negligible**.
+- [x] **S3 — `hypot` per-limb `ldexp`.** `src/multifloats.hh:1093-1104`.
+  Audit said "eight libm calls"; actual count at N=2 is **six**
+  (downscale 2 limbs × {big, small} = 4, upscale 2 limbs of root = 2).
+  Severity: **negligible** (audit) — turned out to be the hot path.
+  _Resolved (2026-04-19):_ replaced per-limb `ldexp` with one
+  `down = ldexp(1, -e)` + one `up = ldexp(1, e)` and multiplies against
+  each limb. Power-of-2 multiplier + non-subnormal result ⇒ bit-identical
+  to `ldexp`, but one FP op instead of a libm call. Bench (mean of 5
+  `cpp_bench` runs vs libquadmath): **7.98× → 12.76× (+60%)**. Fuzz
+  `max_rel` bit-identical at 3.990e-32 (1.62 ulp_dd). All 9 ctests pass.
 - [x] **S4 — Division is single-refinement.** `src/multifloats.hh:236-277`.
   Audit claimed ~48–53 bits (i.e. barely above `double`). Severity:
   **informational**.
