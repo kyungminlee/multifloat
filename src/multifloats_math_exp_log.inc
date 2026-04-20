@@ -293,6 +293,17 @@ float64x2 pow_full(float64x2 const &x, float64x2 const &y) {
   m._limbs[0] = std::ldexp(x._limbs[0], -e_x);
   m._limbs[1] = std::ldexp(x._limbs[1], -e_x);
   float64x2 Lf = log2_kernel(m);
+  // Table-path third-limb residual: log2(center) − (v_hi + v_lo) is stored
+  // in log2_values_extra[idx]; ignored on the direct (near-1) path where
+  // no table entry is used and the residue stays within one DD computation.
+  double Lf_extra = 0.0;
+  double mh = m._limbs[0];
+  if (!(mh > 15.0 / 16.0 && mh < 17.0 / 16.0)) {
+    int idx = static_cast<int>((mh - 1.0) * 32.0);
+    if (idx < 0) idx = 0;
+    if (idx > 31) idx = 31;
+    Lf_extra = log2_values_extra[idx];
+  }
   double e_x_d = static_cast<double>(e_x);
 
   // y · e_x as triple-double (exact up to the y.lo·e_x cross product).
@@ -301,25 +312,44 @@ float64x2 pow_full(float64x2 const &x, float64x2 const &y) {
   double AL_h, AL_l;
   two_prod(y._limbs[1], e_x_d, AL_h, AL_l);
 
-  // y · Lf as DD. Residual error ≲ ulp_dd·|y·Lf| = ulp_dd·|y|·|Lf|.
-  float64x2 B = y * Lf;
-  double BH = B._limbs[0], BM = B._limbs[1];
+  // y · Lf as TD: exact products y.hi·Lf.hi and y.hi·Lf.lo plus the
+  // y.lo·Lf.hi cross term. Capturing the residuals as separate limbs
+  // avoids the ~2e-31 rounding in DD mul's inner `p01 += p10` step on the
+  // worst fuzz input (|y·Lf| ~ 17).
+  double P1, P1e; two_prod(y._limbs[0], Lf._limbs[0], P1, P1e);
+  double P2, P2e; two_prod(y._limbs[0], Lf._limbs[1], P2, P2e);
+  double P3 = y._limbs[1] * Lf._limbs[0];  // |y.lo·Lf.hi| ~ 6e-16
+  // y.hi·Lf_extra ≲ 2e-33·|y|; y.lo·Lf.lo / y.lo·Lf_extra are ~1e-50, drop.
+  double PX = y._limbs[0] * Lf_extra + y._limbs[1] * Lf._limbs[1];
 
-  // Accumulate A + B into (h, l): pick up every two_sum residual so the
-  // integer part survives the huge-|e_x|/small-|Lf| imbalance.
-  double h = AH, l = 0.0, t;
-  two_sum(h, BH, h, t); l += t;
-  two_sum(h, AM, h, t); l += t;
-  two_sum(h, AL_h, h, t); l += t;
-  two_sum(h, BM, h, t); l += t;
-  l += AL_l;
-  fast_two_sum(h, l, h, l);
+  // Accumulate A + B into (h, l, c). Magnitude-descending: P1 (~|y·Lf|),
+  // AM, AL_h, P3 (~1e-15), then sub-ulp residuals P1e/P2/P2e/PX.
+  double h = AH, l = 0.0, c = 0.0, t, u;
+  two_sum(h, P1,   h, t); two_sum(l, t, l, u); c += u;
+  two_sum(h, AM,   h, t); two_sum(l, t, l, u); c += u;
+  two_sum(h, AL_h, h, t); two_sum(l, t, l, u); c += u;
+  two_sum(h, P3,   h, t); two_sum(l, t, l, u); c += u;
+  two_sum(l, P1e,  l, u); c += u;
+  two_sum(l, P2,   l, u); c += u;
+  two_sum(l, P2e,  l, u); c += u;
+  two_sum(l, PX,   l, u); c += u;
+  c += AL_l;
+  // Keep (h, l, c) as triple-double through the integer-split step. Folding
+  // c into l with a plain `+=` would round it away whenever |l| > ulp⁻¹·|c|,
+  // which is exactly the fuzz worst case.
+  double e;
+  two_sum(l, c, l, e);  // l + e = old_l + c exact
+  fast_two_sum(h, l, h, l);  // normalize DD pair; e is third limb.
 
-  // Split z ≈ h + l into n + r with |r| ≤ 0.5 (+ a couple ulp tolerance).
+  // Split z ≈ h + l + e into n + r with |r| ≤ 0.5. Every two_sum below is
+  // exact; only the final `rl += f1 + f2` rounds, and its dropped bits
+  // live at ulp(rl) ~ 1e-33, well below the DD output resolution.
   double n_d = std::nearbyint(h);
-  double rh, rl;
-  two_sum(h, -n_d, rh, t);
-  rl = t + l;
+  double rh, rl, s1, s2, f1, f2;
+  two_sum(h, -n_d, rh, t);  // rh + t = h - n_d exact
+  two_sum(t, l, s1, f1);    // s1 + f1 = t + l exact
+  two_sum(s1, e, s2, f2);   // s2 + f2 = s1 + e exact
+  rl = s2 + (f1 + f2);
   fast_two_sum(rh, rl, rh, rl);
 
   return exp2_from_reduced(n_d, rh, rl);
