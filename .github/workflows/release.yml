@@ -73,6 +73,11 @@ jobs:
             cc: gcc-14
             cxx: g++-14
             fc: gfortran-14
+          - compiler: gcc
+            version: "15"
+            cc: gcc-15
+            cxx: g++-15
+            fc: gfortran-15
 
           # LLVM Flang (matched C/C++ from same LLVM version)
           - compiler: llvm
@@ -93,11 +98,23 @@ jobs:
 
           # Intel oneAPI
           - compiler: intel
-            version: "2024.0"
+            version: "2023.2.0"
             cc: icx
             cxx: icpx
             fc: ifx
-            oneapi_pkg: intel-oneapi-compiler-fortran-2024.0 intel-oneapi-compiler-dpcpp-cpp-2024.0
+            oneapi_pkg: intel-oneapi-compiler-fortran-2023.2.0 intel-oneapi-compiler-dpcpp-cpp-2023.2.0
+          - compiler: intel
+            version: "2024.1"
+            cc: icx
+            cxx: icpx
+            fc: ifx
+            oneapi_pkg: intel-oneapi-compiler-fortran-2024.1 intel-oneapi-compiler-dpcpp-cpp-2024.1
+          - compiler: intel
+            version: "2024.2"
+            cc: icx
+            cxx: icpx
+            fc: ifx
+            oneapi_pkg: intel-oneapi-compiler-fortran-2024.2 intel-oneapi-compiler-dpcpp-cpp-2024.2
           - compiler: intel
             version: "2025.0"
             cc: icx
@@ -115,6 +132,10 @@ jobs:
       - name: Install GCC ${{ matrix.version }}
         if: matrix.compiler == 'gcc'
         run: |
+          # gcc-15 is not in Ubuntu 24.04 default repos; pull from toolchain PPA
+          if [ "${{ matrix.version }}" = "15" ]; then
+            sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          fi
           sudo apt-get update
           sudo apt-get install -y gcc-${{ matrix.version }} g++-${{ matrix.version }} gfortran-${{ matrix.version }}
 
