@@ -330,9 +330,28 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   `sincos_full` + DD `sqrt` dominate totally. Change rolled back.
 - [ ] **S3 — `hypot` per-limb `ldexp`.** `src/multifloats.hh:1027-1029`.
   Eight libm calls where one scale would do. Severity: **negligible**.
-- [ ] **S4 — Division is single-refinement.** `src/multifloats.hh:227-263`.
-  ~48–53 bits of precision, not full 106. Documented and intentional; tracked
-  here so downstream callers aren't surprised. Severity: **informational**.
+- [x] **S4 — Division is single-refinement.** `src/multifloats.hh:236-277`.
+  Audit claimed ~48–53 bits (i.e. barely above `double`). Severity:
+  **informational**.
+  _Closed — audit claim not reproducible (2026-04-19):_ the current operator
+  is textbook Dekker: `q1 = hi/rhs.hi`, compute residual `r = this − q1·rhs`
+  as a **full DD** (`two_prod(q1, rhs.hi)` + `one_prod(q1, rhs.lo)`, cascaded
+  via `two_sum`/`fast_two_sum`), then `q2 = r.hi/rhs.hi`, final
+  `fast_two_sum(q1, q2)`. Because the residual is DD (not just a single
+  limb), the refinement recovers ~53 additional bits and the result is full
+  DD precision. `cpp_fuzz_mpfr` (200-bit MPFR reference, 10k samples)
+  confirms:
+  ```
+    op    max_rel          ulp_dd
+    add   1.619e-32        0.66
+    sub   1.740e-32        0.71
+    mul   4.417e-32        1.79
+    div   6.521e-32        2.65
+  ```
+  div sits at 2.65 ulp_dd — same order as mul, *four* orders of magnitude
+  tighter than the audit-claimed 48-bit ceiling (which would be ~4e16 ulp_dd
+  relative). No code change needed; AUDIT_TODO.md now reflects the verified
+  numbers so future readers aren't misled.
 
 ## Maintainability & hygiene
 
