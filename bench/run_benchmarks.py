@@ -19,14 +19,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BUILD_DIR = REPO_ROOT / "build"
