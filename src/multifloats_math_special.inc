@@ -1,3 +1,19 @@
+// =============================================================================
+// erf / erfc / tgamma / lgamma — special functions
+// -----------------------------------------------------------------------------
+// Ported from libquadmath (erfq.c, tgammaq.c, lgammaq.c). DD-specific
+// adaptations:
+//   * erfc asymptotic uses the Clenshaw–Burrus split
+//     exp(-x²) ≈ exp(-s²-0.5625)·exp((s-ax)(s+ax)+p) where s is ax truncated
+//     to 35 bits, so (s-ax)(s+ax) is exact in double (see P4 in
+//     AUDIT_TODO.md for the reference analysis).
+//   * tgamma switches to a direct-Stirling path at x ≥ 13.5 (see P11/P11b)
+//     instead of exp(lgamma), to keep the exp-argument small and avoid the
+//     cube-amplification floor of exp_full at large arguments.
+//   * lgamma uses a shift recurrence on [13.5, 25) before invoking the
+//     Stirling asymptotic series, which is under-converged below x ≈ 20.
+// Branch cuts and special-value return paths match libquadmath for
+// bit-compatible fuzz coverage against `erfq`/`erfcq`/`tgammaq`/`lgammaq`.
 // ---- erf / erfc (piecewise rational, ported from libquadmath erfq.c) -------
 float64x2 erf_full(float64x2 const &x) {
   if (!std::isfinite(x._limbs[0])) {

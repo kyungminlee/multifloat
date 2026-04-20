@@ -378,12 +378,22 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   `src/localize_symbols.sh.in`. Pattern `dd(_[a-z]+)?$` silently mislabels any
   future non-`dd_*` export; Darwin vs Linux `nm` output differs. Severity:
   **medium**.
-- [ ] **M4 — `dd_constants.hh` has no CMake regeneration rule.** `src/dd_constants.hh:1-4`.
+- [x] **M4 — `dd_constants.hh` has no CMake regeneration rule.** `src/dd_constants.hh:1-4`.
   Stale constants can ship if `scripts/gen_constants.py` changes and the
   developer forgets to re-run it. Severity: **low**.
-- [ ] **M5 — Inconsistent preamble comments across `.inc` files.**
+  _Resolved (2026-04-19):_ added a `dd_constants_up_to_date` ctest that
+  runs `scripts/gen_constants.py --check` via `uv run --with mpmath` when
+  `uv` is available, falling back to the system `python3` otherwise. A
+  drift between the script and the committed header now surfaces as a
+  ctest failure, no manual remembered step needed.
+- [x] **M5 — Inconsistent preamble comments across `.inc` files.**
   `multifloats_math_trig.inc` is documented; `bessel.inc`, `special.inc` are
   not. Severity: **low**.
+  _Resolved (2026-04-19):_ `bessel.inc` already had a preamble; added a
+  multi-paragraph block to `special.inc` covering the erfc Clenshaw–Burrus
+  split, the tgamma direct-Stirling switchover at x ≥ 13.5, and the
+  lgamma shift recurrence on [13.5, 25). Cross-references P4 / P11 /
+  P11b for readers chasing the numerical rationale.
 - [ ] **M6 — Generated Fortran not in VCS.** Reviewers can't see the actual
   interfaces without a local build. Consider committing the generated file or
   diffing it in CI. Severity: **low**.
