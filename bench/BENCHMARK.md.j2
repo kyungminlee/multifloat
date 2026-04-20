@@ -29,14 +29,15 @@ Short names are used as column labels throughout.
 ## Precision key
 
 Precision is measured as the maximum relative error vs the quad-precision
-(`real(16)`) reference over ~1M random inputs (fixed seed 42):
+(`real(16)`) reference over ~1M random inputs (fixed seed 42), reported in
+**DD ulps** (1 ulp ≈ 2⁻¹⁰⁵ ≈ 2.46e-32 for the ~106-bit DD significand):
 
-| Label | max\_rel | Meaning |
+| Label | err (DD ulp) | Meaning |
 |---|---|---|
-| **full DD** | ~1e-32 | Full double-double EFT kernel (~106 bits) |
-| **exact** | 0.0 | Bit-exact (no rounding involved) |
-| **deriv-corrected** | ~1e-25 to 1e-18 | `f(hi) + f'(hi)*lo` correction gives near-DD |
-| **single-double** | ~1e-16 to 1e-14 | Leading-limb libm call, no lo correction |
+| **full DD** | ~1 ulp | Full double-double EFT kernel (~106 bits) |
+| **exact** | 0 | Bit-exact (no rounding involved) |
+| **deriv-corrected** | ~1e7 to 1e14 ulp | `f(hi) + f'(hi)*lo` correction gives near-DD |
+| **single-double** | ~1e15 to 1e17 ulp | Leading-limb libm call, no lo correction |
 
 ## Origin key
 
@@ -51,15 +52,16 @@ Precision is measured as the maximum relative error vs the quad-precision
 Each operation is timed over 1024 elements × 400 repetitions (fast ops)
 or fewer reps (transcendentals), with a NOINLINE drain after each rep to
 prevent dead-code elimination. **×** = speedup (`qp_time / dd_time`,
-values > 1× mean multifloats is faster); **err** = max\_rel from the
-1M-input fuzz run; **prec** = precision label.
+values > 1× mean multifloats is faster); **err** = error in DD ulps
+(1 ulp ≈ 2⁻¹⁰⁵ ≈ 2.46e-32) from the 1M-input fuzz run; **prec** =
+precision label.
 {% for section in fortran_sections %}
 ### {{ section.title }}
 
-| op | approach | prec |{% for s in systems %} {{ s.short_name }} err |{% endfor %}{% for s in systems %} {{ s.short_name }} × |{% endfor %}
-|---|---|---|{% for s in systems %}---|{% endfor %}{% for s in systems %}---|{% endfor %}
+| op | prec |{% for s in systems %} {{ s.short_name }} err |{% endfor %}{% for s in systems %} {{ s.short_name }} × |{% endfor %} approach |
+|---|---|{% for s in systems %}---|{% endfor %}{% for s in systems %}---|{% endfor %}---|
 {%- for op in section.ops %}
-| {{ op.display }} | {{ op.approach }} | {{ op.prec }} |{% for s in systems %} {{ op|err(s, "fortran") }} |{% endfor %}{% for s in systems %} {{ op|speedup(s, "fortran") }} |{% endfor %}
+| {{ op.display }} | {{ op.prec }} |{% for s in systems %} {{ op|err(s, "fortran") }} |{% endfor %}{% for s in systems %} {{ op|speedup(s, "fortran") }} |{% endfor %} {{ op.approach }} |
 {%- endfor %}
 {% endfor %}
 ## C++: `MultiFloat<double,2>` vs `__float128`
@@ -75,10 +77,10 @@ the Fortran split (`fortran_fuzz` / `fortran_bench`):
 {% for section in cpp_sections %}
 ### {{ section.title }}
 
-| op | approach |{% for s in systems %} {{ s.short_name }} err |{% endfor %}{% for s in systems %} {{ s.short_name }} × |{% endfor %}
-|---|---|{% for s in systems %}---|{% endfor %}{% for s in systems %}---|{% endfor %}
+| op |{% for s in systems %} {{ s.short_name }} err |{% endfor %}{% for s in systems %} {{ s.short_name }} × |{% endfor %} approach |
+|---|{% for s in systems %}---|{% endfor %}{% for s in systems %}---|{% endfor %}---|
 {%- for op in section.ops %}
-| {{ op.display }} | {{ op.approach }} |{% for s in systems %} {{ op|err(s, "cpp") }} |{% endfor %}{% for s in systems %} {{ op|speedup(s, "cpp") }} |{% endfor %}
+| {{ op.display }} |{% for s in systems %} {{ op|err(s, "cpp") }} |{% endfor %}{% for s in systems %} {{ op|speedup(s, "cpp") }} |{% endfor %} {{ op.approach }} |
 {%- endfor %}
 {% endfor %}
 ## Notes

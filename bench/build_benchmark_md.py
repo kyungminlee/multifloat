@@ -37,10 +37,16 @@ def _finite(v) -> bool:
     return isinstance(v, (int, float)) and math.isfinite(v)
 
 
+_DD_ULP = 2.0 ** -105  # ~2.46e-32; 1 ulp of a ~106-bit DD significand
+
+
 def _format_max_rel(v: float) -> str:
     if v == 0.0:
         return "exact"
-    return f"{v:.1e}"
+    u = v / _DD_ULP
+    if u < 10:
+        return f"{u:.1f} ulp"
+    return f"{u:.0f} ulp"
 
 
 def err_filter(op: ops_mod.Op, system: dict, lang: str) -> str:
