@@ -307,8 +307,27 @@ fixes land. File:line references are snapshots taken at the time of the audit.
   Bench: `expm1` 3.92× → 4.33× (+10%), `log1p` 5.96× → 6.45× (+8%),
   `atanh` 6.16× → 6.67× (+8%, inherits log1p via P9),
   `asinh` 8.80× → 8.96× (+2%, hits log1p for |x|<1). All 9 ctests pass.
-- [ ] **S2 — Bessel `pq0/pq1` 7-deep branch trees.** `src/multifloats_math_bessel.inc:7-41`.
-  Replace with small lookup keyed by `xinv_d/8`. Severity: **low** (cold path).
+- [x] **S2 — Bessel `pq0/pq1` branch trees.** `src/multifloats_math_bessel.inc:7-41`.
+  Audit said "7-deep"; the trees are actually **3-deep** balanced (8 leaves via
+  `xinv_d ≤ 0.25 / 0.125 / 0.0625 …`). Severity: **low** (cold path).
+  _Closed — won't-fix, measured (2026-04-19):_ replaced the 3-way tree with a
+  computed-index switch (`idx = (int)(xinv_d·16.0)`, clamp to [0,7], then
+  switch). Fuzz max_dd bit-identical across j0/j1/jn/y0/y1/yn (boundary shift
+  is harmless because fits overlap to DD precision). Bench (mean of 5
+  `fortran_bench` runs, vs libquadmath) before/after:
+  ```
+             tree      switch    Δ
+    j0       6.23×     6.25×     +0.02×
+    j1       5.90×     6.01×     +0.11×
+    jn(3,·)  4.77×     4.48×     −0.29×
+    y0       6.58×     6.19×     −0.39×
+    y1       6.61×     6.40×     −0.21×
+    yn(3,·)  6.27×     6.20×     −0.07×
+  ```
+  Run-to-run noise is ±0.15× on this bench; all deltas sit inside noise with
+  a slight adverse drift. The 3-compare tree the compiler already emits is
+  not the bottleneck — `neval`/`deval` over a 9–11-term DD rational plus
+  `sincos_full` + DD `sqrt` dominate totally. Change rolled back.
 - [ ] **S3 — `hypot` per-limb `ldexp`.** `src/multifloats.hh:1027-1029`.
   Eight libm calls where one scale would do. Severity: **negligible**.
 - [ ] **S4 — Division is single-refinement.** `src/multifloats.hh:227-263`.
