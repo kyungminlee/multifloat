@@ -148,6 +148,14 @@ MULTIFLOATS_API void yn_rangedd(int n1, int n2, float64x2_t a, float64x2_t *out)
 MULTIFLOATS_API void sincosdd(float64x2_t a, float64x2_t *s, float64x2_t *c);
 MULTIFLOATS_API void sinhcoshdd(float64x2_t a, float64x2_t *s, float64x2_t *c);
 
+/* Complex DD arithmetic. These are the canonical implementations; the
+ * Fortran elemental `cdd + cdd`, `cdd * dp`, etc. routines wrap these via
+ * bind(c). */
+MULTIFLOATS_API complex64x2_t cadddd(complex64x2_t a, complex64x2_t b);
+MULTIFLOATS_API complex64x2_t csubdd(complex64x2_t a, complex64x2_t b);
+MULTIFLOATS_API complex64x2_t cmuldd(complex64x2_t a, complex64x2_t b);
+MULTIFLOATS_API complex64x2_t cdivdd(complex64x2_t a, complex64x2_t b);
+
 /* Complex DD transcendentals. Branch cuts match C99 Annex G (matching
  * libquadmath cexpq/clogq/csqrtq/...). Where the classic formula needs
  * both sin(y) and cos(y) or both sinh(y) and cosh(y), these use the fused

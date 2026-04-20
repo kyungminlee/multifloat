@@ -1,4 +1,4 @@
-// ---- Complex DD transcendentals ------------------------------------------
+// ---- Complex DD arithmetic & transcendentals -----------------------------
 //
 // Branch cuts follow C99 Annex G (matching libquadmath cexpq/clogq/csqrtq).
 // Where the real-axis formula needs both sin(y) and cos(y) (or both sinh
@@ -9,6 +9,103 @@
 //
 // The text "2 fused" vs "4 separate" in speed comments below is measured
 // against libstdc++'s generic <complex> template path (see commit notes).
+
+// ---- Complex DD arithmetic ------------------------------------------------
+// Basic (+, -, *, /) on complex DD. These used to be inlined in the Fortran
+// `cdd_arith_body` macro; moved here so the Fortran elemental interface is
+// a thin bind(c) wrapper and C++ owns the algorithm. cdivdd's imaginary
+// numerator uses a compensated cross-difference that sums the full 14-term
+// exact expansion of a*b − c*d through a triple-double accumulator, so the
+// result stays DD-accurate even under heavy |b·c| ≈ |a·d| cancellation.
+
+complex64x2_t cadddd(complex64x2_t a, complex64x2_t b) {
+  float64x2 ar = from(a.re), ai = from(a.im);
+  float64x2 br = from(b.re), bi = from(b.im);
+  return { to(ar + br), to(ai + bi) };
+}
+
+complex64x2_t csubdd(complex64x2_t a, complex64x2_t b) {
+  float64x2 ar = from(a.re), ai = from(a.im);
+  float64x2 br = from(b.re), bi = from(b.im);
+  return { to(ar - br), to(ai - bi) };
+}
+
+// 4-mul form. Karatsuba (3 muls, 5 adds, Im = (a+b)(c+d) − ac − bd) was
+// tried and rejected in Fortran: ~2× slower for DD (1 saved mul < 3 extra
+// adds) and less precise — the subtraction loses bits when |ac+bd| ≫ |Im|.
+// Regression test `test_complex_mul_cancellation` in test/test.cc locks
+// the 4-mul semantics on the classic witness a = (1, ε), b = (-1, ε).
+complex64x2_t cmuldd(complex64x2_t a, complex64x2_t b) {
+  float64x2 ar = from(a.re), ai = from(a.im);
+  float64x2 br = from(b.re), bi = from(b.im);
+  return { to(ar * br - ai * bi), to(ar * bi + ai * br) };
+}
+
+// a*b − c*d in DD with compensated cross-difference: captures the
+// sub-ulp residuals dropped by a normal DD mul so the subtraction
+// stays full-DD even under catastrophic cancellation (|a*b| ≈ |c*d|).
+// Each DD mul would discard ~1 DD-ulp of its product; when the two
+// products agree to ~N bits, that residual becomes the 2^(-106+N)
+// relative error of the result. Here we keep the residuals and fold
+// them into a two_sum chain.
+static inline float64x2 dd_cross_diff(float64x2 a, float64x2 b,
+                                      float64x2 c, float64x2 d) {
+  double a0 = a._limbs[0], a1 = a._limbs[1];
+  double b0 = b._limbs[0], b1 = b._limbs[1];
+  double c0 = c._limbs[0], c1 = c._limbs[1];
+  double d0 = d._limbs[0], d1 = d._limbs[1];
+  // Full exact expansion of (a*b − c*d) with DD inputs into 14 scalar
+  // doubles, accumulated in a triple-double (TD) so the leading 53-bit
+  // bucket survives even when a*b and c*d don't cancel (and the trailing
+  // buckets survive when they do). Each scalar two_prod via FMA is
+  // exact; only the two a1*b1 / c1*d1 tails are rounded once (below
+  // DD-ulp, so invisible in the DD output).
+  double ab00_h = a0 * b0, ab00_l = std::fma(a0, b0, -ab00_h);
+  double cd00_h = c0 * d0, cd00_l = std::fma(c0, d0, -cd00_h);
+  double ab01_h = a0 * b1, ab01_l = std::fma(a0, b1, -ab01_h);
+  double ab10_h = a1 * b0, ab10_l = std::fma(a1, b0, -ab10_h);
+  double cd01_h = c0 * d1, cd01_l = std::fma(c0, d1, -cd01_h);
+  double cd10_h = c1 * d0, cd10_l = std::fma(c1, d0, -cd10_h);
+  double ab11 = a1 * b1;
+  double cd11 = c1 * d1;
+  double T0 = 0, T1 = 0, T2 = 0;
+  #define TSUM(x) do { \
+    double _x = (x), _s, _bb, _e; \
+    _s = T0 + _x; _bb = _s - T0; _e = (T0 - (_s - _bb)) + (_x - _bb); \
+    T0 = _s; _x = _e; \
+    _s = T1 + _x; _bb = _s - T1; _e = (T1 - (_s - _bb)) + (_x - _bb); \
+    T1 = _s; T2 += _e; \
+  } while (0)
+  // Largest-magnitude terms first so cancellation residuals land in T1/T2.
+  TSUM(ab00_h);  TSUM(-cd00_h);
+  TSUM(ab00_l);  TSUM(-cd00_l);
+  TSUM(ab01_h);  TSUM(ab10_h);  TSUM(-cd01_h); TSUM(-cd10_h);
+  TSUM(ab01_l);  TSUM(ab10_l);  TSUM(-cd01_l); TSUM(-cd10_l);
+  TSUM(ab11);    TSUM(-cd11);
+  #undef TSUM
+  // Renormalize TD → DD: two_sum T1,T2 → T1; two_sum T0,T1 → (T0, T1);
+  // fold T2 into T1; final fast_two_sum.
+  { double s = T1 + T2, bb = s - T1; T2 = (T1 - (s - bb)) + (T2 - bb); T1 = s; }
+  { double s = T0 + T1, bb = s - T0; T1 = (T0 - (s - bb)) + (T1 - bb); T0 = s; }
+  T1 += T2;
+  double hi = T0 + T1;
+  double lo = T1 - (hi - T0);
+  return float64x2(hi, lo);
+}
+
+// Complex DD divide: (a + bi) / (c + di) with compensated numerators.
+//   re = (a·c + b·d) / (c² + d²)         — no cancellation (sum)
+//   im = (b·c − a·d) / (c² + d²)         — cancels when bc ≈ ad
+// The imaginary numerator uses dd_cross_diff to recover the full DD
+// precision lost by the naïve (DD_mul)−(DD_mul) subtraction.
+complex64x2_t cdivdd(complex64x2_t a, complex64x2_t b) {
+  float64x2 ar = from(a.re), ai = from(a.im);
+  float64x2 br = from(b.re), bi = from(b.im);
+  float64x2 denom = br * br + bi * bi;
+  float64x2 num_re = ar * br + ai * bi;
+  float64x2 num_im = dd_cross_diff(ai, br, ar, bi);
+  return { to(num_re / denom), to(num_im / denom) };
+}
 
 // exp(a+bi) = e^a · (cos b + i·sin b). 2 transcendentals (exp + sincos).
 complex64x2_t cexpdd(complex64x2_t z) {
