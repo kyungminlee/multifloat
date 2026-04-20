@@ -93,6 +93,45 @@ static inline float64x2 dd_cross_diff(float64x2 a, float64x2 b,
   return float64x2(hi, lo);
 }
 
+// x*x + y*y − 1 in DD without cancellation. Each DD square expands to
+// five scalar-double terms (two_prod + 2·x0·x1 + x1*x1); the −1 and the
+// y terms feed the same TD accumulator so 0.5·log1p(x²+y²−1) stays
+// full-DD even when |z|² ≈ 1. Mirrors libquadmath's __quadmath_x2y2m1q
+// but on DD inputs.
+static inline float64x2 dd_x2y2m1(float64x2 x, float64x2 y) {
+  double x0 = x._limbs[0], x1 = x._limbs[1];
+  double y0 = y._limbs[0], y1 = y._limbs[1];
+  double xx00_h = x0 * x0, xx00_l = std::fma(x0, x0, -xx00_h);
+  double yy00_h = y0 * y0, yy00_l = std::fma(y0, y0, -yy00_h);
+  double twox0 = x0 + x0, twoy0 = y0 + y0;          // exact (×2)
+  double xx01_h = twox0 * x1, xx01_l = std::fma(twox0, x1, -xx01_h);
+  double yy01_h = twoy0 * y1, yy01_l = std::fma(twoy0, y1, -yy01_h);
+  double xx11 = x1 * x1;
+  double yy11 = y1 * y1;
+  double T0 = 0, T1 = 0, T2 = 0;
+  #define TSUM(v) do { \
+    double _x = (v), _s, _bb, _e; \
+    _s = T0 + _x; _bb = _s - T0; _e = (T0 - (_s - _bb)) + (_x - _bb); \
+    T0 = _s; _x = _e; \
+    _s = T1 + _x; _bb = _s - T1; _e = (T1 - (_s - _bb)) + (_x - _bb); \
+    T1 = _s; T2 += _e; \
+  } while (0)
+  // Largest-magnitude terms first; the −1 goes in with the leading
+  // two_prod hi-limbs so its cancellation residual lands in T1/T2.
+  TSUM(xx00_h);  TSUM(yy00_h);  TSUM(-1.0);
+  TSUM(xx01_h);  TSUM(yy01_h);
+  TSUM(xx00_l);  TSUM(yy00_l);
+  TSUM(xx01_l);  TSUM(yy01_l);
+  TSUM(xx11);    TSUM(yy11);
+  #undef TSUM
+  { double s = T1 + T2, bb = s - T1; T2 = (T1 - (s - bb)) + (T2 - bb); T1 = s; }
+  { double s = T0 + T1, bb = s - T0; T1 = (T0 - (s - bb)) + (T1 - bb); T0 = s; }
+  T1 += T2;
+  double hi = T0 + T1;
+  double lo = T1 - (hi - T0);
+  return float64x2(hi, lo);
+}
+
 // Complex DD divide: (a + bi) / (c + di) with compensated numerators.
 //   re = (a·c + b·d) / (c² + d²)         — no cancellation (sum)
 //   im = (b·c − a·d) / (c² + d²)         — cancels when bc ≈ ad
@@ -116,12 +155,13 @@ complex64x2_t cexpdd(complex64x2_t z) {
   return { to(ea * c), to(ea * s) };
 }
 
-// log(a+bi) = log(|z|) + i·atan2(b, a). Compute log(|z|) as
-//   log(big) + 0.5·log(1 + (small/big)^2)
-// with big = max(|a|,|b|), small = min(|a|,|b|). This avoids the
-// overflow that hypot(a,b) suffers when |z| exceeds DBL_MAX even
-// though log(|z|) itself is finite. atan2 handles the negative-real-
-// axis branch cut (including signed-zero propagation).
+// log(a+bi) = log(|z|) + i·atan2(b, a). Two paths for log(|z|):
+//   • |z| near 1 (big ∈ [0.5, 2]):  log|z| = 0.5·log1p(a²+b²−1) via
+//     dd_x2y2m1 — the general formula loses bits when log(big) and
+//     0.5·log(1+ratio²) cancel (both ≈ 0 ± ε).
+//   • otherwise: log(big) + 0.5·log(1 + (small/big)²), which avoids
+//     hypot overflow when |z| exceeds DBL_MAX yet log|z| is finite.
+// atan2 handles the negative-real-axis cut and signed-zero propagation.
 complex64x2_t clogdd(complex64x2_t z) {
   float64x2 a = from(z.re), b = from(z.im);
   float64x2 ax = multifloats::abs(a);
@@ -132,6 +172,9 @@ complex64x2_t clogdd(complex64x2_t z) {
   if (big._limbs[0] == 0.0) {
     r._limbs[0] = -std::numeric_limits<double>::infinity();
     r._limbs[1] = 0.0;
+  } else if (big._limbs[0] >= 0.5 && big._limbs[0] <= 2.0) {
+    float64x2 u = dd_x2y2m1(big, small);
+    r = float64x2(0.5, 0.0) * log1p_full(u);
   } else {
     float64x2 ratio = small / big;
     float64x2 one = float64x2(1.0, 0.0);
@@ -396,14 +439,117 @@ complex64x2_t ctanhdd(complex64x2_t z) {
   return { to((sa * ca) / den), to((sb * cb) / den) };
 }
 
-// asinh(z) = log(z + sqrt(z² + 1)). Textbook; matches libstdc++ generic.
+// asinh(z). Branch structure ported from libquadmath's
+// __quadmath_kernel_casinhq: operates on |Re(z)|, |Im(z)|, restores
+// signs at the end. The textbook log(z + sqrt(z² + 1)) form collapses
+// to ~double precision once z sits near the unit circle, because
+// arg = z + sqrt(1 + z²) and 1 carry the same leading digits — DD's
+// 106 bits can't resolve log(|arg|) when |arg|² − 1 ≈ 0. Each branch
+// below rearranges the formula so the small result is computed from
+// non-cancelling pieces, summed through log1p.
 complex64x2_t casinhdd(complex64x2_t z) {
   float64x2 a = from(z.re), b = from(z.im);
-  // 1 + z² : Re = 1 + a² − b², Im = 2ab
-  complex64x2_t one_pz2 = { to(float64x2(1.0) + a * a - b * b), to(a * b + a * b) };
-  complex64x2_t root = csqrtdd(one_pz2);
-  complex64x2_t arg = { to(a + from(root.re)), to(b + from(root.im)) };
-  return clogdd(arg);
+  float64x2 rx = multifloats::abs(a);
+  float64x2 ix = multifloats::abs(b);
+  // DD eps = 2⁻¹⁰⁵ ≈ 2.46e-32; constants mirror the __float128 source.
+  static constexpr double dd_inv_eps    = 0x1.0p105;
+  static constexpr double dd_eps_over_8 = 0x1.0p-108;
+  static constexpr double dd_eps_sq     = 0x1.0p-210;
+  float64x2 one(1.0, 0.0), half(0.5, 0.0), two(2.0, 0.0);
+  float64x2 re, im;
+
+  if (rx._limbs[0] >= dd_inv_eps || ix._limbs[0] >= dd_inv_eps) {
+    // |z| huge: z + sqrt(1+z²) ≈ 2z; avoid overflow from squaring.
+    complex64x2_t l = clogdd({ to(rx), to(ix) });
+    re = from(l.re) + float64x2(ln_2_hi, ln_2_lo);
+    im = from(l.im);
+  } else if (rx._limbs[0] >= 0.5 && ix._limbs[0] < dd_eps_over_8) {
+    float64x2 s = multifloats::hypot(one, rx);
+    re = log_full(rx + s);
+    im = atan2_full(ix, s);
+  } else if (rx._limbs[0] < dd_eps_over_8 && ix._limbs[0] >= 1.5) {
+    float64x2 s = multifloats::sqrt((ix + one) * (ix - one));
+    re = log_full(ix + s);
+    im = atan2_full(s, rx);
+  } else if (ix._limbs[0] > 1.0 && ix._limbs[0] < 1.5 && rx._limbs[0] < 0.5) {
+    float64x2 ix2m1 = (ix + one) * (ix - one);
+    if (rx._limbs[0] < dd_eps_sq) {
+      float64x2 s = multifloats::sqrt(ix2m1);
+      re = half * log1p_full(two * (ix2m1 + ix * s));
+      im = atan2_full(s, rx);
+    } else {
+      float64x2 rx2 = rx * rx;
+      float64x2 f = rx2 * (two + rx2 + two * ix * ix);
+      float64x2 d = multifloats::sqrt(ix2m1 * ix2m1 + f);
+      float64x2 dp = d + ix2m1;
+      float64x2 dm = f / dp;
+      float64x2 r1 = multifloats::sqrt((dm + rx2) * half);
+      float64x2 r2 = rx * ix / r1;
+      re = half * log1p_full(rx2 + dp + two * (rx * r1 + ix * r2));
+      im = atan2_full(ix + r2, rx + r1);
+    }
+  } else if (ix._limbs[0] == 1.0 && ix._limbs[1] == 0.0 && rx._limbs[0] < 0.5) {
+    if (rx._limbs[0] < dd_eps_over_8) {
+      float64x2 sr = multifloats::sqrt(rx);
+      re = half * log1p_full(two * (rx + sr));
+      im = atan2_full(one, sr);
+    } else {
+      float64x2 rx2 = rx * rx;
+      float64x2 d = rx * multifloats::sqrt(float64x2(4.0, 0.0) + rx2);
+      float64x2 s1 = multifloats::sqrt((d + rx2) * half);
+      float64x2 s2 = multifloats::sqrt((d - rx2) * half);
+      re = half * log1p_full(rx2 + d + two * (rx * s1 + s2));
+      im = atan2_full(one + s2, rx + s1);
+    }
+  } else if (ix._limbs[0] < 1.0 && rx._limbs[0] < 0.5) {
+    if (ix._limbs[0] >= 0x1.0p-105) {
+      if (rx._limbs[0] < dd_eps_sq) {
+        float64x2 onemix2 = (one + ix) * (one - ix);
+        float64x2 s = multifloats::sqrt(onemix2);
+        re = half * log1p_full(two * rx / s);
+        im = atan2_full(ix, s);
+      } else {
+        float64x2 onemix2 = (one + ix) * (one - ix);
+        float64x2 rx2 = rx * rx;
+        float64x2 f = rx2 * (two + rx2 + two * ix * ix);
+        float64x2 d = multifloats::sqrt(onemix2 * onemix2 + f);
+        float64x2 dp = d + onemix2;
+        float64x2 dm = f / dp;
+        float64x2 r1 = multifloats::sqrt((dp + rx2) * half);
+        float64x2 r2 = rx * ix / r1;
+        re = half * log1p_full(rx2 + dm + two * (rx * r1 + ix * r2));
+        im = atan2_full(ix + r2, rx + r1);
+      }
+    } else {
+      float64x2 s = multifloats::hypot(one, rx);
+      re = half * log1p_full(two * rx * (rx + s));
+      im = atan2_full(ix, s);
+    }
+  } else {
+    // General case: rx ≥ 0.5 with ix moderate. Cancellation in
+    // 1+z² and log|arg| is bounded here because |arg|² is well away
+    // from 1 — the textbook form carries full DD.
+    float64x2 yr = (rx - ix) * (rx + ix) + one;
+    float64x2 yi = two * rx * ix;
+    complex64x2_t root = csqrtdd({ to(yr), to(yi) });
+    complex64x2_t arg = { to(rx + from(root.re)), to(ix + from(root.im)) };
+    complex64x2_t l = clogdd(arg);
+    re = from(l.re);
+    im = from(l.im);
+  }
+
+  auto dd_signbit = [](double hi, double lo) {
+    return (hi == 0.0 && lo != 0.0) ? std::signbit(lo) : std::signbit(hi);
+  };
+  if (dd_signbit(a._limbs[0], a._limbs[1])) {
+    re._limbs[0] = -re._limbs[0];
+    re._limbs[1] = -re._limbs[1];
+  }
+  if (dd_signbit(b._limbs[0], b._limbs[1])) {
+    im._limbs[0] = -im._limbs[0];
+    im._limbs[1] = -im._limbs[1];
+  }
+  return { to(re), to(im) };
 }
 
 // acosh(z). Kahan's formula: 2·log(sqrt((z+1)/2) + sqrt((z−1)/2)).
@@ -421,11 +567,17 @@ complex64x2_t cacoshdd(complex64x2_t z) {
   return { to(from(l.re) + from(l.re)), to(from(l.im) + from(l.im)) };
 }
 
-// atanh(z). libstdc++ generic form (atan with a, b swapped):
+// atanh(z). Ported from libquadmath catanhq:
 //   Re = 0.25 · log((1+a)² + b²)/((1−a)² + b²))
 //   Im = 0.5 · atan2(2b, 1 − a² − b²)
+// The Re-part uses log1p((4a)/den) when |num/den − 1| is small so the
+// small answer survives cancellation in log(num/den). The Im-part's
+// denominator picks between (1−|·|)(1+|·|)−(·)² and −dd_x2y2m1 based on
+// which region is near the unit circle, avoiding the direct `1 − a² − b²`
+// catastrophic subtraction near |z| = 1.
 complex64x2_t catanhdd(complex64x2_t z) {
   float64x2 a = from(z.re), b = from(z.im);
+  float64x2 one(1.0, 0.0), half(0.5, 0.0), quarter(0.25, 0.0);
   // Branch-point singularities at z = ±1 + 0i: C99 G.6.2.4 specifies
   //   catanh(+1 + 0i) = +∞ + 0i
   //   catanh(−1 + 0i) = −∞ + 0i
@@ -442,14 +594,59 @@ complex64x2_t catanhdd(complex64x2_t z) {
     r.im.lo = 0.0;
     return r;
   }
-  float64x2 b2 = b * b;
-  float64x2 x = float64x2(1.0) - b2 - a * a;
-  float64x2 ap1 = a + float64x2(1.0), am1 = a - float64x2(1.0);
-  float64x2 num = b2 + ap1 * ap1;
-  float64x2 den = b2 + am1 * am1;
-  float64x2 half = float64x2(0.5, 0.0), quarter = float64x2(0.25, 0.0);
-  return { to(quarter * log_full(num / den)),
-           to(half * atan2_full(b + b, x)) };
+
+  static constexpr double dd_eps_sq  = 0x1.0p-210;
+  static constexpr double dd_eps_hlf = 0x1.0p-106;
+
+  float64x2 absa = multifloats::abs(a);
+  float64x2 absb = multifloats::abs(b);
+  float64x2 re_res;
+
+  if (absa._limbs[0] == 1.0 && absa._limbs[1] == 0.0 &&
+      absb._limbs[0] < dd_eps_sq) {
+    // Near-branch-point: catanh(±1 + ε·i) ≈ sign(a) · 0.5 · (ln2 − log|ε|).
+    float64x2 ln2(ln_2_hi, ln_2_lo);
+    float64x2 t = half * (ln2 - log_full(absb));
+    re_res = (a._limbs[0] < 0.0) ? -t : t;
+  } else {
+    // i2: drop b² when |b| below eps² so the DD round-off of b² doesn't
+    // contaminate num/den. Matches the libquadmath guard.
+    float64x2 i2 = (absb._limbs[0] >= dd_eps_sq) ? (b * b)
+                                                 : float64x2(0.0, 0.0);
+    float64x2 ap1 = one + a;
+    float64x2 am1 = one - a;
+    float64x2 num = i2 + ap1 * ap1;
+    float64x2 den = i2 + am1 * am1;
+    float64x2 f = num / den;
+    if (f._limbs[0] < 0.5) {
+      re_res = quarter * log_full(f);
+    } else {
+      // 4a exact in DD (power-of-two scale); computing as (num−den)/den
+      // would cancel when a is small — instead feed 4a/den into log1p.
+      float64x2 four_a = (a + a) + (a + a);
+      re_res = quarter * log1p_full(four_a / den);
+    }
+  }
+
+  // Imag-part denominator picks the non-cancelling form per region.
+  float64x2 big   = (absa._limbs[0] > absb._limbs[0]) ? absa : absb;
+  float64x2 small_= (absa._limbs[0] > absb._limbs[0]) ? absb : absa;
+  float64x2 den_im;
+  if (small_._limbs[0] < dd_eps_hlf) {
+    den_im = (one - big) * (one + big);
+  } else if (big._limbs[0] >= 1.0) {
+    den_im = (one - big) * (one + big) - small_ * small_;
+  } else if (big._limbs[0] >= 0.75 || small_._limbs[0] >= 0.5) {
+    // Near unit circle: 1 − big² − small² = −dd_x2y2m1(big, small).
+    float64x2 t = dd_x2y2m1(big, small_);
+    den_im._limbs[0] = -t._limbs[0];
+    den_im._limbs[1] = -t._limbs[1];
+  } else {
+    den_im = (one - big) * (one + big) - small_ * small_;
+  }
+  float64x2 im_res = half * atan2_full(b + b, den_im);
+
+  return { to(re_res), to(im_res) };
 }
 
 // |z| via the scale-aware path shared with clogdd: avoids overflow when
