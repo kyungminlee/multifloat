@@ -139,6 +139,17 @@ static void report_fail(char const *op, char const *detail) {
   }
 }
 
+// CHK1 / CHK2 / CHK1_IF / CHK2_IF collapse the common guard+check pattern.
+// Expand inside the main loop where the locals `q1`, `q2`, `f1`, `f2`, and
+// the 1-arg `(q_t)0` tail are all in scope. The explicit `i1, i2` trailing
+// args on `check()` drive the input-magnitude floor inside check() itself.
+#define CHK1(op, mf_expr, q_expr) check(op, (mf_expr), (q_expr), q1, (q_t)0)
+#define CHK2(op, mf_expr, q_expr) check(op, (mf_expr), (q_expr), q1, q2)
+#define CHK1_IF(cond, op, mf_expr, q_expr) \
+  do { if (cond) CHK1(op, mf_expr, q_expr); } while (0)
+#define CHK2_IF(cond, op, mf_expr, q_expr) \
+  do { if (cond) CHK2(op, mf_expr, q_expr); } while (0)
+
 static void check(char const *op, mf::float64x2 const &got, q_t expected, q_t i1, q_t i2) {
   // NaN: leading limb must be NaN.
   if (q_isnan(expected)) {
@@ -346,132 +357,95 @@ int main(int argc, char **argv) {
     double d1 = (double)q1;
     double d2 = (double)q2;
 
-    // ----------------------------------------------------------------
-    // Hot loop: arithmetic + sqrt + comparisons + unary basics
-    // ----------------------------------------------------------------
+    // Hot loop: arithmetic + sqrt + comparisons + unary basics.
     // add/sub/neg/abs are non-finite safe. mul/div/etc use two_prod, whose
-    // error limb becomes NaN when a hi-limb is ±inf even if the IEEE
-    // product is well-defined; the hand-written non-finite short-circuits
-    // only cover add. Gate the multiplicative path on finite inputs.
+    // error limb becomes NaN when a hi-limb is ±inf even if the IEEE product
+    // is well-defined; gate the multiplicative path on finite inputs.
     bool const both_finite = q_isfinite(q1) && q_isfinite(q2);
-
-    check("add", f1 + f2, q1 + q2, q1, q2);
-    check("sub", f1 - f2, q1 - q2, q1, q2);
-    if (both_finite) {
-      check("mul", f1 * f2, q1 * q2, q1, q2);
-      if (q2 != (q_t)0) {
-        check("div", f1 / f2, q1 / q2, q1, q2);
-      }
-    }
-    if (q_isfinite(q1) && q1 >= (q_t)0) {
-      check("sqrt", mf::sqrt(f1), sqrtq(q1), q1, (q_t)0);
-    }
-    check("abs", mf::abs(f1), q1 < 0 ? -q1 : q1, q1, (q_t)0);
-    check("neg", -f1, -q1, q1, (q_t)0);
-
-    // Bit-exact rounding (full DD)
     q_t aq1 = q1 < 0 ? -q1 : q1;
-    if (q_isfinite(q1) && aq1 < (q_t)1e15q) {
-      check("trunc", mf::trunc(f1), truncq(q1), q1, (q_t)0);
-      check("round", mf::round(f1), roundq(q1), q1, (q_t)0);
-    }
+
+    CHK2("add", f1 + f2, q1 + q2);
+    CHK2("sub", f1 - f2, q1 - q2);
+    CHK2_IF(both_finite, "mul", f1 * f2, q1 * q2);
+    CHK2_IF(both_finite && q2 != (q_t)0, "div", f1 / f2, q1 / q2);
+    CHK1_IF(q_isfinite(q1) && q1 >= (q_t)0, "sqrt", mf::sqrt(f1), sqrtq(q1));
+    CHK1("abs", mf::abs(f1), q1 < 0 ? -q1 : q1);
+    CHK1("neg", -f1, -q1);
+    CHK1_IF(q_isfinite(q1) && aq1 < (q_t)1e15q, "trunc", mf::trunc(f1), truncq(q1));
+    CHK1_IF(q_isfinite(q1) && aq1 < (q_t)1e15q, "round", mf::round(f1), roundq(q1));
 
     check_comp(f1, f2, q1, q2);
 
-    // ----------------------------------------------------------------
-    // Periodic (every 10): mixed-mode + binary
-    // ----------------------------------------------------------------
-    if (i % 10 == 0) {
-      // Mixed-mode and binary ops all route through the multiplicative
-      // or hypot kernels and share mul's non-finite limitation.
-      if (both_finite) {
-        check("add_fd", f1 + mf::float64x2(d2), q1 + (q_t)d2, q1, (q_t)d2);
-        check("mul_df", mf::float64x2(d1) * f2, (q_t)d1 * q2, (q_t)d1, q2);
-        check("fmin", mf::fmin(f1, f2), q1 < q2 ? q1 : q2, q1, q2);
-        check("fmax", mf::fmax(f1, f2), q1 < q2 ? q2 : q1, q1, q2);
-        check("copysign", mf::copysign(f1, f2), copysignq(q1, q2), q1, q2);
-        check("fdim", mf::fdim(f1, f2), fdimq(q1, q2), q1, q2);
-        check("hypot", mf::hypot(f1, f2), hypotq(q1, q2), q1, q2);
+    // Periodic (every 10): mixed-mode + binary. Mixed-mode and binary ops all
+    // route through the multiplicative or hypot kernels — share mul's
+    // non-finite limitation.
+    if (i % 10 == 0 && both_finite) {
+      check("add_fd", f1 + mf::float64x2(d2), q1 + (q_t)d2, q1, (q_t)d2);
+      check("mul_df", mf::float64x2(d1) * f2, (q_t)d1 * q2, (q_t)d1, q2);
+      CHK2("fmin", mf::fmin(f1, f2), q1 < q2 ? q1 : q2);
+      CHK2("fmax", mf::fmax(f1, f2), q1 < q2 ? q2 : q1);
+      CHK2("copysign", mf::copysign(f1, f2), copysignq(q1, q2));
+      CHK2("fdim", mf::fdim(f1, f2), fdimq(q1, q2));
+      CHK2("hypot", mf::hypot(f1, f2), hypotq(q1, q2));
 
-        q_t aq2 = q2 < 0 ? -q2 : q2;
-        if (q2 != (q_t)0 && aq1 < (q_t)1e20q && aq2 > (q_t)1e-20q) {
-          check("fmod", mf::fmod(f1, f2), fmodq(q1, q2), q1, q2);
-        }
-      }
+      q_t aq2 = q2 < 0 ? -q2 : q2;
+      CHK2_IF(q2 != (q_t)0 && aq1 < (q_t)1e20q && aq2 > (q_t)1e-20q,
+              "fmod", mf::fmod(f1, f2), fmodq(q1, q2));
     }
 
-    // ----------------------------------------------------------------
-    // Periodic (every 100): transcendentals
-    // ----------------------------------------------------------------
+    // Periodic (every 100): transcendentals.
     if (i % 100 == 0) {
       if (q_isfinite(q1)) {
         q_t qe = expq(q1);
-        if (q_isfinite(qe)) {
-          check("exp", mf::exp(f1), qe, q1, (q_t)0);
-        }
+        CHK1_IF(q_isfinite(qe), "exp", mf::exp(f1), qe);
       }
       if (q_isfinite(q1) && q1 > (q_t)0) {
-        check("log", mf::log(f1), logq(q1), q1, (q_t)0);
-        check("log10", mf::log10(f1), log10q(q1), q1, (q_t)0);
+        CHK1("log",   mf::log(f1),   logq(q1));
+        CHK1("log10", mf::log10(f1), log10q(q1));
       }
       if (q_isfinite(q1)) {
         q_t qem = expm1q(q1);
-        if (q_isfinite(qem)) {
-          check("expm1", mf::expm1(f1), qem, q1, (q_t)0);
-        }
+        CHK1_IF(q_isfinite(qem), "expm1", mf::expm1(f1), qem);
       }
-      if (q_isfinite(q1) && q1 > (q_t)-1) {
-        check("log1p", mf::log1p(f1), log1pq(q1), q1, (q_t)0);
-      }
+      CHK1_IF(q_isfinite(q1) && q1 > (q_t)-1, "log1p", mf::log1p(f1), log1pq(q1));
 
       // Trig: keep magnitudes moderate.
       if (q_isfinite(q1) && aq1 < (q_t)1e6q) {
-        check("sin", mf::sin(f1), sinq(q1), q1, (q_t)0);
-        check("cos", mf::cos(f1), cosq(q1), q1, (q_t)0);
-        if (fabsq(cosq(q1)) > (q_t)1e-12q) {
-          check("tan", mf::tan(f1), tanq(q1), q1, (q_t)0);
-        }
+        CHK1("sin", mf::sin(f1), sinq(q1));
+        CHK1("cos", mf::cos(f1), cosq(q1));
+        CHK1_IF(fabsq(cosq(q1)) > (q_t)1e-12q, "tan", mf::tan(f1), tanq(q1));
       }
-
       if (q_isfinite(q1) && aq1 <= (q_t)1) {
-        check("asin", mf::asin(f1), asinq(q1), q1, (q_t)0);
-        check("acos", mf::acos(f1), acosq(q1), q1, (q_t)0);
+        CHK1("asin", mf::asin(f1), asinq(q1));
+        CHK1("acos", mf::acos(f1), acosq(q1));
       }
-      if (q_isfinite(q1)) {
-        check("atan", mf::atan(f1), atanq(q1), q1, (q_t)0);
-      }
+      CHK1_IF(q_isfinite(q1), "atan", mf::atan(f1), atanq(q1));
 
       if (q_isfinite(q1) && aq1 < (q_t)700) {
-        check("sinh", mf::sinh(f1), sinhq(q1), q1, (q_t)0);
-        check("cosh", mf::cosh(f1), coshq(q1), q1, (q_t)0);
-        check("tanh", mf::tanh(f1), tanhq(q1), q1, (q_t)0);
+        CHK1("sinh", mf::sinh(f1), sinhq(q1));
+        CHK1("cosh", mf::cosh(f1), coshq(q1));
+        CHK1("tanh", mf::tanh(f1), tanhq(q1));
       }
-      if (q_isfinite(q1)) {
-        check("asinh", mf::asinh(f1), asinhq(q1), q1, (q_t)0);
-      }
-      if (q_isfinite(q1) && q1 >= (q_t)1) {
-        check("acosh", mf::acosh(f1), acoshq(q1), q1, (q_t)0);
-      }
-      if (q_isfinite(q1) && aq1 < (q_t)1) {
-        check("atanh", mf::atanh(f1), atanhq(q1), q1, (q_t)0);
-      }
+      CHK1_IF(q_isfinite(q1),                   "asinh", mf::asinh(f1), asinhq(q1));
+      CHK1_IF(q_isfinite(q1) && q1 >= (q_t)1,   "acosh", mf::acosh(f1), acoshq(q1));
+      CHK1_IF(q_isfinite(q1) && aq1 <  (q_t)1,  "atanh", mf::atanh(f1), atanhq(q1));
 
       if (q_isfinite(q1) && aq1 < (q_t)100) {
-        check("erf", mf::erf(f1), erfq(q1), q1, (q_t)0);
-        check("erfc", mf::erfc(f1), erfcq(q1), q1, (q_t)0);
+        CHK1("erf",  mf::erf(f1),  erfq(q1));
+        CHK1("erfc", mf::erfc(f1), erfcq(q1));
       }
       if (q_isfinite(q1) && q1 > (q_t)0 && q1 < (q_t)100) {
-        check("tgamma", mf::tgamma(f1), tgammaq(q1), q1, (q_t)0);
-        check("lgamma", mf::lgamma(f1), lgammaq(q1), q1, (q_t)0);
+        CHK1("tgamma", mf::tgamma(f1), tgammaq(q1));
+        CHK1("lgamma", mf::lgamma(f1), lgammaq(q1));
       }
 
-      check("atan2", mf::atan2(f1, f2), atan2q(q1, q2), q1, q2);
+      CHK2("atan2", mf::atan2(f1, f2), atan2q(q1, q2));
 
-      // Power operator: positive base, modest exponent.
+      // Power: positive base, modest exponent.
       q_t aq2 = q2 < 0 ? -q2 : q2;
       if (q_isfinite(q1) && q1 > (q_t)1e-3q && q1 < (q_t)1e3q &&
           q_isfinite(q2) && aq2 < (q_t)30) {
-        check("pow", mf::pow(f1, f2), powq(q1, q2), q1, q2);
+        CHK2("pow", mf::pow(f1, f2), powq(q1, q2));
         check("pow_md", mf::pow(f1, mf::float64x2(d2)), powq(q1, (q_t)d2), q1, (q_t)d2);
         check("pow_dm", mf::pow(mf::float64x2(d1), f2), powq((q_t)d1, q2), (q_t)d1, q2);
       }
@@ -479,20 +453,18 @@ int main(int argc, char **argv) {
         check("pow_int", mf::pow(f1, mf::float64x2(3.0)), powq(q1, (q_t)3), q1, (q_t)3);
       }
 
-      if (q_isfinite(q1)) {
-        check("scalbn", mf::scalbn(f1, 5), scalbnq(q1, 5), q1, (q_t)0);
-      }
+      CHK1_IF(q_isfinite(q1), "scalbn", mf::scalbn(f1, 5), scalbnq(q1, 5));
 
       // 3-argument min/max via nested fmin/fmax.
-      if (q_isfinite(q1) && q_isfinite(q2)) {
+      if (both_finite) {
         q_t q3 = (q1 + q2) * (q_t)0.5q;
         mf::float64x2 f3 = from_q(q3);
         q_t min12 = q1 < q2 ? q1 : q2;
         q_t q_min3 = min12 < q3 ? min12 : q3;
         q_t max12 = q1 < q2 ? q2 : q1;
         q_t q_max3 = max12 < q3 ? q3 : max12;
-        check("min3", mf::fmin(mf::fmin(f1, f2), f3), q_min3, q1, q2);
-        check("max3", mf::fmax(mf::fmax(f1, f2), f3), q_max3, q1, q2);
+        CHK2("min3", mf::fmin(mf::fmin(f1, f2), f3), q_min3);
+        CHK2("max3", mf::fmax(mf::fmax(f1, f2), f3), q_max3);
       }
     }
 
