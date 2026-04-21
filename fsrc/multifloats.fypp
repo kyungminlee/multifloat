@@ -3150,11 +3150,7 @@ $:cdd_arith_body(opname)
         end if
 #:else
         ! Without quad, read both limbs as doubles.
-        if (iotype == 'LISTDIRECTED') then
-            read(unit, *, iostat=iostat, iomsg=iomsg) dtv%limbs(1), dtv%limbs(2)
-        else
-            read(unit, *, iostat=iostat, iomsg=iomsg) dtv%limbs(1), dtv%limbs(2)
-        end if
+        read(unit, *, iostat=iostat, iomsg=iomsg) dtv%limbs(1), dtv%limbs(2)
 #:endif
     end subroutine
 
@@ -3181,13 +3177,8 @@ $:cdd_arith_body(opname)
             dtv%im%limbs(2) = real(aimag(val_cqp) - real(dtv%im%limbs(1), qp), dp)
         end if
 #:else
-        if (iotype == 'LISTDIRECTED') then
-            read(unit, *, iostat=iostat, iomsg=iomsg) &
-                dtv%re%limbs(1), dtv%re%limbs(2), dtv%im%limbs(1), dtv%im%limbs(2)
-        else
-            read(unit, *, iostat=iostat, iomsg=iomsg) &
-                dtv%re%limbs(1), dtv%re%limbs(2), dtv%im%limbs(1), dtv%im%limbs(2)
-        end if
+        read(unit, *, iostat=iostat, iomsg=iomsg) &
+            dtv%re%limbs(1), dtv%re%limbs(2), dtv%im%limbs(1), dtv%im%limbs(2)
 #:endif
     end subroutine
 

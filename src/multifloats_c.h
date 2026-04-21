@@ -5,8 +5,7 @@
  * function name (sindd, logdd, cexpdd) — mirroring `sinf`/`sinq`, `cexpf`/
  * `csinq`. Include this header from C, C++, or Fortran (via iso_c_binding).
  */
-#ifndef MULTIFLOATS_C_H
-#define MULTIFLOATS_C_H
+#pragma once
 
 #include <stdint.h>
 
@@ -253,5 +252,3 @@ MULTIFLOATS_API int gedd(float64x2_t a, float64x2_t b);
  * `MULTIFLOATS_API` identifier. Consumers wanting their own attribute
  * macros should define them in their own namespace. */
 #undef MULTIFLOATS_API
-
-#endif /* MULTIFLOATS_C_H */
