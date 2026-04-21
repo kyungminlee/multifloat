@@ -667,10 +667,51 @@ complex64x2_t casinhdd(complex64x2_t z) {
   return { to(re), to(im) };
 }
 
-// acosh(z). Kahan's formula: 2·log(sqrt((z+1)/2) + sqrt((z−1)/2)).
-// More stable near z≈1 than the naive log(z + sqrt(z²−1)) which suffers
-// cancellation in z²−1.
+// acosh(z). Domain-split:
+//   |z| < 1:  delegate to cacosdd via `acosh(z) = i · acos(z)` (Im(z) ≥ +0)
+//             or the conj-reflection `acosh(z) = conj(i · acos(conj z))`
+//             (Im(z) < 0, incl. −0). Component-wise:
+//               Re(acosh z) = −Im(acos z')  (small-magnitude near z=0)
+//               Im(acosh z) = ±Re(acos z')  (large-magnitude; +Re for
+//                                            Im≥0, −Re for Im<0)
+//             The swap puts the small output on the Im(acos) path, which
+//             via casindd/casinhdd is full-DD. cacosdd's |z| ≤ 1 arm
+//             uses the direct π/2 − asin form (no recursion back here).
+//             Recovers ~5 orders of magnitude on the fuzz worst case
+//             (z ≈ −2.4e-4 + 2.5e-7 i, acosh(z).re ≈ 2.5e-7 vs output
+//             magnitude π/2; π/2 − acos dominated the old Kahan form's
+//             absolute precision just like the acos case).
+//   |z| ≥ 1:  Kahan's 2·log(sqrt((z+1)/2) + sqrt((z−1)/2)) — stable near
+//             z ≈ 1 (avoids z²−1 cancellation) and away from the small-
+//             output regime that hurts near z ≈ 0.
+//         C99 G.6.2.3 branch-cut convention on Re z < 1, Im z = ±0: the
+//             delegated path routes through cacosdd (which already gets
+//             this right) and applies the conj-reflection based on
+//             signbit(z.im.hi), so ±0 propagates symmetrically.
 complex64x2_t cacoshdd(complex64x2_t z) {
+  double az2 = z.re.hi * z.re.hi + z.im.hi * z.im.hi;
+  if (az2 < 1.0) {
+    bool use_conj = std::signbit(z.im.hi);
+    complex64x2_t zc;
+    if (use_conj) {
+      zc.re = z.re;
+      zc.im.hi = -z.im.hi;
+      zc.im.lo = -z.im.lo;
+    } else {
+      zc = z;
+    }
+    complex64x2_t v = cacosdd(zc);
+    complex64x2_t r;
+    r.re.hi = -v.im.hi;
+    r.re.lo = -v.im.lo;
+    if (use_conj) {
+      r.im.hi = -v.re.hi;
+      r.im.lo = -v.re.lo;
+    } else {
+      r.im = v.re;
+    }
+    return r;
+  }
   float64x2 a = from(z.re), b = from(z.im);
   float64x2 half = float64x2(0.5, 0.0);
   complex64x2_t zp = { to((a + float64x2(1.0)) * half), to(b * half) };
