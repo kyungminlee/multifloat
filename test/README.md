@@ -22,7 +22,7 @@ The optional MPFR driver raises the reference to 200 bits.
 
 | File | Target | ctest name | Purpose |
 |---|---|---|---|
-| `fuzz.cc` | `cpp_fuzz` | `fuzz_cpp` | 1 M-iteration C++ property fuzz; reports max / mean rel-err per op. |
+| `fuzz.cc` | `cpp_fuzz` | `fuzz_cpp` | 1 M-iteration C++ property fuzz over scalar, complex, Bessel, and π-scaled trig kernels; reports max / mean rel-err per op. |
 | `fuzz.f90` | `fortran_fuzz` | `fuzz_fortran` | Fortran counterpart; seed hard-wired to 42 for determinism. |
 | `fuzz_mpfr.cc` | `cpp_fuzz_mpfr` | `precision_mpfr_cpp` | MPFR 200-bit reference — separates DD kernel error from the `__float128` reference floor. Built only with `-DBUILD_MPFR_TESTS=ON`. |
 

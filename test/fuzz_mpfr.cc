@@ -180,8 +180,10 @@ WRAP_REAL_UNARY(asinh)
 WRAP_REAL_UNARY(acosh)
 WRAP_REAL_UNARY(atanh)
 WRAP_REAL_UNARY(exp)
+WRAP_REAL_UNARY(exp2)
 WRAP_REAL_UNARY(expm1)
 WRAP_REAL_UNARY(log)
+WRAP_REAL_UNARY(log2)
 WRAP_REAL_UNARY(log10)
 WRAP_REAL_UNARY(log1p)
 WRAP_REAL_UNARY(sqrt)
@@ -274,6 +276,38 @@ WRAP_REAL_BINARY(hypot)
 WRAP_REAL_BINARY(pow)
 #undef WRAP_REAL_BINARY
 
+// -- atan2pi: atan2(y, x) / π -------------------------------------------
+inline mf::float64x2 atan2pi(mf::float64x2 const &y, mf::float64x2 const &x) {
+  return mf::detail::from_f64x2(::atan2pidd(
+      mf::detail::to_f64x2(y), mf::detail::to_f64x2(x)));
+}
+inline q_t atan2pi(q_t y, q_t x) { return ::atan2q(y, x) / (q_t)M_PIq; }
+inline mp_t atan2pi(mp_t const &y, mp_t const &x) {
+  static const mp_t pi = mpfr::const_pi(multifloats_test::kMpfrPrec);
+  return mpfr::atan2(y, x) / pi;
+}
+
+// -- fmadd(a, b, c) = a·b + c. qp: fmaq; mpreal: mpfr::fma --------------
+inline mf::float64x2 fmadd_fx(mf::float64x2 const &a, mf::float64x2 const &b,
+                              mf::float64x2 const &c) {
+  return mf::detail::from_f64x2(::fmadd(
+      mf::detail::to_f64x2(a),
+      mf::detail::to_f64x2(b),
+      mf::detail::to_f64x2(c)));
+}
+inline q_t  fmadd_fx(q_t a, q_t b, q_t c)                 { return ::fmaq(a, b, c); }
+inline mp_t fmadd_fx(mp_t const &a, mp_t const &b, mp_t const &c) {
+  return mpfr::fma(a, b, c);
+}
+
+// -- erfcx(x) = exp(x²) · erfc(x). libquadmath has no direct erfcxq;
+//    compose. mpreal: mpfr::exp(x*x) * mpfr::erfc(x).
+inline mf::float64x2 erfcx(mf::float64x2 const &x) {
+  return mf::detail::from_f64x2(::erfcxdd(mf::detail::to_f64x2(x)));
+}
+inline q_t  erfcx(q_t x)         { return ::expq(x * x) * ::erfcq(x); }
+inline mp_t erfcx(mp_t const &x) { return mpfr::exp(x * x) * mpfr::erfc(x); }
+
 // -- Complex unary: c<NAME>dd / c<NAME>q / c_<NAME> ---------------------
 #define WRAP_COMPLEX_UNARY(NAME)                                               \
   inline complex64x2_t c##NAME(complex64x2_t z) { return ::c##NAME##dd(z); }   \
@@ -307,6 +341,97 @@ inline mp_t          cabs(CMp const   &z)  { return c_abs(z); }
 inline complex64x2_t cconjg(complex64x2_t z) { return ::conjdd(z); }
 inline __complex128  cconjg(__complex128  z) { return ::conjq(z); }
 inline CMp           cconjg(CMp const   &z)  { return c_conj(z); }
+
+// cproj: Riemann sphere projection. For finite z this is identity; for
+// inf-bearing z collapses to (+inf, copysign(0, imag)). Narrow inputs
+// are finite so all three return the input unchanged — the test pins
+// that finite path.
+inline complex64x2_t cproj(complex64x2_t z) { return ::cprojdd(z); }
+inline __complex128  cproj(__complex128  z) { return ::cprojq(z); }
+inline CMp           cproj(CMp const &z)    { return z; }
+
+// carg: argument angle (complex → real scalar).
+inline mf::float64x2 carg(complex64x2_t z) { return mf::detail::from_f64x2(::cargdd(z)); }
+inline q_t           carg(__complex128  z) { return ::cargq(z); }
+inline mp_t          carg(CMp const &z)    { return c_arg(z); }
+
+// -- Composite-oracle complex ops: libquadmath has no direct variant, or
+//    the direct variant loses precision on the tail we're actually
+//    testing. Compose from primitives at each precision tier.
+
+// cexpm1: DD is precision-preserving near z=0; qp oracle = cexpq(z) - 1
+// (loses it), mpreal = c_exp(z) - 1 (at 200 bits, still fine).
+inline complex64x2_t cexpm1(complex64x2_t z) { return ::cexpm1dd(z); }
+inline __complex128  cexpm1(__complex128 z) {
+  __complex128 one; __real__ one = 1; __imag__ one = 0;
+  return ::cexpq(z) - one;
+}
+inline CMp cexpm1(CMp const &z) {
+  CMp e = c_exp(z);
+  return {e.re - 1, e.im};
+}
+
+// clog1p: analogous (DD kernel precision-preserving near z=0).
+inline complex64x2_t clog1p(complex64x2_t z) { return ::clog1pdd(z); }
+inline __complex128  clog1p(__complex128 z) {
+  __complex128 one; __real__ one = 1; __imag__ one = 0;
+  return ::clogq(z + one);
+}
+inline CMp clog1p(CMp const &z) { return c_log({z.re + 1, z.im}); }
+
+// clog2 / clog10: divide both components of clog(z) by log(2) / log(10).
+inline complex64x2_t clog2(complex64x2_t z) { return ::clog2dd(z); }
+inline __complex128  clog2(__complex128 z) {
+  __complex128 lg = ::clogq(z);
+  q_t l2 = ::logq((q_t)2);
+  __complex128 r; __real__ r = crealq(lg) / l2; __imag__ r = cimagq(lg) / l2;
+  return r;
+}
+inline CMp clog2(CMp const &z) {
+  CMp l = c_log(z);
+  static const mp_t l2 = mpfr::log(mp_t(2));
+  return {l.re / l2, l.im / l2};
+}
+
+inline complex64x2_t clog10(complex64x2_t z) { return ::clog10dd(z); }
+inline __complex128  clog10(__complex128 z) {
+  __complex128 lg = ::clogq(z);
+  q_t l10 = ::logq((q_t)10);
+  __complex128 r; __real__ r = crealq(lg) / l10; __imag__ r = cimagq(lg) / l10;
+  return r;
+}
+inline CMp clog10(CMp const &z) {
+  CMp l = c_log(z);
+  static const mp_t l10 = mpfr::log(mp_t(10));
+  return {l.re / l10, l.im / l10};
+}
+
+// cpow: libquadmath has cpowq, mpreal composes as c_exp(c_mul(w, c_log(z))).
+inline complex64x2_t cpow(complex64x2_t z, complex64x2_t w) { return ::cpowdd(z, w); }
+inline __complex128  cpow(__complex128 z, __complex128 w)   { return ::cpowq(z, w); }
+inline CMp           cpow(CMp const &z, CMp const &w)       { return c_exp(c_mul(w, c_log(z))); }
+
+// csinpi / ccospi: forward π-scaled complex. qp oracle multiplies by
+// M_PIq then csin/ccos; mpreal uses clean π.
+inline complex64x2_t csinpi(complex64x2_t z) { return ::csinpidd(z); }
+inline __complex128  csinpi(__complex128 z) {
+  __complex128 pi; __real__ pi = (q_t)M_PIq; __imag__ pi = 0;
+  return ::csinq(pi * z);
+}
+inline CMp csinpi(CMp const &z) {
+  static const mp_t pi = mpfr::const_pi(multifloats_test::kMpfrPrec);
+  return c_sin({pi * z.re, pi * z.im});
+}
+
+inline complex64x2_t ccospi(complex64x2_t z) { return ::ccospidd(z); }
+inline __complex128  ccospi(__complex128 z) {
+  __complex128 pi; __real__ pi = (q_t)M_PIq; __imag__ pi = 0;
+  return ::ccosq(pi * z);
+}
+inline CMp ccospi(CMp const &z) {
+  static const mp_t pi = mpfr::const_pi(multifloats_test::kMpfrPrec);
+  return c_cos({pi * z.re, pi * z.im});
+}
 
 } // namespace fx
 
@@ -405,10 +530,6 @@ static void check_cplx(char const *op, complex64x2_t const &got_dd,
 #define CHECK1_LABEL(LABEL, NAME) check(LABEL, fx::NAME(f1), fx::NAME(q1), fx::NAME(m1))
 // Real binary (inputs: f1,f2 / q1,q2 / m1,m2).
 #define CHECK2(NAME) check(#NAME, fx::NAME(f1, f2), fx::NAME(q1, q2), fx::NAME(m1, m2))
-// Bessel with integer order.
-#define CHECK_BESN(LABEL, NAME, N) \
-  check(LABEL, fx::NAME(N, f1), fx::NAME(N, q1), fx::NAME(N, m1))
-
 // Complex unary (input: zd1/zq1/zm1).
 #define CHECK_C1(STEM) check_cplx("cdd_" #STEM, \
   fx::c##STEM(zd1), fx::c##STEM(zq1), fx::c##STEM(zm1))
@@ -546,20 +667,29 @@ int main(int argc, char **argv) {
     {
       q_t qe = expq(q1);
       if (q_isfinite(qe)) CHECK1(exp);
+      q_t qe2 = exp2q(q1);
+      if (q_isfinite(qe2)) CHECK1(exp2);
       q_t qem = expm1q(q1);
       if (q_isfinite(qem)) CHECK1(expm1);
     }
-    if (q1 > (q_t)0)  { CHECK1(log); CHECK1(log10); }
+    if (q1 > (q_t)0)  { CHECK1(log); CHECK1(log2); CHECK1(log10); }
     if (q1 > (q_t)-1) { CHECK1(log1p); }
 
     // trig
     if (aq1 < (q_t)1e6q) {
       CHECK1(sin); CHECK1(cos);
       if (fabsq(cosq(q1)) > (q_t)1e-12q) CHECK1(tan);
+
+      // Fused sincos: compare each output independently.
+      float64x2_t sc_s, sc_c;
+      ::sincosdd(mf::detail::to_f64x2(f1), &sc_s, &sc_c);
+      check("sincos_s", mf::detail::from_f64x2(sc_s), ::sinq(q1), mpfr::sin(m1));
+      check("sincos_c", mf::detail::from_f64x2(sc_c), ::cosq(q1), mpfr::cos(m1));
     }
     if (aq1 <= (q_t)1) { CHECK1(asin); CHECK1(acos); }
     CHECK1(atan);
     CHECK2(atan2);
+    CHECK2(atan2pi);
 
     // π-scaled trig (mpreal carries π cleanly; qp loses 1 ulp on the mul).
     if (aq1 < (q_t)1e6q) {
@@ -570,28 +700,70 @@ int main(int argc, char **argv) {
     CHECK1(atanpi);
 
     // hyperbolic
-    if (aq1 < (q_t)700) { CHECK1(sinh); CHECK1(cosh); CHECK1(tanh); }
+    if (aq1 < (q_t)700) {
+      CHECK1(sinh); CHECK1(cosh); CHECK1(tanh);
+
+      // Fused sinhcosh.
+      float64x2_t hc_s, hc_c;
+      ::sinhcoshdd(mf::detail::to_f64x2(f1), &hc_s, &hc_c);
+      check("sinhcosh_s", mf::detail::from_f64x2(hc_s), ::sinhq(q1), mpfr::sinh(m1));
+      check("sinhcosh_c", mf::detail::from_f64x2(hc_c), ::coshq(q1), mpfr::cosh(m1));
+    }
     CHECK1(asinh);
     if (q1 >= (q_t)1) CHECK1(acosh);
     if (aq1 < (q_t)1) CHECK1(atanh);
 
     // special (erf / gamma)
     if (aq1 < (q_t)100)                    { CHECK1(erf); CHECK1(erfc); }
+    // erfcx gate: |x| < 26 keeps exp(x²) inside qp's exponent range so
+    // the composite oracle stays representable (MPFR handles much wider
+    // but matching the fuzz.cc gate keeps the two reports comparable).
+    if (aq1 < (q_t)26)                     { CHECK1(erfcx); }
     if (q1 > (q_t)0 && q1 < (q_t)100)      { CHECK1(tgamma); CHECK1(lgamma); }
+
+    // fmadd(a, b, c) = a·b + c. Use q2 for b and (q1+q2)/2 for c so all
+    // three args stay in a similar dynamic range (avoids a·b swamping c).
+    {
+      q_t q3 = (q1 + q2) * (q_t)0.5q;
+      mf::float64x2 f3 = from_q(q3);
+      mp_t m3 = to_mp(f3);
+      check("fmadd",
+            fx::fmadd_fx(f1, f2, f3),
+            fx::fmadd_fx(q1, q2, q3),
+            fx::fmadd_fx(m1, m2, m3));
+    }
 
     // pow
     q_t aq2 = q2 < 0 ? -q2 : q2;
     if (q1 > (q_t)1e-3q && q1 < (q_t)1e3q && aq2 < (q_t)30) CHECK2(pow);
 
     // ---------------- Bessel (labels use ops.py's bench_key convention) ----------------
+    // Sweep several integer orders to exercise the backward-recurrence
+    // seed (low n) and the forward-recurrence tail (higher n) in jndd/yndd.
     if (aq1 < (q_t)200) {
       CHECK1_LABEL("bj0", j0);
       CHECK1_LABEL("bj1", j1);
-      CHECK_BESN("bjn", jn, 3);
+      static constexpr int kBesselOrders[] = {2, 3, 5, 8};
+      for (int n : kBesselOrders) {
+        check("bjn", fx::jn(n, f1), fx::jn(n, q1), fx::jn(n, m1));
+      }
       if (q1 > (q_t)0) {
         CHECK1_LABEL("by0", y0);
         CHECK1_LABEL("by1", y1);
-        CHECK_BESN("byn", yn, 3);
+        for (int n : kBesselOrders) {
+          check("byn", fx::yn(n, f1), fx::yn(n, q1), fx::yn(n, m1));
+        }
+
+        // yn_rangedd: single forward-recurrence sweep filling out[0..5].
+        // Each output compared individually; one label aggregates.
+        float64x2_t yn_out[6];
+        ::yn_rangedd(0, 5, mf::detail::to_f64x2(f1), yn_out);
+        for (int n = 0; n <= 5; ++n) {
+          check("yn_range",
+                mf::detail::from_f64x2(yn_out[n]),
+                ::ynq(n, q1),
+                mpfr::besselyn((long)n, m1));
+        }
       }
     }
 
@@ -628,12 +800,23 @@ int main(int argc, char **argv) {
     // Complex transcendentals.
     CHECK_C1(sqrt);
     CHECK_C1(exp);
+    // cexpm1 — DD precision-preserving near z=0; gate |z| > 1e-5 so the
+    // qp/mpreal composed oracles (cexp(z) - 1) stay meaningful.
+    if (c_abs(zm1) > mp_t(1e-5)) CHECK_C1(expm1);
+
     CHECK_C1(sin); CHECK_C1(cos);
     CHECK_C1(sinh); CHECK_C1(cosh);
     {
       mp_t az = c_abs(zm1);
-      if (az > mp_t(1e-200) && az < mp_t(1e100)) CHECK_C1(log);
+      if (az > mp_t(1e-200) && az < mp_t(1e100)) {
+        CHECK_C1(log);
+        CHECK_C1(log2);
+        CHECK_C1(log10);
+      }
     }
+    // clog1p — gate |1+z| away from the branch cut at z=-1.
+    if (c_abs({zm1.re + 1, zm1.im}) > mp_t(1e-5)) CHECK_C1(log1p);
+
     if (c_abs(c_cos(zm1))  > mp_t(1e-10)) CHECK_C1(tan);
     if (c_abs(c_cosh(zm1)) > mp_t(1e-10)) CHECK_C1(tanh);
     CHECK_C1(asin);
@@ -642,6 +825,26 @@ int main(int argc, char **argv) {
     CHECK_C1(asinh);
     CHECK_C1(acosh);
     CHECK_C1(atanh);
+
+    // csinpi / ccospi — forward π-scaled complex trig.
+    CHECK_C1(sinpi);
+    CHECK_C1(cospi);
+
+    // cproj — finite input → identity. Narrow inputs are finite.
+    CHECK_C1(proj);
+
+    // carg — complex → real scalar phase.
+    check("cdd_arg", fx::carg(zd1), fx::carg(zq1), fx::carg(zm1));
+
+    // cpow — two inputs; use zd1^zd2 (constrained ranges already enforced
+    // by the narrow generator).
+    {
+      mp_t azb = c_abs(zm1);
+      mp_t aze = c_abs(zm2);
+      if (azb > mp_t(1e-2) && azb < mp_t(1e2) && aze < mp_t(10)) {
+        check_cplx("cdd_pow", fx::cpow(zd1, zd2), fx::cpow(zq1, zq2), fx::cpow(zm1, zm2));
+      }
+    }
   }
 
   print_report();
