@@ -30,17 +30,6 @@ complex64x2_t csubdd(complex64x2_t a, complex64x2_t b) {
   return { to(ar - br), to(ai - bi) };
 }
 
-// 4-mul form. Karatsuba (3 muls, 5 adds, Im = (a+b)(c+d) − ac − bd) was
-// tried and rejected in Fortran: ~2× slower for DD (1 saved mul < 3 extra
-// adds) and less precise — the subtraction loses bits when |ac+bd| ≫ |Im|.
-// Regression test `test_complex_mul_cancellation` in test/test.cc locks
-// the 4-mul semantics on the classic witness a = (1, ε), b = (-1, ε).
-complex64x2_t cmuldd(complex64x2_t a, complex64x2_t b) {
-  float64x2 ar = from(a.re), ai = from(a.im);
-  float64x2 br = from(b.re), bi = from(b.im);
-  return { to(ar * br - ai * bi), to(ar * bi + ai * br) };
-}
-
 // a*b − c*d in DD with compensated cross-difference: captures the
 // sub-ulp residuals dropped by a normal DD mul so the subtraction
 // stays full-DD even under catastrophic cancellation (|a*b| ≈ |c*d|).
@@ -48,8 +37,9 @@ complex64x2_t cmuldd(complex64x2_t a, complex64x2_t b) {
 // products agree to ~N bits, that residual becomes the 2^(-106+N)
 // relative error of the result. Here we keep the residuals and fold
 // them into a two_sum chain.
-static inline float64x2 dd_cross_diff(float64x2 a, float64x2 b,
-                                      float64x2 c, float64x2 d) {
+__attribute__((noinline, cold))
+static float64x2 dd_cross_diff(float64x2 a, float64x2 b,
+                               float64x2 c, float64x2 d) {
   double a0 = a._limbs[0], a1 = a._limbs[1];
   double b0 = b._limbs[0], b1 = b._limbs[1];
   double c0 = c._limbs[0], c1 = c._limbs[1];
@@ -130,6 +120,67 @@ static inline float64x2 dd_x2y2m1(float64x2 x, float64x2 y) {
   double hi = T0 + T1;
   double lo = T1 - (hi - T0);
   return float64x2(hi, lo);
+}
+
+// 4-mul form with cancellation-gated compensation. Each component is
+// computed the cheap way first (two DD muls + a DD add/sub); if the
+// leading-limb ratio |R|/max(|p|,|q|) drops below 2⁻¹ the DD sub/add
+// shed cancellation bits below DD precision, so re-run that component
+// through `dd_cross_diff` to recover the full DD answer. The detector
+// also fires on the classic exact-zero witness a = (1, ε), b = (-1, ε)
+// pinned by `test_complex_mul_cancellation` in test/test.cc: Re sees
+// no cancellation so the cheap path keeps the full-DD -1 - ε²; Im
+// hi-limbs cancel exactly, the compensated path returns exact 0.
+//
+// Im = ar·bi + ai·br is a *sum*; route it through dd_cross_diff by
+// negating one operand (DD-limb negation is exact, no precision cost).
+//
+// Karatsuba (3 muls, 5 adds, Im = (a+b)(c+d) − ac − bd) was tried and
+// rejected in Fortran: ~2× slower and less precise — the subtraction
+// loses bits when |ac+bd| ≫ |Im|.
+complex64x2_t cmuldd(complex64x2_t a, complex64x2_t b) {
+  float64x2 ar = from(a.re), ai = from(a.im);
+  float64x2 br = from(b.re), bi = from(b.im);
+
+  float64x2 p_re = ar * br;
+  float64x2 q_re = ai * bi;
+  float64x2 re_dd = p_re - q_re;
+
+  float64x2 p_im = ar * bi;
+  float64x2 q_im = ai * br;
+  float64x2 im_dd = p_im + q_im;
+
+  // 2⁻⁴ caps worst-case rel-err of the cheap path at ~16 ulp_dd while
+  // keeping the compensated branch off the hot path on random data
+  // (|R|/max < 1/16 on ~6% of uniform-quadrant inputs). Tighter 2⁻¹
+  // triggered on ~25% and more than halved cdd_mul bench speedup;
+  // looser 2⁻⁸ let the 100+-ulp regime through. See
+  // doc/developer/PROGRESS-PRECISION.md.
+  constexpr double kCancelThresh = 0x1p-4;
+
+  double abs_re   = std::fabs(re_dd._limbs[0]);
+  double abs_p_re = std::fabs(p_re._limbs[0]);
+  double abs_q_re = std::fabs(q_re._limbs[0]);
+  double max_re   = abs_p_re > abs_q_re ? abs_p_re : abs_q_re;
+
+  double abs_im   = std::fabs(im_dd._limbs[0]);
+  double abs_p_im = std::fabs(p_im._limbs[0]);
+  double abs_q_im = std::fabs(q_im._limbs[0]);
+  double max_im   = abs_p_im > abs_q_im ? abs_p_im : abs_q_im;
+
+  float64x2 re = re_dd, im = im_dd;
+  // __builtin_expect marks the compensated branch cold so the compiler
+  // keeps the hot path (no compensation) straight-line and doesn't
+  // speculatively schedule dd_cross_diff ops into it.
+  if (__builtin_expect(max_re != 0.0 && abs_re < kCancelThresh * max_re, 0)) {
+    re = dd_cross_diff(ar, br, ai, bi);
+  }
+  if (__builtin_expect(max_im != 0.0 && abs_im < kCancelThresh * max_im, 0)) {
+    // ar·bi + ai·br = ar·bi − (−ai)·br. Negating both limbs is exact.
+    float64x2 neg_ai(-ai._limbs[0], -ai._limbs[1]);
+    im = dd_cross_diff(ar, bi, neg_ai, br);
+  }
+  return { to(re), to(im) };
 }
 
 // Complex DD divide: (a + bi) / (c + di) with compensated numerators.
