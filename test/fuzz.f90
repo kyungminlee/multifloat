@@ -159,6 +159,11 @@ program multifloat_fuzz
            call check(tan(f1), tan(q1), "tan", q1, 0.0_qp, num_errors)
          end if
        end if
+       ! Note: sinpi / cospi / tanpi / {asin,acos,atan}pi are validated in
+       ! test/fuzz_mpfr.cc via a 200-bit mpreal reference. The natural qp
+       ! oracle (sinq(pi_q * q1) etc.) burns ~1 qp ulp on the π-multiply,
+       ! which blows up relative error near zeros of sin — the kernel is
+       ! full DD, but the qp oracle cannot prove it.
 
        ! Inverse trig
        if (ieee_is_finite(real(q1, 8)) .and. abs(q1) <= 1.0_qp) then

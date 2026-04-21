@@ -14,7 +14,7 @@
 // Tolerances mirror fuzz.f90's is_full_dd / is_compound classification:
 //   1e-26   full DD (~106-bit) operations
 //   1e-10   compound transcendentals (gamma, lgamma)
-//   1e-15   single-double ops and libm-quality transcendentals
+//   1e-15   single-double ops and libm-quality transcendentals (~5 ulp of dp)
 // Built with g++ + libquadmath.
 
 #include "multifloats.hh"
@@ -179,12 +179,12 @@ static void check(char const *op, mf::float64x2 const &got, q_t expected, q_t i1
     rel_err = (double)(diff / abs_exp);
     if (is_full_dd(op)) tol = 1e-26;
     else if (is_compound(op)) tol = 1e-10;
-    else tol = 1e-14;
+    else tol = 1e-15;
   } else {
     rel_err = (double)(diff / input_mag);
     if (is_full_dd(op)) tol = 1e-28;
     else if (is_compound(op)) tol = 1e-10;
-    else tol = 1e-14;
+    else tol = 1e-15;
   }
 
   // Skip subnormal input/output range from the precision report and

@@ -11,7 +11,6 @@
 #include "multifloats.hh"
 #include "test_common.hh"
 
-#define MPFR_WANT_FLOAT128
 #include <mpreal.h>
 
 #include <cmath>
@@ -43,11 +42,17 @@ inline mp_t to_mp(multifloats::float64x2 const &x) {
 
 inline mp_t to_mp(q_t v) {
   init_mpfr_default_prec();
-  mp_t r;
-  // mpfr_set_float128 preserves the full 113-bit float128 mantissa.
-  // A two-double split would silently truncate to ~106 bits, masking
-  // the float128 vs DD gap the test is meant to expose.
-  mpfr_set_float128(r.mpfr_ptr(), (_Float128)v, mpfr::mpreal::get_default_rnd());
+  // 3-double split captures all 113 qp bits exactly: each limb fits in 53
+  // bits, 3*53=159 ≥ 113, and the mpreal has 200-bit precision so the sums
+  // are lossless. Avoids mpfr_set_float128, which requires MPFR built with
+  // --enable-float128 (not on by default in most package managers).
+  double hi = (double)v;
+  if (!std::isfinite(hi)) return mp_t(hi);
+  double lo  = (double)(v - (q_t)hi);
+  double lo2 = (double)(v - (q_t)hi - (q_t)lo);
+  mp_t r(hi);
+  r += mp_t(lo);
+  r += mp_t(lo2);
   return r;
 }
 

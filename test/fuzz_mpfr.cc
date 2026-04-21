@@ -12,6 +12,7 @@
 // Built only when -DBUILD_MPFR_TESTS=ON.
 
 #include "multifloats.hh"
+#include "multifloats_c.h"
 #include "test_common.hh"
 #include "test_common_mpfr.hh"
 
@@ -259,6 +260,37 @@ int main(int argc, char **argv) {
     }
     check("atan",  mf::atan(f1),      atanq(q1),      mpfr::atan(m1));
     check("atan2", mf::atan2(f1, f2), atan2q(q1, q2), mpfr::atan2(m1, m2));
+
+    // π-scaled trig: validated via C ABI (sinpidd/cospidd/...) since the
+    // public C++ header does not expose sinpi/cospi. The qp oracle would
+    // cost a full qp ulp on the implicit π-multiply, blowing up near zeros
+    // — mpreal at 200 bits carries exact π to DD precision so the reference
+    // is noise-free. ref_q is deliberately taken as sinq(pi_q * q1) to
+    // surface the float128 floor in the max_q column.
+    {
+      static const mp_t pi_mp = mpfr::const_pi(multifloats_test::kMpfrPrec);
+      static const q_t pi_q = (q_t)M_PIq;
+      if (aq1 < (q_t)1e6q) {
+        check("sinpi", mf::detail::from_f64x2(sinpidd(mf::detail::to_f64x2(f1))),
+              sinq(pi_q * q1), mpfr::sin(pi_mp * m1));
+        check("cospi", mf::detail::from_f64x2(cospidd(mf::detail::to_f64x2(f1))),
+              cosq(pi_q * q1), mpfr::cos(pi_mp * m1));
+        // tanpi near odd half-integers: skip when cos(pi*q) ~ 0 since the
+        // oracle cannot resolve the pole.
+        if (fabsq(cosq(pi_q * q1)) > (q_t)1e-12q) {
+          check("tanpi", mf::detail::from_f64x2(tanpidd(mf::detail::to_f64x2(f1))),
+                tanq(pi_q * q1), mpfr::tan(pi_mp * m1));
+        }
+      }
+      if (aq1 <= (q_t)1) {
+        check("asinpi", mf::detail::from_f64x2(asinpidd(mf::detail::to_f64x2(f1))),
+              asinq(q1) / pi_q, mpfr::asin(m1) / pi_mp);
+        check("acospi", mf::detail::from_f64x2(acospidd(mf::detail::to_f64x2(f1))),
+              acosq(q1) / pi_q, mpfr::acos(m1) / pi_mp);
+      }
+      check("atanpi", mf::detail::from_f64x2(atanpidd(mf::detail::to_f64x2(f1))),
+            atanq(q1) / pi_q, mpfr::atan(m1) / pi_mp);
+    }
 
     // hyperbolic
     if (aq1 < (q_t)700) {

@@ -41,6 +41,8 @@ _DD_ULP = 2.0 ** -105  # ~2.46e-32; 1 ulp of a ~106-bit DD significand
 
 
 def _format_max_rel(v: float) -> str:
+    if not _finite(v) or v < 0.0:
+        return EMDASH
     if v == 0.0:
         return "exact"
     u = v / _DD_ULP
@@ -87,6 +89,8 @@ def speedup_filter(op: ops_mod.Op, system: dict, lang: str) -> str:
     if not entry or not _finite(entry.get("speedup")):
         return EMDASH
     v = float(entry["speedup"])
+    if v <= 0.0:
+        return EMDASH
     s = _format_speedup_number(v)
     if v >= 2.0:
         return f"**{s}**"

@@ -207,9 +207,9 @@ def cmake_build(build_dir: Path, targets: list[str]) -> None:
     )
 
 
-def run_exe(exe: Path) -> str:
+def run_exe(exe: Path, *args: str) -> str:
     print(f"  running {exe.name} ...", file=sys.stderr, flush=True)
-    out = subprocess.run([str(exe)], capture_output=True, text=True, check=True)
+    out = subprocess.run([str(exe), *args], capture_output=True, text=True, check=True)
     return out.stdout
 
 
@@ -288,6 +288,47 @@ def parse_fuzz(stdout: str) -> dict[str, dict]:
     return results
 
 
+# A fuzz_mpfr row has 4 numeric columns (max_q, mean_q, max_dd, mean_dd).
+# We care about the DD-vs-mpreal pair for the merged JSON.
+_FUZZ_MPFR_ROW_RE = re.compile(
+    r"^\s+(?P<op>\S+)\s+"
+    r"(?P<n>\d+)\s+"
+    r"(?P<max_q>-?\d+\.\d+[Ee][+-]?\d+)\s+"
+    r"(?P<mean_q>-?\d+\.\d+[Ee][+-]?\d+)\s+"
+    r"(?P<max_dd>-?\d+\.\d+[Ee][+-]?\d+)\s+"
+    r"(?P<mean_dd>-?\d+\.\d+[Ee][+-]?\d+)\s*$"
+)
+
+
+def parse_fuzz_mpfr(stdout: str) -> dict[str, dict]:
+    """Parse cpp_fuzz_mpfr's 3-way report. Returns {op: {n, max_rel, mean_rel}}
+    where max/mean_rel are DD-vs-mpreal (the ground truth at 200 bits)."""
+    results: dict[str, dict] = {}
+    in_report = False
+    for line in stdout.splitlines():
+        if "3-way precision report" in line:
+            in_report = True
+            continue
+        if not in_report:
+            continue
+        if not line.strip():
+            if results:
+                break
+            continue
+        m = _FUZZ_MPFR_ROW_RE.match(line)
+        if not m:
+            continue
+        op = m.group("op").strip()
+        if op.lower() == "op":
+            continue
+        results[op] = {
+            "n": int(m.group("n")),
+            "max_rel": float(m.group("max_dd")),
+            "mean_rel": float(m.group("mean_dd")),
+        }
+    return results
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -319,6 +360,10 @@ def main() -> int:
         targets += ["cpp_bench"]
         if not args.skip_fuzz:
             targets += ["cpp_fuzz"]
+    # If the MPFR fuzz target was configured, build + run it too. The build
+    # falls through with no warning when BUILD_MPFR_TESTS is off.
+    if not args.skip_fuzz and (args.build_dir / "CMakeFiles" / "cpp_fuzz_mpfr.dir").exists():
+        targets += ["cpp_fuzz_mpfr"]
 
     if not args.no_build:
         print("Building benchmark executables ...", file=sys.stderr)
@@ -344,6 +389,27 @@ def main() -> int:
         data["cpp"]["bench"] = parse_bench(run_exe(args.build_dir / "cpp_bench"))
         if not args.skip_fuzz:
             data["cpp"]["fuzz"] = parse_fuzz(run_exe(args.build_dir / "cpp_fuzz"))
+
+    # MPFR-backed precision fuzz. Only built when BUILD_MPFR_TESTS=ON was
+    # passed to cmake. Its mpreal @ 200-bit oracle is ~70 bits cleaner than
+    # libquadmath, so its DD max_rel numbers supersede whatever the qp-oracle
+    # fuzz reports for the same op — notably sinpi/cospi/tanpi, where the qp
+    # oracle burns a ulp on the implicit π-multiply. When both are present,
+    # MPFR values take precedence; when MPFR is absent, qp-oracle rules as
+    # before.
+    mpfr_exe = args.build_dir / "cpp_fuzz_mpfr"
+    if not args.skip_fuzz and mpfr_exe.exists():
+        # 1 M iterations matches the qp-oracle fuzz runs so pi-family ops
+        # see enough near-integer arguments to exercise the hardest cases.
+        mpfr_fuzz = parse_fuzz_mpfr(run_exe(mpfr_exe, "1000000", "42"))
+        # C ABI exercises the shared kernel, so MPFR values apply to both
+        # the Fortran and the C++ surface equally.
+        for lang in ("fortran", "cpp"):
+            fuzz = data.get(lang, {}).get("fuzz")
+            if fuzz is None:
+                continue
+            for op, entry in mpfr_fuzz.items():
+                fuzz[op] = entry
 
     slug = args.slug or slugify(args.name)
     out_path = args.output_dir / f"benchmark-{slug}.json"
