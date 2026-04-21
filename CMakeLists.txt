@@ -148,8 +148,6 @@ target_link_libraries(blas-multifloat PRIVATE multifloatsf)
 # Fortran library uses C++ DD kernels via bind(C) (extern "C" in multifloats_math.cc)
 target_link_libraries(multifloatsf PUBLIC multifloats)
 
-mf_add_fortran_executable(fortran_bench_c ./test/bench_c.f90)
-
 add_library(dd-bindc OBJECT ./test/dd_bindc.f90)
 target_compile_options(dd-bindc PRIVATE -O3)
 set_target_properties(dd-bindc PROPERTIES

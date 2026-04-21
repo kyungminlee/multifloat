@@ -41,10 +41,9 @@ Determinism is enforced by two extra ctest entries (`fuzz_cpp_determinism`,
 
 | File | Target | Purpose |
 |---|---|---|
-| `bench.cc` | `cpp_bench` | Timing every kernel category; qp vs DD speedup. |
-| `bench.f90` | `fortran_bench` | Fortran counterpart. |
-| `bench_c.f90` | `fortran_bench_c` | Three-way: qp vs Fortran DD vs C-ABI wrappers around the C++ kernels. |
-| `bench_abi.f90` | `fortran_bench_abi` | Isolates ABI overhead from codegen (`bind(c)`-value vs native derived-type ABI). |
+| `bench.cc` | `cpp_bench` | Times every C-ABI kernel (`sindd`, `cdd_muldd`, `j0dd`, ...); qp vs DD speedup. |
+| `bench.f90` | `fortran_bench` | Fortran elemental counterpart — same kernels, Fortran hidden-pointer ABI. |
+| `bench_abi.f90` | `fortran_bench_abi` | Isolates ABI overhead from codegen (`bind(c)`-value vs native derived-type ABI) on 5 core ops. |
 
 All benchmarks use a cross-rep feedback drain inside the timed region so
 `-O3` cannot hoist or elide the inner loop; see the header comment in
