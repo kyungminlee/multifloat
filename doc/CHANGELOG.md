@@ -106,6 +106,50 @@ Dates are ISO-8601 UTC.
   inheriting the Kahan `log1p(4a/den)` form and the unit-circle
   `dd_x2y2m1` denominator. Bench cost: ~6% slower (0.0016 → 0.0017 s
   / 4096 ops).
+- `casindd` used the textbook `−i·log(iz + sqrt(1 − z²))` which lost
+  ~3 decimals near the real-axis branch cuts because `1 − z²` cancels
+  catastrophically when `|Re z| ≈ 1`. Now delegates to `casinhdd` via
+  `asin(z) = −i·asinh(iz)`, inheriting the libquadmath-ported 10-region
+  branch schedule. max_rel on cdd_asin_re dropped from 7.5e-29 to
+  4.0e-32, cdd_asin_im from 7.6e-29 to 4.2e-32 (≈1800× better worst
+  case). `cacosdd` = π/2 − casin inherits the Im-part fix, so
+  cdd_acos_im also improved from 7.6e-29 to 4.2e-32; cdd_acos_re is
+  unchanged (bottlenecked by the π/2 subtraction, not casindd).
+  Bench cost: none (0.0034 → 0.0033 s / 4096 ops, within noise).
+  casinhdd's own signed-zero trailer reproduces the C99 G.6.2.2
+  branch-cut sign fixup for `|Re z| > 1 ± 0` (#16.4 still covered).
+- `cacosdd` real part lost up to ~6 decimals of relative precision
+  when |z| > 1 with tiny Im — the π/2 − asin.re subtraction was capped
+  at DD-absolute of π/2 (~1e-32), which inflated to ~1e-27 relative when
+  the true output was ~1e-6 (e.g. z ≈ 26.6 − 4e-5 i, acos(z).re ≈
+  1.67e-6 vs the reference). Now domain-splits: |z| ≤ 1 keeps the direct
+  π/2 − asin form (no cancellation there); |z| > 1 routes through
+  cacoshdd via `acos(z) = −i·acosh(z)` so Re(acos) = Im(acosh), putting
+  the small output on a non-cancelling path. max_rel on cdd_acos_re
+  dropped from 1.04e-28 to 3.65e-32 (≈2800× better worst case, both
+  vs `cacosq` and vs 200-bit MPFR). cdd_acos_im stays at 4.2e-32.
+  Bench cost: ~10% slower (0.0034 → 0.0037 s / 4096 ops) from the
+  cacoshdd Kahan-form overhead on the |z| > 1 half of inputs. Branch-
+  cut signs for `|x| > 1 ± 0` still pass via the Im-signbit-directed
+  conj-reflection (test/test.cc:562-565 still green).
+- `cacoshdd` real part had the mirror problem: when |z| < 1, acosh(z)
+  lies near iπ/2 (acosh(0) = iπ/2 exactly), so Re(acosh) is small and
+  Kahan's `2·log(sqrt((z+1)/2) + sqrt((z−1)/2))` capped Re at
+  DD-absolute of π/2 / 2 ≈ 1e-32. At the fuzz worst z ≈ −2.4e-4 +
+  2.5e-7 i the output .re ≈ 2.5e-7 gave ~6e-26 relative. Symmetric fix:
+  domain-split on |z|². |z| < 1 now delegates to cacosdd via the mirror
+  identity `acosh(z) = i · acos(z)` for Im(z) ≥ +0, or
+  `conj(i · acos(conj z))` for Im(z) < 0 (incl. −0). Component-wise
+  (Re acosh, Im acosh) = (−Im acos, ±Re acos), routing the small
+  component onto the full-DD Im(acos) path; |z| ≥ 1 keeps Kahan's
+  original form (stable near z ≈ 1). The cacos↔cacosh mutual-
+  delegation cycle terminates: cacos only routes for |z| > 1, cacosh
+  only for |z| < 1, so neither recurses back. max_rel on cdd_acosh_re
+  dropped from 2.95e-28 to 4.19e-32 (≈7000× better worst case, both
+  vs `cacoshq` and vs 200-bit MPFR). All six complex inverse
+  transcendentals (asin/acos/atan/asinh/acosh/atanh) × (re/im) are
+  now at full DD (~4e-32 max_rel). Bench cost: within noise (0.0036 →
+  0.0035 s / 4096 ops median over 3 runs).
 - `catanhdd(±1 + 0i)` returned NaN; now short-circuits at the
   branch-point singularity to `(copysign(inf, re), +0)` (#16.3).
 - `casindd` / `cacosdd` lost the signed-zero imag-part sign because

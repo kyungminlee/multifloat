@@ -448,43 +448,65 @@ complex64x2_t ctandd(complex64x2_t z) {
   return { to((sa * ca) / den), to((sb * cb) / den) };
 }
 
-// asin(z) = −i · log(i·z + sqrt(1 − z²)). Cuts on real axis for |a|>1.
+// asin(z) = −i · asinh(i·z). Delegating to casinhdd inherits its
+// libquadmath-ported 10-region branch schedule; the old textbook
+// `−i · log(iz + sqrt(1 − z²))` loses precision near the real-axis
+// branch cuts because 1 − z² cancels catastrophically when |Re z| ≈ 1.
+// casinhdd's signed-zero trailer already reproduces C99 G.6.2.2 for
+// |Re z| > 1 ± 0: i·z swaps limbs (a → Im, −b → Re) via exact DD
+// negation, so sign(Im asin) = sign(Im z) carries through symmetrically.
+// cacosdd = π/2 − casin inherits the fix for free.
 complex64x2_t casindd(complex64x2_t z) {
-  float64x2 a = from(z.re), b = from(z.im);
-  // 1 − z² : Re = 1 − a² + b², Im = −2ab
-  complex64x2_t one_mz2 = { to(float64x2(1.0) - a * a + b * b), to(-(a * b + a * b)) };
-  complex64x2_t root = csqrtdd(one_mz2);
-  float64x2 rr = from(root.re), ri = from(root.im);
-  // i·z + root : (−b + rr) + i·(a + ri)
-  complex64x2_t arg = { to(-b + rr), to(a + ri) };
-  complex64x2_t l = clogdd(arg);
-  // −i · (lr + i·li) = li − i·lr
-  complex64x2_t r = { l.im, to(-from(l.re)) };
-  // Branch-cut fixup for real-axis inputs with |Re z| > 1 (C99 G.6.2.2):
-  // the sign of Im(result) must mirror the sign of Im(input), including
-  // ±0. DD multiply doesn't preserve signed zero (2 * -0 → +0), so the
-  // sign is lost through the (a*b + a*b) chain. If the result ended up
-  // with the wrong sign, negate the WHOLE DD (both limbs) — a simple
-  // copysign-per-limb would corrupt the pair because a typical DD lo
-  // has the opposite sign from hi (representing the rounding residual).
-  // Use a DD-aware sign: for (hi=±0, lo≠0) the hi-limb signbit does not
-  // reflect the value's actual sign, so fall through to the lo limb.
-  // Route to the lo limb only when hi is an exact zero AND lo carries a
-  // nonzero value. For (hi=±0, lo=0) we keep signbit(hi) so ±0 is preserved.
-  auto dd_signbit = [](double hi, double lo) {
-    return (hi == 0.0 && lo != 0.0) ? std::signbit(lo) : std::signbit(hi);
-  };
-  if (dd_signbit(r.im.hi, r.im.lo) != dd_signbit(b._limbs[0], b._limbs[1])) {
-    r.im.hi = -r.im.hi;
-    r.im.lo = -r.im.lo;
-  }
-  return r;
+  complex64x2_t iz = { to(-from(z.im)), z.re };
+  complex64x2_t w = casinhdd(iz);
+  return { w.im, to(-from(w.re)) };
 }
 
-// acos(z) = π/2 − asin(z). Uses DD-precision π/2; the generic <complex>
-// template truncates `(_Tp)1.5707963…L` to double on arm64-macOS, losing
-// the DD low limb — specializing here fixes that correctness bug.
+// acos(z): domain-split between two full-DD formulations.
+//   |z| ≤ 1:  π/2 − asin(z). asin (via casinhdd) is full-DD and π/2
+//             subtracts cleanly because asin(z) is bounded by π/2 with
+//             room to spare — no cancellation when |z| ≤ 1.
+//   |z| > 1:  −i · acosh(z) for Im(z) ≥ +0, else the conj-reflection
+//             identity i · conj(acosh(conj z)) for Im(z) < 0 (including
+//             −0). Component-wise:
+//               Re(acos z) = +Im(acosh z')     (small-magnitude output)
+//               Im(acos z) = ∓Re(acosh z')     (large-magnitude output)
+//             where z' = z (Im≥+0) or conj(z) (Im<0). The swap puts the
+//             small output on the Im(acosh) path, which is full-DD even
+//             when Re(acos) is tiny. Avoids the catastrophic π/2 − asin
+//             cancellation that capped the old form at DD-absolute of
+//             π/2 (~1e-32 absolute → up to 1e-27 relative when the
+//             output was ~1e-6, e.g. z ≈ 26.6 − 4e-5 i).
+//           C99 G.6.2.2: cacos(x + 0i) for |x| > 1 must have Im < 0 (and
+//             Im > 0 for x − 0i). Both paths reproduce this via the sign
+//             of the input's Im DD-hi limb routed through either the
+//             direct `−asin.im` or the conj-reflection swap.
+//           π/2 is stored as DD so the subtraction path still beats the
+//             generic <complex> template (which truncates to double on
+//             arm64-macOS).
 complex64x2_t cacosdd(complex64x2_t z) {
+  double az2 = z.re.hi * z.re.hi + z.im.hi * z.im.hi;
+  if (az2 > 1.0) {
+    bool use_conj = std::signbit(z.im.hi);
+    complex64x2_t zc;
+    if (use_conj) {
+      zc.re = z.re;
+      zc.im.hi = -z.im.hi;
+      zc.im.lo = -z.im.lo;
+    } else {
+      zc = z;
+    }
+    complex64x2_t w = cacoshdd(zc);
+    complex64x2_t r;
+    r.re = w.im;
+    if (use_conj) {
+      r.im = w.re;
+    } else {
+      r.im.hi = -w.re.hi;
+      r.im.lo = -w.re.lo;
+    }
+    return r;
+  }
   static const float64x2 half_pi = float64x2(0x1.921fb54442d18p+0,
                                      0x1.1a62633145c07p-54);
   complex64x2_t s = casindd(z);
@@ -645,10 +667,51 @@ complex64x2_t casinhdd(complex64x2_t z) {
   return { to(re), to(im) };
 }
 
-// acosh(z). Kahan's formula: 2·log(sqrt((z+1)/2) + sqrt((z−1)/2)).
-// More stable near z≈1 than the naive log(z + sqrt(z²−1)) which suffers
-// cancellation in z²−1.
+// acosh(z). Domain-split:
+//   |z| < 1:  delegate to cacosdd via `acosh(z) = i · acos(z)` (Im(z) ≥ +0)
+//             or the conj-reflection `acosh(z) = conj(i · acos(conj z))`
+//             (Im(z) < 0, incl. −0). Component-wise:
+//               Re(acosh z) = −Im(acos z')  (small-magnitude near z=0)
+//               Im(acosh z) = ±Re(acos z')  (large-magnitude; +Re for
+//                                            Im≥0, −Re for Im<0)
+//             The swap puts the small output on the Im(acos) path, which
+//             via casindd/casinhdd is full-DD. cacosdd's |z| ≤ 1 arm
+//             uses the direct π/2 − asin form (no recursion back here).
+//             Recovers ~5 orders of magnitude on the fuzz worst case
+//             (z ≈ −2.4e-4 + 2.5e-7 i, acosh(z).re ≈ 2.5e-7 vs output
+//             magnitude π/2; π/2 − acos dominated the old Kahan form's
+//             absolute precision just like the acos case).
+//   |z| ≥ 1:  Kahan's 2·log(sqrt((z+1)/2) + sqrt((z−1)/2)) — stable near
+//             z ≈ 1 (avoids z²−1 cancellation) and away from the small-
+//             output regime that hurts near z ≈ 0.
+//         C99 G.6.2.3 branch-cut convention on Re z < 1, Im z = ±0: the
+//             delegated path routes through cacosdd (which already gets
+//             this right) and applies the conj-reflection based on
+//             signbit(z.im.hi), so ±0 propagates symmetrically.
 complex64x2_t cacoshdd(complex64x2_t z) {
+  double az2 = z.re.hi * z.re.hi + z.im.hi * z.im.hi;
+  if (az2 < 1.0) {
+    bool use_conj = std::signbit(z.im.hi);
+    complex64x2_t zc;
+    if (use_conj) {
+      zc.re = z.re;
+      zc.im.hi = -z.im.hi;
+      zc.im.lo = -z.im.lo;
+    } else {
+      zc = z;
+    }
+    complex64x2_t v = cacosdd(zc);
+    complex64x2_t r;
+    r.re.hi = -v.im.hi;
+    r.re.lo = -v.im.lo;
+    if (use_conj) {
+      r.im.hi = -v.re.hi;
+      r.im.lo = -v.re.lo;
+    } else {
+      r.im = v.re;
+    }
+    return r;
+  }
   float64x2 a = from(z.re), b = from(z.im);
   float64x2 half = float64x2(0.5, 0.0);
   complex64x2_t zp = { to((a + float64x2(1.0)) * half), to(b * half) };
