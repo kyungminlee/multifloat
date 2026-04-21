@@ -462,10 +462,51 @@ complex64x2_t casindd(complex64x2_t z) {
   return { w.im, to(-from(w.re)) };
 }
 
-// acos(z) = π/2 − asin(z). Uses DD-precision π/2; the generic <complex>
-// template truncates `(_Tp)1.5707963…L` to double on arm64-macOS, losing
-// the DD low limb — specializing here fixes that correctness bug.
+// acos(z): domain-split between two full-DD formulations.
+//   |z| ≤ 1:  π/2 − asin(z). asin (via casinhdd) is full-DD and π/2
+//             subtracts cleanly because asin(z) is bounded by π/2 with
+//             room to spare — no cancellation when |z| ≤ 1.
+//   |z| > 1:  −i · acosh(z) for Im(z) ≥ +0, else the conj-reflection
+//             identity i · conj(acosh(conj z)) for Im(z) < 0 (including
+//             −0). Component-wise:
+//               Re(acos z) = +Im(acosh z')     (small-magnitude output)
+//               Im(acos z) = ∓Re(acosh z')     (large-magnitude output)
+//             where z' = z (Im≥+0) or conj(z) (Im<0). The swap puts the
+//             small output on the Im(acosh) path, which is full-DD even
+//             when Re(acos) is tiny. Avoids the catastrophic π/2 − asin
+//             cancellation that capped the old form at DD-absolute of
+//             π/2 (~1e-32 absolute → up to 1e-27 relative when the
+//             output was ~1e-6, e.g. z ≈ 26.6 − 4e-5 i).
+//           C99 G.6.2.2: cacos(x + 0i) for |x| > 1 must have Im < 0 (and
+//             Im > 0 for x − 0i). Both paths reproduce this via the sign
+//             of the input's Im DD-hi limb routed through either the
+//             direct `−asin.im` or the conj-reflection swap.
+//           π/2 is stored as DD so the subtraction path still beats the
+//             generic <complex> template (which truncates to double on
+//             arm64-macOS).
 complex64x2_t cacosdd(complex64x2_t z) {
+  double az2 = z.re.hi * z.re.hi + z.im.hi * z.im.hi;
+  if (az2 > 1.0) {
+    bool use_conj = std::signbit(z.im.hi);
+    complex64x2_t zc;
+    if (use_conj) {
+      zc.re = z.re;
+      zc.im.hi = -z.im.hi;
+      zc.im.lo = -z.im.lo;
+    } else {
+      zc = z;
+    }
+    complex64x2_t w = cacoshdd(zc);
+    complex64x2_t r;
+    r.re = w.im;
+    if (use_conj) {
+      r.im = w.re;
+    } else {
+      r.im.hi = -w.re.hi;
+      r.im.lo = -w.re.lo;
+    }
+    return r;
+  }
   static const float64x2 half_pi = float64x2(0x1.921fb54442d18p+0,
                                      0x1.1a62633145c07p-54);
   complex64x2_t s = casindd(z);

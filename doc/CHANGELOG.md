@@ -118,6 +118,20 @@ Dates are ISO-8601 UTC.
   Bench cost: none (0.0034 → 0.0033 s / 4096 ops, within noise).
   casinhdd's own signed-zero trailer reproduces the C99 G.6.2.2
   branch-cut sign fixup for `|Re z| > 1 ± 0` (#16.4 still covered).
+- `cacosdd` real part lost up to ~6 decimals of relative precision
+  when |z| > 1 with tiny Im — the π/2 − asin.re subtraction was capped
+  at DD-absolute of π/2 (~1e-32), which inflated to ~1e-27 relative when
+  the true output was ~1e-6 (e.g. z ≈ 26.6 − 4e-5 i, acos(z).re ≈
+  1.67e-6 vs the reference). Now domain-splits: |z| ≤ 1 keeps the direct
+  π/2 − asin form (no cancellation there); |z| > 1 routes through
+  cacoshdd via `acos(z) = −i·acosh(z)` so Re(acos) = Im(acosh), putting
+  the small output on a non-cancelling path. max_rel on cdd_acos_re
+  dropped from 1.04e-28 to 3.65e-32 (≈2800× better worst case, both
+  vs `cacosq` and vs 200-bit MPFR). cdd_acos_im stays at 4.2e-32.
+  Bench cost: ~10% slower (0.0034 → 0.0037 s / 4096 ops) from the
+  cacoshdd Kahan-form overhead on the |z| > 1 half of inputs. Branch-
+  cut signs for `|x| > 1 ± 0` still pass via the Im-signbit-directed
+  conj-reflection (test/test.cc:562-565 still green).
 - `catanhdd(±1 + 0i)` returned NaN; now short-circuits at the
   branch-point singularity to `(copysign(inf, re), +0)` (#16.3).
 - `casindd` / `cacosdd` lost the signed-zero imag-part sign because
