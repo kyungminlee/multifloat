@@ -155,8 +155,8 @@ float64x2 cos_kernel(float64x2 const &x) {
 float64x2 sin_eval(float64x2 const &r) {
   constexpr double pi8 = 0.392699081698724;
   if (std::fabs(r._limbs[0]) <= pi8) return sin_kernel(r);
-  float64x2 pi4_dd = float64x2(0.7853981633974483, 3.061616997868383e-17);
-  float64x2 inv_sqrt2 = float64x2(0.7071067811865476, -4.833646656726457e-17);
+  float64x2 pi4_dd = float64x2(pi_quarter_hi, pi_quarter_lo);
+  float64x2 inv_sqrt2 = float64x2(inv_sqrt2_hi, inv_sqrt2_lo);
   bool pos = r._limbs[0] > 0.0;
   float64x2 rp = pos ? (r - pi4_dd) : (r + pi4_dd);
   float64x2 sk = sin_kernel(rp);
@@ -167,8 +167,8 @@ float64x2 sin_eval(float64x2 const &r) {
 float64x2 cos_eval(float64x2 const &r) {
   constexpr double pi8 = 0.392699081698724;
   if (std::fabs(r._limbs[0]) <= pi8) return cos_kernel(r);
-  float64x2 pi4_dd = float64x2(0.7853981633974483, 3.061616997868383e-17);
-  float64x2 inv_sqrt2 = float64x2(0.7071067811865476, -4.833646656726457e-17);
+  float64x2 pi4_dd = float64x2(pi_quarter_hi, pi_quarter_lo);
+  float64x2 inv_sqrt2 = float64x2(inv_sqrt2_hi, inv_sqrt2_lo);
   bool pos = r._limbs[0] > 0.0;
   float64x2 rp = pos ? (r - pi4_dd) : (r + pi4_dd);
   float64x2 sk = sin_kernel(rp);
@@ -186,8 +186,8 @@ void sincos_eval(float64x2 const &r, float64x2 &s, float64x2 &c) {
     c = cos_kernel(r);
     return;
   }
-  float64x2 pi4_dd = float64x2(0.7853981633974483, 3.061616997868383e-17);
-  float64x2 inv_sqrt2 = float64x2(0.7071067811865476, -4.833646656726457e-17);
+  float64x2 pi4_dd = float64x2(pi_quarter_hi, pi_quarter_lo);
+  float64x2 inv_sqrt2 = float64x2(inv_sqrt2_hi, inv_sqrt2_lo);
   bool pos = r._limbs[0] > 0.0;
   float64x2 rp = pos ? (r - pi4_dd) : (r + pi4_dd);
   float64x2 sk = sin_kernel(rp);
@@ -226,13 +226,7 @@ void sincos_full(float64x2 const &x, float64x2 &s, float64x2 &c) {
 }
 
 float64x2 sin_full(float64x2 const &x) {
-  if (!std::isfinite(x._limbs[0])) {
-    float64x2 r;
-    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  if (trig_arg_too_large(x._limbs[0])) return pi_trig_nan();
+  if (!std::isfinite(x._limbs[0]) || trig_arg_too_large(x._limbs[0])) return pi_trig_nan();
   float64x2 r;
   int q;
   reduce_pi_half(x, r, q);
@@ -245,13 +239,7 @@ float64x2 sin_full(float64x2 const &x) {
 }
 
 float64x2 cos_full(float64x2 const &x) {
-  if (!std::isfinite(x._limbs[0])) {
-    float64x2 r;
-    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  if (trig_arg_too_large(x._limbs[0])) return pi_trig_nan();
+  if (!std::isfinite(x._limbs[0]) || trig_arg_too_large(x._limbs[0])) return pi_trig_nan();
   float64x2 r;
   int q;
   reduce_pi_half(x, r, q);
@@ -264,13 +252,7 @@ float64x2 cos_full(float64x2 const &x) {
 }
 
 float64x2 tan_full(float64x2 const &x) {
-  if (!std::isfinite(x._limbs[0])) {
-    float64x2 r;
-    r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
-    r._limbs[1] = 0.0;
-    return r;
-  }
-  if (trig_arg_too_large(x._limbs[0])) return pi_trig_nan();
+  if (!std::isfinite(x._limbs[0]) || trig_arg_too_large(x._limbs[0])) return pi_trig_nan();
   float64x2 r;
   int q;
   reduce_pi_half(x, r, q);

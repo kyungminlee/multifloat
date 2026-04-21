@@ -421,11 +421,15 @@ ctest --test-dir build --output-on-failure
 ```
 
 The build produces:
-- `libmultifloat-fortran.a` — the Fortran module library (and the
-  generated `.mod` files in `build/modules/`).
+- `libmultifloats.a` — the C++ kernels (header-only API via
+  `src/multifloats.hh`; this static archive holds the out-of-line math
+  bodies and the C-ABI entry points from `src/multifloats_c.h`).
+- `libmultifloatsf-<compiler>.a` — the Fortran module library (the
+  compiler tag comes from `cmake/FortranCompiler.cmake`; the generated
+  `.mod` files live under `build/fmod/`).
 - `libblas-multifloat.a` — `wgemm` / `wtrsm` BLAS shims that operate on
   `float64x2` matrices.
-- Five test executables (see below).
+- Several test executables (see below).
 
 ## Tests
 
@@ -433,13 +437,17 @@ The build produces:
 ctest --test-dir build --output-on-failure
 ```
 
-| Test                  | Language | What it covers |
-| --------------------- | -------- | -------------- |
-| `multifloats_precision` | Fortran  | Targeted vs-quad precision checks for constructors, assignments, every arithmetic and reduction op, and edge-case sweeps (signed zero, infinities, NaN propagation, subnormal/huge boundary, ULP boundary, dim/mask/back reduction variants). |
-| `multifloat_fuzz`       | Fortran  | 1M random pairs through every public function for which random real input is meaningful. Adversarial input strategies cover subnormals, near-cancellation, overflow boundary, and non-finite limbs. Prints a per-op `(max_rel, mean_rel, count)` precision report at the end. |
-| `multifloat_test`       | Fortran  | Hand-written assertions for arithmetic, signed zero, NaN/Inf propagation, classification, math intrinsics, and rounding. |
-| `multifloats_test`      | C++      | Targeted vs-`__float128` precision checks for `src/multifloats.hh`. |
-| `multifloats_fuzz`      | C++      | C++ fuzz with the same precision-report machinery as the Fortran fuzz. |
+| Test                       | Language | What it covers |
+| -------------------------- | -------- | -------------- |
+| `precision_fortran`        | Fortran  | Targeted vs-quad precision checks for constructors, assignments, every arithmetic and reduction op, and edge-case sweeps (signed zero, infinities, NaN propagation, subnormal/huge boundary, ULP boundary, dim/mask/back reduction variants). |
+| `fuzz_fortran`             | Fortran  | 1M random pairs through every public function for which random real input is meaningful. Adversarial input strategies cover subnormals, near-cancellation, overflow boundary, and non-finite limbs. Prints a per-op `(max_rel, mean_rel, count)` precision report at the end. |
+| `precision_fortran_unit`   | Fortran  | Hand-written assertions for arithmetic, signed zero, NaN/Inf propagation, classification, math intrinsics, and rounding. |
+| `precision_abi_equivalence`| Fortran  | Cross-checks the three DD entry paths (native Fortran ops / C wrapper via `multifloats_c.h` / hand-written `bind(c)` reimpl in `test/dd_bindc.f90`) produce bit-identical results. |
+| `precision_cpp`            | C++      | Targeted vs-`__float128` precision checks for `src/multifloats.hh`. |
+| `fuzz_cpp`                 | C++      | C++ fuzz with the same precision-report machinery as the Fortran fuzz. |
+| `fuzz_cpp_determinism` / `fuzz_fortran_determinism` | shell | Diff two runs of the fuzz binaries to catch non-deterministic state. |
+| `dd_constants_up_to_date`  | Python   | Re-runs `scripts/gen_constants.py --check` to detect drift between `src/dd_constants.hh` and the generator. |
+| `fortran_abi_sync`         | shell    | `scripts/check_fortran_abi_sync.sh`: every `bind(c, name=*dd*)` in the generated Fortran module must match a `MULTIFLOATS_API` entry in `multifloats_c.h`. |
 
 ### Optional: MPFR-based 3-way precision test
 

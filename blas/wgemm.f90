@@ -8,7 +8,6 @@ SUBROUTINE wgemm (transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc&
  LOGICAL lsame
  EXTERNAL :: lsame
  EXTERNAL :: xerbla
- ! INTRINSIC :: max
  TYPE(FLOAT64X2) temp
  INTEGER i, info, j, l, nrowa, nrowb
  LOGICAL nota, notb

@@ -7,7 +7,6 @@ SUBROUTINE wtrsm (side, uplo, transa, diag, m, n, alpha, a, lda, b, ldb)
  LOGICAL lsame
  EXTERNAL :: lsame
  EXTERNAL :: xerbla
- ! INTRINSIC :: max
  TYPE(FLOAT64X2) temp
  INTEGER i, info, j, k, nrowa
  LOGICAL lside, nounit, upper

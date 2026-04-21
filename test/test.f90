@@ -76,10 +76,6 @@ contains
        print *, "  Expected: ", b_h, b_l
        print *, "  Got:      ", a%limbs
        num_errors = num_errors + 1
-    else
-       print *, "assert_approx succeeded: ", msg
-       print *, "  Expected: ", b_h, b_l
-       print *, "  Got:      ", a%limbs
     end if
   end subroutine
 
