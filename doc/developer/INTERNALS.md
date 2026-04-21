@@ -93,6 +93,7 @@ From `cpp_fuzz_mpfr` at 200-bit MPFR reference, post-audit:
 | `atanh`  | 5.3e-32    | ~2                                                            |
 | `tgamma` | 3.5e-31    | ~14                                                           |
 | `lgamma` | —          | ~2 (after the `x ≥ 13.5` shift-recurrence fix)                |
+| `cmul`   | 2.2e-31    | ~9 (Re and Im, after the 2⁻⁴ cancellation-gated compensation) |
 
 1 ulp_dd ≈ 2⁻¹⁰⁵ ≈ 2.47e-32. These numbers are the bar: a change that
 regresses any of them is rejected unless traded for a proportional win
@@ -186,7 +187,7 @@ Entry points for contributors trying to find the subtle pieces.
 | --------------------------------------- | ------------------------------------------------------------- |
 | `pi_trig_arg_too_large` (trig.inc)      | Unified range gate for `sin/cos/tan` (2^55) and `sinpi/cospi/tanpi` (2^52). |
 | `dd_signbit(hi, lo)`                    | Signed-zero-aware sign test; use instead of `signbit(hi)` when branch cuts matter. |
-| `dd_cross_diff(a,b,c,d)`                | `ab − cd` without catastrophic cancellation; expands to 14 scalar doubles through a TD accumulator. |
+| `dd_cross_diff(a,b,c,d)`                | `ab − cd` without catastrophic cancellation; expands to 14 scalar doubles through a TD accumulator. Marked `noinline, cold` so consumers (`cdivdd` always, `cmuldd` on cancellation) keep their hot path tight. |
 | `dd_x2y2m1(x, y)`                       | `x² + y² − 1` without the `1 − a² − b²` cancellation; used by `catanh` and `cacosh` on the unit circle. |
 | `reduce_pi_half` (trig.inc)             | DD Cody–Waite range reduction with `two_sum` on **both** hi and lo limbs per partial. The audit's "sloppy" add was the single worst precision leak. |
 | `exp_full` (exp_log.inc)                | Three-piece CW split of `ln2`. Removes the `y = x·log2e` cancellation that caused the ~300-ulp `exp` tail. Do not replace with a single-limb split. |
@@ -196,6 +197,7 @@ Entry points for contributors trying to find the subtle pieces.
 | Matmul `renorm_interval`                | Keeps compensated-FMA lo-limb bounded for large k. `ri = 8` is near-optimal; `README.md` table shows the trade-off. |
 | `fmoddd` gap-aware reduction            | `gap = ilogb(r) − ilogb(y)` selects between scalar `trunc(r_hi/y_hi)` (gap ≤ 53) and DD-level `trunc(r/y)` (gap > 53). The DD path carries ~106 integer bits per step and converges even for huge gaps. Residual floor ~2.5e9 DD ulp is intrinsic to DD when gap > 106 — fixing it requires TD/QD, out of scope. |
 | `casinhdd` / `catanhdd` branch schedules | Ported from libquadmath `__quadmath_kernel_casinhq` / `catanhq`. Each picks between ~8–10 regions on `(|Re|, |Im|)` and uses `log1p` of a positive sum (via `dd_x2y2m1` / `dd_cross_diff`) instead of `log(z + √(1+z²))` where the textbook form would collapse. `cacosh` / `cpow` on the unit circle share the `dd_x2y2m1` helper. |
+| `cmuldd` cancellation-gated compensation | Computes the cheap 4-mul form first, then fires `dd_cross_diff` per component when the leading-limb ratio `|R|/max(|p|,|q|) < 2⁻⁴` (same shape as `cexpm1dd`'s `kCancelThresh`). 2⁻⁴ caps cheap-path rel-err at ~16 ulp_dd while firing on ~6% of uniform-quadrant inputs; tighter 2⁻¹ > halves the bench speedup, looser 2⁻⁸ lets 100+-ulp regimes through. Fuzz: 248 → 9 ulp_dd on Re, 183 → 9.6 ulp_dd on Im. ~40% bench cost — the floor is the compensated branch existing in the function body, not detector arithmetic. |
 | `float64x3` + `td_mul_td` (multifloats.hh) | Triple-double primitives for kernels whose DD intermediates cancel. Consumers today: `cexpm1dd` Re path via `exp_full_td` (`exp_log.inc`) + `sincos_full_td` (`trig.inc`). See `TRIPLE_DOUBLE.md` for the "constants must also be TD" rule and the `kCancelThresh` regime-split pattern. |
 
 ## 7. How to validate a precision or speed change
