@@ -1,26 +1,29 @@
 // Decimal I/O for float64x2 — scientific-notation formatting.
 //
-// Layering. The core formatter lives as `multifloats::detail::format_scientific_chars`
-// — a named C++ function, called directly by the header-inline
-// `multifloats::to_chars` in multifloats.hh. The extern "C" `to_charsdd`
-// entry point (declared in multifloats_c.h) is a one-line shim on top of
-// the same detail primitive, for C / Fortran consumers. This avoids the
-// C++ → C → C++ round-trip that a straight extern-"C"-as-the-primary entry
-// would impose on header-inline C++ callers.
+// Layering. The core formatter `format_scientific_chars` is a file-local
+// (anon-namespace) helper, called directly by three siblings in this TU:
+//   * `multifloats::to_chars` (primary 5-arg overload) — wraps it with the
+//     `std::to_chars_result` return convention and the chars_format check.
+//   * `multifloats::operator<<` — writes the formatted bytes to an ostream.
+//   * extern "C" `to_charsdd` — the shim for C / Fortran consumers
+//     (declared in multifloats_c.h).
 //
-// The `multifloats::to_string` wrapper (also inline in multifloats.hh) sits
-// above `to_chars`, so the returned `std::string` is constructed entirely
-// in the consumer's translation unit — keeping the library's link surface
-// free of `std::string` and the libstdc++ `_GLIBCXX_USE_CXX11_ABI` dual-ABI
-// mangling distinction.
+// Header-inline `to_string` (in multifloats.hh) sits above `to_chars` and
+// constructs the returned `std::string` entirely in the consumer's TU,
+// keeping the library's link surface free of `std::string` and the
+// libstdc++ `_GLIBCXX_USE_CXX11_ABI` dual-ABI mangling distinction.
+// `std::to_chars_result` is ABI-stable (plain `{char*, errc}`), so the
+// 5-arg `to_chars` is safe to define out-of-line here.
 
 #include "multifloats.hh"
 
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>   // std::snprintf for exponent formatting
 #include <cstring>
 #include <ostream>
+#include <system_error>
 
 namespace {
 
@@ -41,11 +44,6 @@ inline void io_dd_mul_d(double &hi, double &lo, double d) {
   io_renorm(hi, lo);
 }
 
-} // anonymous namespace
-
-namespace multifloats {
-namespace detail {
-
 // Scientific-notation decimal formatter for float64x2. Writes into
 // [first, last) without a NUL terminator, returns one-past-last-written
 // on success or nullptr when the output wouldn't fit (in which case the
@@ -55,7 +53,8 @@ namespace detail {
 // Strategy: produce the full output into a fixed 48-byte tmp[] buffer
 // (sized to hold any legal output), then size-check once and memcpy into
 // the caller's range. Any legal output fits in at most ~42 bytes.
-char *format_scientific_chars(float64x2 const &value, int precision,
+char *format_scientific_chars(multifloats::float64x2 const &value,
+                              int precision,
                               char *first, char *last) noexcept {
   double hi = value._limbs[0];
   double lo = value._limbs[1];
@@ -150,26 +149,35 @@ char *format_scientific_chars(float64x2 const &value, int precision,
   return first + w;
 }
 
-} // namespace detail
-} // namespace multifloats
-
-extern "C" {
-char *to_charsdd(float64x2_t x, int precision, char *first, char *last) {
-  return multifloats::detail::format_scientific_chars(
-      multifloats::detail::from_f64x2(x), precision, first, last);
-}
-} // extern "C"
+} // anonymous namespace
 
 namespace multifloats {
+
+std::to_chars_result
+to_chars(char *first, char *last, float64x2 const &value,
+         std::chars_format fmt, int precision) noexcept {
+  if (fmt != std::chars_format::scientific)
+    return {first, std::errc::invalid_argument};
+  char *end = format_scientific_chars(value, precision, first, last);
+  if (!end) return {last, std::errc::value_too_large};
+  return {end, std::errc{}};
+}
 
 std::ostream &operator<<(std::ostream &os, float64x2 const &x) {
   int p = static_cast<int>(os.precision());
   if (p <= 17) p = 32;
   char buf[MULTIFLOATS_DD_CHARS_BUFSIZE];
-  char *end = detail::format_scientific_chars(x, p, buf, buf + sizeof(buf));
+  char *end = format_scientific_chars(x, p, buf, buf + sizeof(buf));
   // `buf` is sized to hold any legal output, so `end` is non-null here.
   if (end) os.write(buf, end - buf);
   return os;
 }
 
 } // namespace multifloats
+
+extern "C" {
+char *to_charsdd(float64x2_t x, int precision, char *first, char *last) {
+  return format_scientific_chars(multifloats::detail::from_f64x2(x),
+                                 precision, first, last);
+}
+} // extern "C"

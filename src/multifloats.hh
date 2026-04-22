@@ -822,24 +822,18 @@ inline constexpr bool isunordered(float64x2 const &x, float64x2 const &y) {
 // `os.precision()` when > 17; otherwise (including the C++ default of 6)
 // the DD default of 32 digits is used.
 //
-// Layering. The core formatter is `detail::format_scientific_chars`,
-// defined out-of-line in src/multifloats_io.cc. `to_chars` is a header-
-// inline wrapper that maps its return convention onto `std::to_chars_result`;
-// `to_string` then layers on `to_chars`. The `std::string` construction
-// therefore happens entirely in the consumer's translation unit, so
+// Layering. The core formatter is in src/multifloats_io.cc as a
+// file-local helper, reached in the library TU by `operator<<`, by the
+// out-of-line `multifloats::to_chars` (primary 5-arg form), and by the
+// extern "C" `to_charsdd` shim in multifloats_c.h. The 3-arg and 4-arg
+// `to_chars` overloads here are thin inline delegators to the 5-arg.
+// `to_string` is header-inline — it layers on `to_chars` and constructs
+// the returned `std::string` in the consumer's translation unit, so
 // `libmultifloats.a` carries no `std::string` in its ABI and links cleanly
 // against either libstdc++ string ABI (_GLIBCXX_USE_CXX11_ABI=0 or =1).
-// The extern "C" `to_charsdd` in multifloats_c.h is a sibling shim over the
-// same `detail::format_scientific_chars`, for C / Fortran consumers.
-
-namespace detail {
-// Core formatter. Writes scientific-notation decimal of `value` at
-// `precision` significant digits (clamped to [1, 34]) into [first, last).
-// No NUL terminator. Returns one-past-last-written on success, or nullptr
-// when the output wouldn't fit (in which case the buffer is unchanged).
-char *format_scientific_chars(float64x2 const &value, int precision,
-                              char *first, char *last) noexcept;
-} // namespace detail
+// `std::to_chars_result` in contrast is an ABI-stable pair `{char*, errc}`
+// — no dual-ABI concern — so the 5-arg `to_chars` can safely be defined
+// out-of-line in the library.
 
 // `<charconv>`-style formatter for float64x2. Mirrors `std::to_chars` for
 // the built-in floating-point types: writes into [first, last) without a
@@ -853,15 +847,9 @@ char *format_scientific_chars(float64x2 const &value, int precision,
 // underlying formatter only implements scientific notation today. Precision
 // defaults to 32 (DD's natural round-trip width); values outside [1, 34]
 // are clamped by the core formatter.
-inline std::to_chars_result
+std::to_chars_result
 to_chars(char *first, char *last, float64x2 const &value,
-         std::chars_format fmt, int precision) noexcept {
-  if (fmt != std::chars_format::scientific)
-    return {first, std::errc::invalid_argument};
-  char *end = detail::format_scientific_chars(value, precision, first, last);
-  if (!end) return {last, std::errc::value_too_large};
-  return {end, std::errc{}};
-}
+         std::chars_format fmt, int precision) noexcept;
 inline std::to_chars_result
 to_chars(char *first, char *last, float64x2 const &value,
          std::chars_format fmt) noexcept {
