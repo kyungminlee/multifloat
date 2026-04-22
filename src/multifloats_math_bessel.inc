@@ -77,7 +77,7 @@ static void bessel_pq1(double xinv_d, float64x2 const &z, float64x2 &p, float64x
   }
 }
 
-float64x2 bessel_j0(float64x2 const &x) {
+float64x2 cyl_bessel_j0(float64x2 const &x) {
   float64x2 ax = x;
   if (ax._limbs[0] < 0.0) { ax._limbs[0] = -ax._limbs[0]; ax._limbs[1] = -ax._limbs[1]; }
   double xx = ax._limbs[0];
@@ -108,7 +108,7 @@ float64x2 bessel_j0(float64x2 const &x) {
   return multifloats::sqrt(tpi / ax) * (p * c - q * s);
 }
 
-float64x2 bessel_j1(float64x2 const &x) {
+float64x2 cyl_bessel_j1(float64x2 const &x) {
   // j1 is odd, so (+0, -eps) must be detected as negative — checking
   // only the hi limb would miss that case.
   bool neg = x._limbs[0] < 0.0 || (x._limbs[0] == 0.0 && x._limbs[1] < 0.0);
@@ -142,7 +142,7 @@ float64x2 bessel_j1(float64x2 const &x) {
   return res;
 }
 
-float64x2 bessel_y0(float64x2 const &x) {
+float64x2 cyl_neumann0(float64x2 const &x) {
   double xx = x._limbs[0];
   if (xx <= 0.0 || !std::isfinite(xx)) {
     float64x2 r;
@@ -162,7 +162,7 @@ float64x2 bessel_y0(float64x2 const &x) {
     float64x2 p = neval(z, j0_Y0_2N_hi, j0_Y0_2N_lo, 7) /
              deval(z, j0_Y0_2D_hi, j0_Y0_2D_lo, 7);
     float64x2 tpi = float64x2(two_over_pi_hi, two_over_pi_lo);
-    return tpi * log(x) * bessel_j0(x) + p;
+    return tpi * log(x) * cyl_bessel_j0(x) + p;
   }
 
   float64x2 angle = x - float64x2(pi_quarter_hi, pi_quarter_lo);
@@ -178,7 +178,7 @@ float64x2 bessel_y0(float64x2 const &x) {
   return multifloats::sqrt(tpi / x) * (p * s + q * c);
 }
 
-float64x2 bessel_y1(float64x2 const &x) {
+float64x2 cyl_neumann1(float64x2 const &x) {
   double xx = x._limbs[0];
   if (xx <= 0.0 || !std::isfinite(xx)) {
     float64x2 r;
@@ -198,7 +198,7 @@ float64x2 bessel_y1(float64x2 const &x) {
     float64x2 p = x * neval(z, j1_Y1_2N_hi, j1_Y1_2N_lo, 7) /
                  deval(z, j1_Y1_2D_hi, j1_Y1_2D_lo, 7);
     float64x2 tpi = float64x2(two_over_pi_hi, two_over_pi_lo);
-    return tpi * (log(x) * bessel_j1(x) - float64x2(1.0) / x) + p;
+    return tpi * (log(x) * cyl_bessel_j1(x) - float64x2(1.0) / x) + p;
   }
 
   float64x2 angle = x - float64x2(three_pi_quarter_hi, three_pi_quarter_lo);
@@ -232,9 +232,9 @@ float64x2 cyl_bessel_j(int n, float64x2 const &x_in) {
   float64x2 x = x_in;
   int parity = 0;
   if (n < 0) { n = -n; parity ^= (n & 1); }
-  if (n == 0) return bessel_j0(x);
+  if (n == 0) return cyl_bessel_j0(x);
   if (n == 1) {
-    float64x2 r = bessel_j1(x);
+    float64x2 r = cyl_bessel_j1(x);
     return parity ? -r : r;
   }
   if (x._limbs[0] < 0.0) { x = -x; parity ^= (n & 1); }
@@ -245,8 +245,8 @@ float64x2 cyl_bessel_j(int n, float64x2 const &x_in) {
   float64x2 result;
   if (static_cast<double>(n) <= xx) {
     // Forward recurrence.
-    float64x2 a = bessel_j0(x);
-    float64x2 b = bessel_j1(x);
+    float64x2 a = cyl_bessel_j0(x);
+    float64x2 b = cyl_bessel_j1(x);
     for (int i = 1; i < n; ++i) {
       float64x2 temp = b;
       b = float64x2(static_cast<double>(2 * i)) / x * b - a;
@@ -294,8 +294,8 @@ float64x2 cyl_bessel_j(int n, float64x2 const &x_in) {
         b = float64x2(1.0);
       }
     }
-    float64x2 z0 = bessel_j0(x);
-    float64x2 z1 = bessel_j1(x);
+    float64x2 z0 = cyl_bessel_j0(x);
+    float64x2 z1 = cyl_bessel_j1(x);
     if (std::abs(z0._limbs[0]) >= std::abs(z1._limbs[0])) {
       result = t * z0 / b;
     } else {
@@ -318,16 +318,16 @@ float64x2 cyl_neumann(int n, float64x2 const &x) {
     return r;
   }
   if (n == 0) {
-    float64x2 r = bessel_y0(x);
+    float64x2 r = cyl_neumann0(x);
     return parity ? -r : r;
   }
   if (n == 1) {
-    float64x2 r = bessel_y1(x);
+    float64x2 r = cyl_neumann1(x);
     return parity ? -r : r;
   }
   if (!std::isfinite(xx)) return float64x2(0.0);
-  float64x2 a = bessel_y0(x);
-  float64x2 b = bessel_y1(x);
+  float64x2 a = cyl_neumann0(x);
+  float64x2 b = cyl_neumann1(x);
   for (int i = 1; i < n; ++i) {
     float64x2 temp = b;
     b = float64x2(static_cast<double>(2 * i)) / x * b - a;
@@ -343,8 +343,8 @@ float64x2 cyl_neumann(int n, float64x2 const &x) {
 void cyl_neumann(int n1, int n2, float64x2 const &x, float64x2 *out) {
   int size = n2 - n1 + 1;
   if (size <= 0) return;
-  float64x2 a = bessel_y0(x);
-  float64x2 b = bessel_y1(x);
+  float64x2 a = cyl_neumann0(x);
+  float64x2 b = cyl_neumann1(x);
   if (n1 == 0) out[0] = a;
   if (n1 <= 1 && n2 >= 1) out[1 - n1] = b;
   for (int n = 2; n <= n2; ++n) {

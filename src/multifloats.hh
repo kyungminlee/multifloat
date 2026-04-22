@@ -761,16 +761,19 @@ float64x2 erfcx  (float64x2 const &x);
 float64x2 tgamma (float64x2 const &x);
 float64x2 lgamma (float64x2 const &x);
 
-// Cylindrical Bessel of integer order. Names follow C++17 <cmath>:
-// cyl_bessel_j for J_n, cyl_neumann for Y_n. The 4-arg cyl_neumann
-// overload fills a forward-recurrence sweep of n2-n1+1 outputs
-// (cheaper than n2-n1+1 independent 2-arg calls). Fast-path scalar
-// kernels for orders 0 and 1 (bessel_j0/j1/y0/y1) are implementation
-// details; reach them through the C ABI (j0dd/j1dd/y0dd/y1dd) or via
-// cyl_bessel_j(0, x) / cyl_neumann(0, x), which dispatch internally.
-float64x2 cyl_bessel_j (int n, float64x2 const &x);
-float64x2 cyl_neumann  (int n, float64x2 const &x);
-void      cyl_neumann  (int n1, int n2, float64x2 const &x, float64x2 *out);
+// Cylindrical Bessel. Names follow C++17 <cmath>: cyl_bessel_j for J_n,
+// cyl_neumann for Y_n. Order-0 and order-1 have dedicated fast-path
+// kernels; the integer-order dispatchers cyl_bessel_j/cyl_neumann call
+// them internally and run Miller / forward recurrence for |n| ≥ 2. The
+// 4-arg cyl_neumann overload fills a single forward-recurrence sweep of
+// n2-n1+1 outputs (cheaper than n2-n1+1 independent 2-arg calls).
+float64x2 cyl_bessel_j0 (float64x2 const &x);
+float64x2 cyl_bessel_j1 (float64x2 const &x);
+float64x2 cyl_neumann0  (float64x2 const &x);
+float64x2 cyl_neumann1  (float64x2 const &x);
+float64x2 cyl_bessel_j  (int n, float64x2 const &x);
+float64x2 cyl_neumann   (int n, float64x2 const &x);
+void      cyl_neumann   (int n1, int n2, float64x2 const &x, float64x2 *out);
 
 // =============================================================================
 // Additional classification and ordered comparison

@@ -66,14 +66,13 @@ float64x2_t erfcxdd(float64x2_t a) { return to(multifloats::erfcx(from(a))); }
 float64x2_t tgammadd(float64x2_t a) { return to(multifloats::tgamma(from(a))); }
 float64x2_t lgammadd(float64x2_t a) { return to(multifloats::lgamma(from(a))); }
 
-// Bessel functions (math.h naming: j0, j1, y0, y1). The fast-path kernels
-// multifloats::bessel_j0/j1/y0/y1 are defined in multifloats_math_bessel.inc
-// and live in namespace multifloats as internal helpers — the C ABI is the
-// only public surface that reaches them directly.
-float64x2_t j0dd(float64x2_t a) { return to(multifloats::bessel_j0(from(a))); }
-float64x2_t j1dd(float64x2_t a) { return to(multifloats::bessel_j1(from(a))); }
-float64x2_t y0dd(float64x2_t a) { return to(multifloats::bessel_y0(from(a))); }
-float64x2_t y1dd(float64x2_t a) { return to(multifloats::bessel_y1(from(a))); }
+// Bessel functions (math.h naming: j0, j1, y0, y1). Route to the
+// order-specific C++ fast-path kernels cyl_bessel_j0/j1 and
+// cyl_neumann0/1 declared in multifloats.hh.
+float64x2_t j0dd(float64x2_t a) { return to(multifloats::cyl_bessel_j0(from(a))); }
+float64x2_t j1dd(float64x2_t a) { return to(multifloats::cyl_bessel_j1(from(a))); }
+float64x2_t y0dd(float64x2_t a) { return to(multifloats::cyl_neumann0(from(a))); }
+float64x2_t y1dd(float64x2_t a) { return to(multifloats::cyl_neumann1(from(a))); }
 
 // Integer-order Bessel functions (recurrence from j0/j1, y0/y1).
 float64x2_t jndd(int n, float64x2_t a) { return to(multifloats::cyl_bessel_j(n, from(a))); }
