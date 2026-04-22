@@ -2,7 +2,8 @@
 // wrappers. The implementation is split across a set of `.inc` files
 // that are pulled in here as a single compiled TU; that way the
 // compiler keeps every cross-kernel call inlineable (e.g.
-// `cexpdd → exp_full + sincos_full`) without depending on -flto.
+// `cexpdd → multifloats::exp + multifloats::sincos`) without depending
+// on -flto.
 //
 //   multifloats_math_exp_log.inc     exp / exp2 / expm1 / log /
 //                                    log2 / log10 / log1p / pow
@@ -19,6 +20,13 @@
 //   multifloats_math_abi_scalar.inc  extern "C" scalar wrappers,
 //                                    matmul entry points, comparisons
 //   multifloats_math_abi_complex.inc extern "C" complex DD kernels
+//
+// Public transcendental kernels live in `namespace multifloats` with
+// matching declarations in multifloats.hh. The `extern "C" *dd` shims
+// are thin marshaling wrappers around those same C++ functions — no
+// parallel `_full`-named body. Truly internal helpers (range reducers,
+// polynomial evaluators, triple-double-output variants) stay in anon
+// namespaces inside each .inc file.
 
 #include "multifloats.hh"
 #include "dd_constants.hh"
@@ -26,56 +34,50 @@
 #include <cstring>
 #include <vector>
 
-// All DD math kernels have internal linkage (anonymous namespace).
-// Only the extern "C" `*dd` wrappers at the bottom are exported.
-namespace {
-
-using namespace multifloats::detail;  // neval, deval, horner
-using multifloats::float64x2;
-
-// Forward declarations for internal cross-references.
-float64x2 exp_full(float64x2 const &x);
-multifloats::detail::float64x3 exp_full_td(float64x2 const &x);
-float64x2 exp2_full(float64x2 const &x);
-float64x2 expm1_full(float64x2 const &x);
-float64x2 log_full(float64x2 const &x);
-float64x2 log1p_full(float64x2 const &x);
-float64x2 sin_full(float64x2 const &x);
-float64x2 cos_full(float64x2 const &x);
-float64x2 sin_eval(float64x2 const &r);
-float64x2 cos_eval(float64x2 const &r);
-void sincos_eval(float64x2 const &r, float64x2 &s, float64x2 &c);
-void sincos_full(float64x2 const &x, float64x2 &s, float64x2 &c);
-void sincos_full_td(float64x2 const &x, multifloats::detail::float64x3 &s,
-                    multifloats::detail::float64x3 &c);
-void sinhcosh_full(float64x2 const &x, float64x2 &s, float64x2 &c);
-float64x2 sinpi_full(float64x2 const &x);
-float64x2 erfc_full(float64x2 const &x);
-float64x2 lgamma_positive(float64x2 const &x);
-float64x2 bessel_j0_full(float64x2 const &x);
-float64x2 bessel_j1_full(float64x2 const &x);
-
+// Public kernels — definitions. Matching declarations live in multifloats.hh.
+// Internal helpers that happen to share namespace scope (range reducers,
+// polynomial Estrin kernels, TD variants) aren't header-declared; they leak
+// as `multifloats::NAME` symbols but nobody outside this TU calls them.
+// Once the symbol stripper is re-enabled in a follow-up commit, we'll
+// tuck them behind `multifloats::detail::` or anon-namespace wrappers.
+namespace multifloats {
+using namespace multifloats::detail;  // neval, deval, horner, float64x3
 #include "multifloats_math_exp_log.inc"
 #include "multifloats_math_trig.inc"
 #include "multifloats_math_hyp.inc"
 #include "multifloats_math_inv_trig.inc"
 #include "multifloats_math_special.inc"
 #include "multifloats_math_bessel.inc"
+} // namespace multifloats
 
-} // anonymous namespace
+// Complex overloads for Kind-D parity (sinpi/cospi/expm1/log2/log10/log1p
+// on std::complex<float64x2>). Pulled in after <complex> is visible via
+// the inclusion of multifloats.hh at top.
+namespace multifloats {
+#include "multifloats_math_abi_complex_kernels.inc"
+} // namespace multifloats
 
 // =============================================================================
 // C-ABI entry points — extern "C" functions following math.h naming convention.
-// These are the canonical DD implementations; the C++ template wrappers in
-// multifloats.hh and the Fortran bind(C) interfaces both call these.
 // =============================================================================
 
-// multifloats_c.h is already pulled in via multifloats.hh.
+// File-scope C ABI helpers and `using` aliases so both the matmul anon-ns
+// block and the extern "C" shim blocks can call them. Kept non-inline / at
+// global namespace so the extern "C" block can reach them by unqualified
+// name (the ABI .inc files live inside extern "C", which is not a namespace
+// but inherits enclosing lookup).
+using multifloats::float64x2;
+using multifloats::detail::float64x3;
+using multifloats::detail::td_add_td;
+using multifloats::detail::td_mul_td;
+using multifloats::detail::td_sub_double;
+using multifloats::detail::td_to_dd;
+using multifloats::detail::td_from_dd;
+
+static inline float64x2 from(float64x2_t x) { float64x2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
+static inline float64x2_t to(float64x2 const &x) { return {x._limbs[0], x._limbs[1]}; }
 
 namespace {
-inline float64x2 from(float64x2_t x) { float64x2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
-inline float64x2_t to(float64x2 const &x) { return {x._limbs[0], x._limbs[1]}; }
-
 #include "multifloats_math_matmul.inc"
 } // anonymous namespace
 

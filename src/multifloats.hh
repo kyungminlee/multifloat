@@ -1125,144 +1125,72 @@ inline float64x2 hypot(float64x2 const &x, float64x2 const &y) {
 }
 
 // =============================================================================
-// Power, exponential and logarithm — delegate to the extern "C" `*dd` kernels
+// Transcendentals — definitions live in multifloats_math.cc. The extern "C"
+// `*dd` kernels are thin marshaling shims around these same functions, so
+// C++ callers go straight to the C++ body with no ABI-crossing overhead.
 // =============================================================================
 
-inline float64x2 exp(float64x2 const &x) {
-  return detail::from_f64x2(::expdd(detail::to_f64x2(x)));
-}
+// Power, exponential and logarithm
+float64x2 exp   (float64x2 const &x);
+float64x2 exp2  (float64x2 const &x);
+float64x2 expm1 (float64x2 const &x);
+float64x2 log   (float64x2 const &x);
+float64x2 log10 (float64x2 const &x);
+float64x2 log2  (float64x2 const &x);
+float64x2 log1p (float64x2 const &x);
+float64x2 pow   (float64x2 const &x, float64x2 const &y);
 
-inline float64x2 exp2(float64x2 const &x) {
-  return detail::from_f64x2(::exp2dd(detail::to_f64x2(x)));
-}
+// Trigonometric
+float64x2 sin   (float64x2 const &x);
+float64x2 cos   (float64x2 const &x);
+float64x2 tan   (float64x2 const &x);
+float64x2 asin  (float64x2 const &x);
+float64x2 acos  (float64x2 const &x);
+float64x2 atan  (float64x2 const &x);
+float64x2 atan2 (float64x2 const &y, float64x2 const &x);
 
-inline float64x2 expm1(float64x2 const &x) {
-  return detail::from_f64x2(::expm1dd(detail::to_f64x2(x)));
-}
+// π-scaled trig: {sin,cos,tan}pi(x) = {sin,cos,tan}(π·x),
+//                {asin,acos,atan}pi(x) = {asin,acos,atan}(x)/π,
+//                atan2pi(y, x) = atan2(y, x)/π.
+float64x2 sinpi   (float64x2 const &x);
+float64x2 cospi   (float64x2 const &x);
+float64x2 tanpi   (float64x2 const &x);
+float64x2 asinpi  (float64x2 const &x);
+float64x2 acospi  (float64x2 const &x);
+float64x2 atanpi  (float64x2 const &x);
+float64x2 atan2pi (float64x2 const &y, float64x2 const &x);
 
-inline float64x2 log(float64x2 const &x) {
-  return detail::from_f64x2(::logdd(detail::to_f64x2(x)));
-}
+// Fused sincos / sinhcosh. One range-reduction + Taylor pair produces both
+// outputs, roughly halving the transcendental cost when both are needed.
+void sincos   (float64x2 const &x, float64x2 &s, float64x2 &c);
+void sinhcosh (float64x2 const &x, float64x2 &s, float64x2 &c);
 
-inline float64x2 log10(float64x2 const &x) {
-  return detail::from_f64x2(::log10dd(detail::to_f64x2(x)));
-}
+// Hyperbolic
+float64x2 sinh  (float64x2 const &x);
+float64x2 cosh  (float64x2 const &x);
+float64x2 tanh  (float64x2 const &x);
+float64x2 asinh (float64x2 const &x);
+float64x2 acosh (float64x2 const &x);
+float64x2 atanh (float64x2 const &x);
 
-inline float64x2 log2(float64x2 const &x) {
-  return detail::from_f64x2(::log2dd(detail::to_f64x2(x)));
-}
+// Error and gamma. erfcx is the scaled complementary error function,
+// erfcx(x) = exp(x^2) * erfc(x).
+float64x2 erf    (float64x2 const &x);
+float64x2 erfc   (float64x2 const &x);
+float64x2 erfcx  (float64x2 const &x);
+float64x2 tgamma (float64x2 const &x);
+float64x2 lgamma (float64x2 const &x);
 
-inline float64x2 log1p(float64x2 const &x) {
-  return detail::from_f64x2(::log1pdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 pow(float64x2 const &x, float64x2 const &y) {
-  return detail::from_f64x2(::powdd(detail::to_f64x2(x), detail::to_f64x2(y)));
-}
-
-// =============================================================================
-// Trigonometric functions
-// =============================================================================
-
-inline float64x2 sin(float64x2 const &x) {
-  return detail::from_f64x2(::sindd(detail::to_f64x2(x)));
-}
-
-inline float64x2 cos(float64x2 const &x) {
-  return detail::from_f64x2(::cosdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 tan(float64x2 const &x) {
-  return detail::from_f64x2(::tandd(detail::to_f64x2(x)));
-}
-
-inline float64x2 asin(float64x2 const &x) {
-  return detail::from_f64x2(::asindd(detail::to_f64x2(x)));
-}
-
-inline float64x2 acos(float64x2 const &x) {
-  return detail::from_f64x2(::acosdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 atan(float64x2 const &x) {
-  return detail::from_f64x2(::atandd(detail::to_f64x2(x)));
-}
-
-inline float64x2 atan2(float64x2 const &y, float64x2 const &x) {
-  return detail::from_f64x2(::atan2dd(detail::to_f64x2(y), detail::to_f64x2(x)));
-}
-
-// =============================================================================
-// Hyperbolic functions
-// =============================================================================
-
-inline float64x2 sinh(float64x2 const &x) {
-  return detail::from_f64x2(::sinhdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 cosh(float64x2 const &x) {
-  return detail::from_f64x2(::coshdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 tanh(float64x2 const &x) {
-  return detail::from_f64x2(::tanhdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 asinh(float64x2 const &x) {
-  return detail::from_f64x2(::asinhdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 acosh(float64x2 const &x) {
-  return detail::from_f64x2(::acoshdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 atanh(float64x2 const &x) {
-  return detail::from_f64x2(::atanhdd(detail::to_f64x2(x)));
-}
-
-// =============================================================================
-// Error and gamma functions
-// =============================================================================
-
-inline float64x2 erf(float64x2 const &x) {
-  return detail::from_f64x2(::erfdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 erfc(float64x2 const &x) {
-  return detail::from_f64x2(::erfcdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 erfcx(float64x2 const &x) {
-  return detail::from_f64x2(::erfcxdd(detail::to_f64x2(x)));
-}
-
-inline float64x2 tgamma(float64x2 const &x) {
-  return detail::from_f64x2(::tgammadd(detail::to_f64x2(x)));
-}
-
-inline float64x2 lgamma(float64x2 const &x) {
-  return detail::from_f64x2(::lgammadd(detail::to_f64x2(x)));
-}
-
-// =============================================================================
-// Bessel functions
-// =============================================================================
-
-inline float64x2 bessel_j0(float64x2 const &x) {
-  return detail::from_f64x2(::j0dd(detail::to_f64x2(x)));
-}
-
-inline float64x2 bessel_j1(float64x2 const &x) {
-  return detail::from_f64x2(::j1dd(detail::to_f64x2(x)));
-}
-
-inline float64x2 bessel_y0(float64x2 const &x) {
-  return detail::from_f64x2(::y0dd(detail::to_f64x2(x)));
-}
-
-inline float64x2 bessel_y1(float64x2 const &x) {
-  return detail::from_f64x2(::y1dd(detail::to_f64x2(x)));
-}
+// Bessel. bessel_jn / bessel_yn carry integer order n; bessel_yn_range
+// fills a forward-recurrence sweep of n2-n1+1 outputs (cheaper than
+// n2-n1+1 independent bessel_yn calls).
+float64x2 bessel_j0 (float64x2 const &x);
+float64x2 bessel_j1 (float64x2 const &x);
+float64x2 bessel_y0 (float64x2 const &x);
+float64x2 bessel_y1 (float64x2 const &x);
+float64x2 bessel_jn (int n, float64x2 const &x);
+float64x2 bessel_yn (int n, float64x2 const &x);
+void      bessel_yn_range (int n1, int n2, float64x2 const &x, float64x2 *out);
 
 // =============================================================================
 // Additional classification and ordered comparison
@@ -1489,3 +1417,20 @@ proj(complex<multifloats::float64x2> const &z) {
 }
 
 } // namespace std
+
+// ---- Complex overloads in `namespace multifloats` --------------------------
+//
+// These are the C++ parity surface for c*dd kernels that either have no
+// std::complex overload (expm1, log2, log1p) or whose names are outside
+// the standard library (sinpi, cospi). They're `multifloats::sinpi(z)`,
+// `multifloats::expm1(z)` etc. — not std:: specializations, because C++17
+// doesn't have the corresponding free functions on std::complex to specialize.
+// Definitions live in multifloats_math.cc alongside the scalar overloads.
+namespace multifloats {
+std::complex<float64x2> sinpi (std::complex<float64x2> const &z);
+std::complex<float64x2> cospi (std::complex<float64x2> const &z);
+std::complex<float64x2> expm1 (std::complex<float64x2> const &z);
+std::complex<float64x2> log2  (std::complex<float64x2> const &z);
+std::complex<float64x2> log10 (std::complex<float64x2> const &z);
+std::complex<float64x2> log1p (std::complex<float64x2> const &z);
+} // namespace multifloats

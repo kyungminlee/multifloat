@@ -72,7 +72,7 @@ float64x2 exp2_kernel(float64x2 const &x) {
   return exp2_from_reduced(n_d, rh, rl);
 }
 
-float64x2 exp2_full(float64x2 const &x) {
+float64x2 exp2(float64x2 const &x) {
   if (!std::isfinite(x._limbs[0])) return _exp_nonfinite(x._limbs[0]);
   if (x._limbs[0] < exp2_min) return float64x2();
   if (x._limbs[0] > exp2_max) {
@@ -92,7 +92,7 @@ float64x2 exp2_full(float64x2 const &x) {
 // DD-constant floor. See doc/developer/TRIPLE_DOUBLE.md §2
 // for why TD arithmetic over DD constants stays capped at 2⁻¹⁰⁵.
 //
-// `exp_full_td(x) |> td_to_dd` matches `exp_full(x)` within one DD ulp.
+// `exp_full_td(x) |> td_to_dd` matches `exp(x)` within one DD ulp.
 // The TD pair (em, el) carries the residue used by the Re path of
 // `cexpm1dd` to survive the cancellation surface cos(b)·e^a = 1.
 
@@ -188,7 +188,7 @@ float64x3 exp_full_td(float64x2 const &x) {
   return exp2_td_from_reduced(n_d, y_td);
 }
 
-float64x2 exp_full(float64x2 const &x) {
+float64x2 exp(float64x2 const &x) {
   if (!std::isfinite(x._limbs[0])) return _exp_nonfinite(x._limbs[0]);
   if (x._limbs[0] > exp_max) {
     float64x2 r;
@@ -260,7 +260,7 @@ float64x2 log2_kernel(float64x2 const &x) {
   return float64x2(static_cast<double>(e), 0.0) + v + t * p;
 }
 
-float64x2 log2_full(float64x2 const &x) {
+float64x2 log2(float64x2 const &x) {
   float64x2 r;
   if (std::isnan(x._limbs[0]) || x._limbs[0] < 0.0) {
     r._limbs[0] = std::numeric_limits<double>::quiet_NaN();
@@ -280,7 +280,7 @@ float64x2 log2_full(float64x2 const &x) {
   return log2_kernel(x);
 }
 
-float64x2 log_full(float64x2 const &x) {
+float64x2 log(float64x2 const &x) {
   if (!std::isfinite(x._limbs[0])) {
     float64x2 r;
     r._limbs[0] = std::log(x._limbs[0]);
@@ -289,19 +289,19 @@ float64x2 log_full(float64x2 const &x) {
   }
   // log2(0) = -inf. DD multiply (-inf, 0) * (ln_2_hi, ln_2_lo) would refine
   // into (-inf, NaN) because the two_prod FMA hits -inf + inf; short-circuit.
-  float64x2 l2 = log2_full(x);
+  float64x2 l2 = log2(x);
   if (!std::isfinite(l2._limbs[0])) return l2;
   return l2 * float64x2(ln_2_hi, ln_2_lo);
 }
 
-float64x2 log10_full(float64x2 const &x) {
+float64x2 log10(float64x2 const &x) {
   if (!std::isfinite(x._limbs[0])) {
     float64x2 r;
     r._limbs[0] = std::log10(x._limbs[0]);
     r._limbs[1] = 0.0;
     return r;
   }
-  float64x2 l2 = log2_full(x);
+  float64x2 l2 = log2(x);
   if (!std::isfinite(l2._limbs[0])) return l2;
   return l2 * float64x2(log10_2_hi, log10_2_lo);
 }
@@ -313,7 +313,7 @@ float64x2 log10_full(float64x2 const &x) {
 // through to exp_full / log_full there. Inside, a dedicated Taylor /
 // atanh-narrow polynomial preserves every bit.
 
-float64x2 expm1_full(float64x2 const &x) {
+float64x2 expm1(float64x2 const &x) {
   // Non-finite: expm1(+inf) = +inf, expm1(-inf) = -1, expm1(NaN) = NaN.
   if (!std::isfinite(x._limbs[0])) {
     float64x2 r;
@@ -327,14 +327,14 @@ float64x2 expm1_full(float64x2 const &x) {
   // retains ~DD precision; defer to the existing kernel (which also
   // handles overflow / subnormal tails).
   if (std::abs(x._limbs[0]) >= 0.5) {
-    return exp_full(x) - float64x2(1.0);
+    return exp(x) - float64x2(1.0);
   }
   // Small |x|: direct Taylor. expm1(x) = x * Σ x^k / (k+1)!.
   float64x2 p = neval(x, expm1_taylor_hi, expm1_taylor_lo, 24);
   return x * p;
 }
 
-float64x2 log1p_full(float64x2 const &x) {
+float64x2 log1p(float64x2 const &x) {
   // Non-finite: log1p(+inf) = +inf, log1p(NaN) = NaN. log1p(-inf) reaches
   // the domain check below via (1 + -inf = -inf).
   if (!std::isfinite(x._limbs[0])) {
@@ -358,13 +358,13 @@ float64x2 log1p_full(float64x2 const &x) {
       // (a positive subnormal). Passing the pair as-is to log_full would
       // trip its leading-limb zero check and return −∞. Promote lo to the
       // leading position so log_full sees a normalized operand.
-      return log_full(float64x2(arg._limbs[1], 0.0));
+      return log(float64x2(arg._limbs[1], 0.0));
     }
     return r;
   }
   // For |x| >= 0.25, log(1+x) is well-conditioned; reuse log_full.
   if (std::abs(x._limbs[0]) >= 0.25) {
-    return log_full(arg);
+    return log(arg);
   }
   // Small |x|: log1p(x) = 2·atanh(t) with t = x/(2+x). Baking the 2
   // into the coefficient table (log1p_taylor[k] = 2/(2k+1)) gives the
@@ -384,11 +384,11 @@ float64x2 log1p_full(float64x2 const &x) {
 // form (two_prod + y.lo·e_x), and y·log2(m) is DD with absolute error
 // ≲ ulp_dd·|y|. The fractional part of the sum — which drives 2^r — is
 // thus accurate to ~ulp_dd·|y| in absolute terms regardless of |e_x|.
-float64x2 pow_full(float64x2 const &x, float64x2 const &y) {
+float64x2 pow(float64x2 const &x, float64x2 const &y) {
   if (x._limbs[0] == 0.0 && y._limbs[0] == 0.0) return float64x2(1.0);
   if (!std::isfinite(x._limbs[0]) || !std::isfinite(y._limbs[0]) ||
       x._limbs[0] <= 0.0) {
-    return exp_full(y * log_full(x));
+    return exp(y * log(x));
   }
 
   // x = 2^e_x · m, m ∈ [1, 2). log2_kernel(m) is DD with |Lf| < 1.
