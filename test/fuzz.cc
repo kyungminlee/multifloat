@@ -822,31 +822,13 @@ int main(int argc, char **argv) {
 
     // Periodic (every 100): transcendentals.
     if (i % 100 == 0) {
-      if (q_isfinite(q1)) {
-        q_t qe = expq(q1);
-        CHK1_IF(exp, q_isfinite(qe));
-      }
-      if (q_isfinite(q1) && q1 > (q_t)0) {
-        CHK1(log);
-        CHK1(log10);
-      }
-      if (q_isfinite(q1)) {
-        q_t qem = expm1q(q1);
-        CHK1_IF(expm1, q_isfinite(qem));
-      }
+      CHK1_IF(exp,   q_isfinite(q1) && q_isfinite(expq(q1)));
+      CHK1_IF(log,   q_isfinite(q1) && q1 > (q_t)0);
+      CHK1_IF(log10, q_isfinite(q1) && q1 > (q_t)0);
+      CHK1_IF(expm1, q_isfinite(q1) && q_isfinite(expm1q(q1)));
       CHK1_IF(log1p, q_isfinite(q1) && q1 > (q_t)-1);
-
-      if (q_isfinite(q1)) {
-        q_t qe2 = exp2q(q1);
-        if (q_isfinite(qe2))
-          CHK("exp2",
-              mf::detail::from_f64x2(::exp2dd(mf::detail::to_f64x2(f1))),
-              qe2, q1, (q_t)0, mpfr::exp2(m1));
-      }
-      if (q_isfinite(q1) && q1 > (q_t)0)
-        CHK("log2",
-            mf::detail::from_f64x2(::log2dd(mf::detail::to_f64x2(f1))),
-            log2q(q1), q1, (q_t)0, mpfr::log2(m1));
+      CHK1_IF(exp2,  q_isfinite(q1) && q_isfinite(exp2q(q1)));
+      CHK1_IF(log2,  q_isfinite(q1) && q1 > (q_t)0);
 
       // Trig: keep magnitudes moderate.
       if (q_isfinite(q1) && aq1 < (q_t)1e6q) {
