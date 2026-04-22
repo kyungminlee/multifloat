@@ -61,6 +61,18 @@ static inline __complex128 csubq(__complex128 a, __complex128 b) { return a - b;
 static inline __complex128 cmulq(__complex128 a, __complex128 b) { return a * b; }
 static inline __complex128 cdivq(__complex128 a, __complex128 b) { return a / b; }
 
+// mpreal spells these gamma / lngamma; the C99 standard (and multifloats /
+// libquadmath) use tgamma / lgamma. Since mpreal's names are also what
+// the qp and DD sides can be made to match via one-line aliases, use
+// the mpreal spelling everywhere so CHK1(gamma) / CHK1(lngamma) derive
+// all three legs uniformly.
+namespace multifloats {
+inline float64x2 gamma  (float64x2 const &x) { return tgamma(x); }
+inline float64x2 lngamma(float64x2 const &x) { return lgamma(x); }
+}  // namespace multifloats
+static inline q_t gammaq  (q_t x) { return tgammaq(x); }
+static inline q_t lngammaq(q_t x) { return lgammaq(x); }
+
 // =============================================================================
 // USE_MPFR mode — all mpreal-specific types, helpers, the complex oracle,
 // and the three call-site macros (MP_PARAM / MP_ARG / MP_STMT) live in this
@@ -278,7 +290,7 @@ static bool is_full_dd(char const *op) {
       "asin", "acos", "atan", "atan2", "atan2pi",
       "asinpi", "acospi", "atanpi",
       "erf", "erfc", "erfcx",
-      "tgamma", "lgamma",
+      "gamma", "lngamma",
       "bj0", "bj1", "bjn", "by0", "by1", "byn", "yn_range",
       "cadd_re", "cadd_im", "csub_re", "csub_im",
       "cmul_re", "cmul_im", "cdiv_re", "cdiv_im",
@@ -411,11 +423,6 @@ static void report_fail(char const *op, char const *detail) {
 // Scalar unary: mf::NAME(f1) / NAMEq(q1) / mpfr::NAME(m1).
 #define CHK1(NAME) \
     CHK(#NAME, mf::NAME(f1), NAME##q(q1), q1, (q_t)0, mpfr::NAME(m1))
-
-// Scalar unary where mpreal spells the op differently (tgamma → gamma,
-// lgamma → lngamma).
-#define CHK1_MP(NAME, MPNAME) \
-    CHK(#NAME, mf::NAME(f1), NAME##q(q1), q1, (q_t)0, mpfr::MPNAME(m1))
 
 // Scalar binary: mf::NAME(f1, f2) / NAMEq(q1, q2) / mpfr::NAME(m1, m2).
 #define CHK2(NAME) \
@@ -884,8 +891,8 @@ int main(int argc, char **argv) {
             mpfr::exp(m1 * m1) * mpfr::erfc(m1));
       }
       if (q_isfinite(q1) && q1 > (q_t)0 && q1 < (q_t)100) {
-        CHK1_MP(tgamma, gamma);
-        CHK1_MP(lgamma, lngamma);
+        CHK1(gamma);
+        CHK1(lngamma);
       }
 
       CHK2(atan2);
