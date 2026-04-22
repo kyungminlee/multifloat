@@ -35,10 +35,14 @@
 #include <cstring>
 #include <vector>
 
-// Triple-double primitive bodies (declarations in multifloats_td.hh).
+// Triple-double primitive bodies (declarations in multifloats_td.hh) and
+// DD polynomial evaluators (horner/neval/deval — previously inline in
+// multifloats.hh). Defined here so the kernel .inc files see the same
+// same-TU inline bodies they did before.
 namespace multifloats {
 namespace detail {
 #include "multifloats_math_td.inc"
+#include "multifloats_math_poly.inc"
 } // namespace detail
 } // namespace multifloats
 
