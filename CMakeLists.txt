@@ -184,6 +184,35 @@ target_include_directories(dd-bindc PUBLIC ${CMAKE_BINARY_DIR}/fmod/test)
 mf_add_fortran_executable(fortran_bench_abi ./test/bench_abi.f90
     LINK dd-bindc)
 
+# Cross-language differential fuzz. Drives the C++ and Fortran kernels
+# of add/sub/mul/div/neg/abs/sqrt/{==,!=,<} from a single C++ binary on
+# matched random inputs and requires bit-for-bit agreement on both
+# limbs. Exists because MPFR / libquadmath oracles only certify each
+# side within DD precision independently — they cannot catch sub-ULP
+# algorithmic drift between the two production code paths. Transcendentals
+# delegate to C++ on the Fortran side (see C_DELEGATE_UNARY_MAP in
+# fsrc/multifloats.fypp) and are covered by test/abi_equivalence.f90.
+add_library(crosscheck-bindings OBJECT ./test/crosscheck_bindings.f90)
+target_compile_options(crosscheck-bindings PRIVATE -O3)
+target_link_libraries(crosscheck-bindings PRIVATE multifloatsf)
+set_target_properties(crosscheck-bindings PROPERTIES
+    Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/fmod/test)
+
+add_executable(cpp_crosscheck ./test/crosscheck.cc)
+target_compile_options(cpp_crosscheck PRIVATE -O3 -fext-numeric-literals)
+target_include_directories(cpp_crosscheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(cpp_crosscheck PRIVATE
+    multifloats crosscheck-bindings multifloatsf quadmath)
+# Mixed C++/Fortran link. Main is .cc (so g++ is the default linker
+# driver) but the executable embeds Fortran object code via
+# crosscheck-bindings / multifloatsf, which pulls in the gfortran
+# runtime. Switching to the Fortran linker driver handles -lgfortran /
+# -lquadmath automatically; libstdc++ is added explicitly since the
+# Fortran driver doesn't link it by default.
+set_target_properties(cpp_crosscheck PROPERTIES LINKER_LANGUAGE Fortran)
+target_link_libraries(cpp_crosscheck PRIVATE stdc++)
+add_test(NAME crosscheck_cpp_fortran COMMAND cpp_crosscheck 5000 0xc0ffee)
+
 # =============================================================================
 # Optional MPFR-based precision tests
 # =============================================================================
