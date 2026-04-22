@@ -844,10 +844,8 @@ int main(int argc, char **argv) {
         CHK("sincos_c", mf::detail::from_f64x2(sc_c), cosq(q1),
             q1, (q_t)0, mpfr::cos(m1));
       }
-      if (q_isfinite(q1) && aq1 <= (q_t)1) {
-        CHK1(asin);
-        CHK1(acos);
-      }
+      CHK1_IF(asin, q_isfinite(q1) && aq1 <= (q_t)1);
+      CHK1_IF(acos, q_isfinite(q1) && aq1 <= (q_t)1);
       CHK1_IF(atan, q_isfinite(q1));
 
       if (q_isfinite(q1) && aq1 < (q_t)700) {
@@ -862,14 +860,13 @@ int main(int argc, char **argv) {
             q1, (q_t)0, mpfr::sinh(m1));
         CHK("sinhcosh_c", mf::detail::from_f64x2(hc_c), coshq(q1),
             q1, (q_t)0, mpfr::cosh(m1));
-      }      CHK1_IF(asinh, q_isfinite(q1));
+      }
+      CHK1_IF(asinh, q_isfinite(q1));
       CHK1_IF(acosh, q_isfinite(q1) && q1 >= (q_t)1);
       CHK1_IF(atanh, q_isfinite(q1) && aq1 <  (q_t)1);
 
-      if (q_isfinite(q1) && aq1 < (q_t)100) {
-        CHK1(erf);
-        CHK1(erfc);
-      }
+      CHK1_IF(erf,  q_isfinite(q1) && aq1 < (q_t)100);
+      CHK1_IF(erfc, q_isfinite(q1) && aq1 < (q_t)100);
       // erfcx(x) = exp(x²) * erfc(x). The DD kernel is precision-preserving
       // for the tail-tail cancellation; the qp oracle is the naive product.
       // Gate |x| < 26 so exp(x²) stays well inside qp's exponent range
