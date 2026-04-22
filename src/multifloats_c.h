@@ -159,7 +159,7 @@ MULTIFLOATS_API complex64x2_t cdivdd(complex64x2_t a, complex64x2_t b);
  * libquadmath cexpq/clogq/csqrtq/...). Where the classic formula needs
  * both sin(y) and cos(y) or both sinh(y) and cosh(y), these use the fused
  * kernels internally so one range-reduction + Taylor pair covers both.
- * Precision and speed have been measured; the std::complex<MultiFloat<...>>
+ * Precision and speed have been measured; the std::complex<float64x2>
  * specializations in multifloats.hh delegate here where specialization
  * wins (exp, sin, cos, tan, sinh, cosh, tanh, atanh, acos). */
 MULTIFLOATS_API complex64x2_t cexpdd(complex64x2_t z);

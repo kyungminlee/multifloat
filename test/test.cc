@@ -89,7 +89,7 @@ static void check_q(char const *op, mf::float64x2 const &got, q_t expected, doub
 // Tolerances
 // =============================================================================
 //
-// MultiFloat<double, 2> has ~104 bits of precision. The kernels lose a few
+// float64x2 has ~104 bits of precision. The kernels lose a few
 // bits to ordering/normalization, so we accept up to ~2^-100 ≈ 8e-31 for
 // linear ops and ~2^-95 for division (one Newton step from 1/y[0]).
 

@@ -1,8 +1,8 @@
 // Property-based fuzz tests for multifloats.hh.
 //
 // This is the C++ analogue of test/fuzz.f90: for each iteration a random
-// __float128 pair (q1, q2) is generated, projected to MultiFloat<double, 2>
-// inputs (f1, f2), and every operation that multifloats.hh exposes is run on
+// __float128 pair (q1, q2) is generated, projected to float64x2 inputs
+// (f1, f2), and every operation that multifloats.hh exposes is run on
 // both legs. The DD result is compared against the __float128 reference and
 // per-op relative-error statistics are printed at the end.
 //
