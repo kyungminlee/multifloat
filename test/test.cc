@@ -389,6 +389,40 @@ static void test_io_to_string_and_stream() {
   almost_one._limbs[1] = 0.0;
   std::string r = mf::to_string(almost_one, 3);
   REQUIRE(r == "1.00e+00");
+
+  // <charconv>-style to_chars: writes into [first, last) without NUL, returns
+  // {ptr, errc}. On success ptr = first + bytes_written, ec = errc{}. On
+  // too-small buffer returns {last, value_too_large} and does not write.
+  {
+    char dst[MULTIFLOATS_DD_CHARS_BUFSIZE];
+
+    // 5-arg overload (first, last, value, chars_format, precision): the
+    // only way to pass an explicit precision. Precision 4 → "1.500e+00".
+    auto res = mf::to_chars(dst, dst + sizeof(dst), mf::float64x2(1.5),
+                            std::chars_format::scientific, 4);
+    REQUIRE(res.ec == std::errc{});
+    REQUIRE(std::string(dst, res.ptr) == "1.500e+00");
+
+    // 3-arg overload: precision defaults to 32.
+    auto res2 = mf::to_chars(dst, dst + sizeof(dst), mf::float64x2(1.0));
+    REQUIRE(res2.ec == std::errc{});
+    REQUIRE(std::string(dst, res2.ptr).substr(0, 2) == "1.");
+    REQUIRE(std::string(dst, res2.ptr).find("e+00") != std::string::npos);
+
+    // Too-small buffer: returns {last, value_too_large}, no write.
+    char small[4] = {'x','x','x','x'};
+    auto res3 = mf::to_chars(small, small + 4, mf::float64x2(3.14),
+                             std::chars_format::scientific, 10);
+    REQUIRE(res3.ec == std::errc::value_too_large);
+    REQUIRE(res3.ptr == small + 4);
+    REQUIRE(small[0] == 'x');
+
+    // Unsupported format: invalid_argument.
+    auto res4 = mf::to_chars(dst, dst + sizeof(dst), mf::float64x2(1.0),
+                             std::chars_format::fixed);
+    REQUIRE(res4.ec == std::errc::invalid_argument);
+    REQUIRE(res4.ptr == dst);
+  }
 }
 
 // Curated edge-input checks for log2 / log1p / expm1 / cbrt. These

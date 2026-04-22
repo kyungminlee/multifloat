@@ -8,6 +8,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>  /* size_t */
 
 /* ABI version. Bump on any breaking change to the `float64x2_t` layout,
  * the argument/return convention of any exported function, or removal of
@@ -239,6 +240,26 @@ MULTIFLOATS_API void matmuldd_vm(const float64x2_t *x, const float64x2_t *b,
                          float64x2_t *y,
                          int64_t k, int64_t n,
                          int64_t renorm_interval);
+
+/* Formatted output. Scientific-notation decimal representation of `x`,
+ * written into `[first, last)` with no NUL terminator — matching C++17
+ * `std::to_chars` semantics. On success returns a pointer one past the
+ * last byte written (so the written range is `[first, returned)`). On a
+ * too-small buffer returns NULL and leaves the buffer unchanged. `precision`
+ * is clamped to [1, 34] — DD carries ~32 significant digits, two extra for
+ * round-half-to-even. Special values emit "nan", "inf", "-inf", "0e+00",
+ * "-0e+00".
+ *
+ * A buffer of MULTIFLOATS_DD_CHARS_BUFSIZE bytes always fits any valid
+ * output, so stack-allocating `char buf[MULTIFLOATS_DD_CHARS_BUFSIZE]` and
+ * calling as `to_charsdd(x, prec, buf, buf + sizeof(buf))` is a safe use.
+ * The C++ `multifloats::to_chars` / `to_string` / `operator<<` wrappers in
+ * multifloats.hh all layer on this so that `std::string` construction
+ * happens in the consumer's TU — keeping the library free of `std::string`
+ * in its ABI surface (libstdc++ `_GLIBCXX_USE_CXX11_ABI` dual-ABI safe). */
+#define MULTIFLOATS_DD_CHARS_BUFSIZE 48
+MULTIFLOATS_API char *to_charsdd(float64x2_t x, int precision,
+                                 char *first, char *last);
 
 /* Comparison (return int: 1 = true, 0 = false) */
 MULTIFLOATS_API int eqdd(float64x2_t a, float64x2_t b);

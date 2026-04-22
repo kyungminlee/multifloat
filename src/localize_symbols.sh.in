@@ -11,7 +11,12 @@
 #          (declared in multifloats.hh; internal helpers like sin_eval,
 #           reduce_pi_half, lgamma_positive live in `multifloats::detail`
 #           so they don't land in this bucket)
-#        - multifloats::operator<<, multifloats::to_string[abi:cxx11]
+#        - multifloats::operator<<  (decimal formatting for std::ostream)
+#          `multifloats::to_string` itself is header-inline — it wraps the
+#          C-ABI `to_charsdd` and constructs the returned std::string in the
+#          *consumer's* TU, so no to_string symbol appears in the archive
+#          at all. That keeps the library free of libstdc++ dual-ABI
+#          (`_GLIBCXX_USE_CXX11_ABI`) entanglement in its link surface.
 #        - multifloats::detail::NAME(...)           TU-internal primitives
 #          (kept because test.cc exercises them directly; the `detail::` in
 #           the name is the conventional "don't use this" flag for consumers)
@@ -41,9 +46,13 @@ case "$(uname)" in
   *)      NM_PREFIX=""  ;;
 esac
 
-# (1) C ABI keep-list.
+# (1) C ABI keep-list. The sed after awk strips a leading `*` (or `&`), which
+# can attach to the function name when the declared return type is a
+# pointer and the `*` hugs the name — e.g. `MULTIFLOATS_API char *to_charsdd(`
+# → `$NF == "*to_charsdd("`. Declaring such functions as `char* foo(` avoids
+# the ambiguity, but strip defensively so either style works.
 grep -oE "^MULTIFLOATS_API[^(]+\(" "$HEADER" \
-    | awk '{print $NF}' | sed 's/($//' | sort -u \
+    | awk '{print $NF}' | sed -e 's/($//' -e 's/^[*&]*//' | sort -u \
     | awk -v p="$NM_PREFIX" '{print p $0}' > "$KEEP"
 
 if [ ! -s "$KEEP" ]; then

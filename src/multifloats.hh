@@ -1,10 +1,13 @@
 #pragma once
 
+#include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <iosfwd>
 #include <limits>
 #include <string>
+#include <system_error>
 #include <type_traits>
 
 // Every error-free transformation here (two_prod, reduce_pi_half, erfc x-split,
@@ -817,9 +820,66 @@ inline constexpr bool isunordered(float64x2 const &x, float64x2 const &y) {
 // round-half-to-even). Special values use the same textual forms as
 // std::to_string for doubles ("nan", "inf", "-inf"). `operator<<` honors
 // `os.precision()` when > 17; otherwise (including the C++ default of 6)
-// the DD default of 32 digits is used. Definitions live in
-// src/multifloats_io.cc — inlining is not worth the header weight.
-std::string to_string(float64x2 const &x, int precision = 32);
+// the DD default of 32 digits is used.
+//
+// Layering. The core formatter is `detail::format_scientific_chars`,
+// defined out-of-line in src/multifloats_io.cc. `to_chars` is a header-
+// inline wrapper that maps its return convention onto `std::to_chars_result`;
+// `to_string` then layers on `to_chars`. The `std::string` construction
+// therefore happens entirely in the consumer's translation unit, so
+// `libmultifloats.a` carries no `std::string` in its ABI and links cleanly
+// against either libstdc++ string ABI (_GLIBCXX_USE_CXX11_ABI=0 or =1).
+// The extern "C" `to_charsdd` in multifloats_c.h is a sibling shim over the
+// same `detail::format_scientific_chars`, for C / Fortran consumers.
+
+namespace detail {
+// Core formatter. Writes scientific-notation decimal of `value` at
+// `precision` significant digits (clamped to [1, 34]) into [first, last).
+// No NUL terminator. Returns one-past-last-written on success, or nullptr
+// when the output wouldn't fit (in which case the buffer is unchanged).
+char *format_scientific_chars(float64x2 const &value, int precision,
+                              char *first, char *last) noexcept;
+} // namespace detail
+
+// `<charconv>`-style formatter for float64x2. Mirrors `std::to_chars` for
+// the built-in floating-point types: writes into [first, last) without a
+// NUL terminator and returns the one-past-the-last pointer together with a
+// `std::errc`. On a too-small buffer, returns `{last, errc::value_too_large}`
+// and leaves the buffer unchanged (nothing is written). On success, returns
+// `{ptr, errc{}}` where `ptr == first + (bytes written)`.
+//
+// Scope: only `std::chars_format::scientific` is supported. `fixed`,
+// `general`, and `hex` return `{first, errc::invalid_argument}` — the
+// underlying formatter only implements scientific notation today. Precision
+// defaults to 32 (DD's natural round-trip width); values outside [1, 34]
+// are clamped by the core formatter.
+inline std::to_chars_result
+to_chars(char *first, char *last, float64x2 const &value,
+         std::chars_format fmt, int precision) noexcept {
+  if (fmt != std::chars_format::scientific)
+    return {first, std::errc::invalid_argument};
+  char *end = detail::format_scientific_chars(value, precision, first, last);
+  if (!end) return {last, std::errc::value_too_large};
+  return {end, std::errc{}};
+}
+inline std::to_chars_result
+to_chars(char *first, char *last, float64x2 const &value,
+         std::chars_format fmt) noexcept {
+  return to_chars(first, last, value, fmt, 32);
+}
+inline std::to_chars_result
+to_chars(char *first, char *last, float64x2 const &value) noexcept {
+  return to_chars(first, last, value, std::chars_format::scientific, 32);
+}
+
+inline std::string to_string(float64x2 const &x, int precision = 32) {
+  char buf[MULTIFLOATS_DD_CHARS_BUFSIZE];
+  auto res = to_chars(buf, buf + sizeof(buf), x,
+                      std::chars_format::scientific, precision);
+  // The caller buffer is sized for any legal precision, so value_too_large
+  // cannot happen here — `res.ec` is always `errc{}` in practice.
+  return std::string(buf, static_cast<std::size_t>(res.ptr - buf));
+}
 std::ostream &operator<<(std::ostream &os, float64x2 const &x);
 
 } // namespace multifloats
