@@ -67,21 +67,30 @@ float64x2_t tgammadd(float64x2_t a) { return to(multifloats::tgamma(from(a))); }
 float64x2_t lgammadd(float64x2_t a) { return to(multifloats::lgamma(from(a))); }
 
 // Bessel functions (math.h naming: j0, j1, y0, y1). Route to the
-// order-specific C++ fast-path kernels cyl_bessel_j0/j1 and
-// cyl_neumann0/1 declared in multifloats.hh.
-float64x2_t j0dd(float64x2_t a) { return to(multifloats::cyl_bessel_j0(from(a))); }
-float64x2_t j1dd(float64x2_t a) { return to(multifloats::cyl_bessel_j1(from(a))); }
-float64x2_t y0dd(float64x2_t a) { return to(multifloats::cyl_neumann0(from(a))); }
-float64x2_t y1dd(float64x2_t a) { return to(multifloats::cyl_neumann1(from(a))); }
+// order-specific C++ fast-path kernels j0/j1 and y0/y1 declared in
+// multifloats.hh (same names; the C ABI just adds the `dd` suffix).
+float64x2_t j0dd(float64x2_t a) { return to(multifloats::j0(from(a))); }
+float64x2_t j1dd(float64x2_t a) { return to(multifloats::j1(from(a))); }
+float64x2_t y0dd(float64x2_t a) { return to(multifloats::y0(from(a))); }
+float64x2_t y1dd(float64x2_t a) { return to(multifloats::y1(from(a))); }
 
 // Integer-order Bessel functions (recurrence from j0/j1, y0/y1).
-float64x2_t jndd(int n, float64x2_t a) { return to(multifloats::cyl_bessel_j(n, from(a))); }
-float64x2_t yndd(int n, float64x2_t a) { return to(multifloats::cyl_neumann(n, from(a))); }
-void yn_rangedd(int n1, int n2, float64x2_t a, float64x2_t *out) {
+float64x2_t jndd(int n, float64x2_t a) { return to(multifloats::jn(n, from(a))); }
+float64x2_t yndd(int n, float64x2_t a) { return to(multifloats::yn(n, from(a))); }
+// Range sweeps: Yn uses the stable forward-recurrence single-sweep kernel;
+// Jn loops over Miller-backward per output (forward is unstable for n > x).
+void jndd_range(int n1, int n2, float64x2_t a, float64x2_t *out) {
   int size = n2 - n1 + 1;
   if (size <= 0) return;
   std::vector<float64x2> buf(size);
-  multifloats::cyl_neumann(n1, n2, from(a), buf.data());
+  multifloats::jn(n1, n2, from(a), buf.data());
+  for (int i = 0; i < size; ++i) out[i] = to(buf[i]);
+}
+void yndd_range(int n1, int n2, float64x2_t a, float64x2_t *out) {
+  int size = n2 - n1 + 1;
+  if (size <= 0) return;
+  std::vector<float64x2> buf(size);
+  multifloats::yn(n1, n2, from(a), buf.data());
   for (int i = 0; i < size; ++i) out[i] = to(buf[i]);
 }
 

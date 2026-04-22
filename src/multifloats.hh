@@ -760,19 +760,23 @@ float64x2 erfcx  (float64x2 const &x);
 float64x2 tgamma (float64x2 const &x);
 float64x2 lgamma (float64x2 const &x);
 
-// Cylindrical Bessel. Names follow C++17 <cmath>: cyl_bessel_j for J_n,
-// cyl_neumann for Y_n. Order-0 and order-1 have dedicated fast-path
-// kernels; the integer-order dispatchers cyl_bessel_j/cyl_neumann call
-// them internally and run Miller / forward recurrence for |n| ≥ 2. The
-// 4-arg cyl_neumann overload fills a single forward-recurrence sweep of
-// n2-n1+1 outputs (cheaper than n2-n1+1 independent 2-arg calls).
-float64x2 cyl_bessel_j0 (float64x2 const &x);
-float64x2 cyl_bessel_j1 (float64x2 const &x);
-float64x2 cyl_neumann0  (float64x2 const &x);
-float64x2 cyl_neumann1  (float64x2 const &x);
-float64x2 cyl_bessel_j  (int n, float64x2 const &x);
-float64x2 cyl_neumann   (int n, float64x2 const &x);
-void      cyl_neumann   (int n1, int n2, float64x2 const &x, float64x2 *out);
+// Bessel functions of the first (j) and second (y) kind. Names follow
+// POSIX <math.h>: j0/j1/jn for J_n, y0/y1/yn for Y_n. Note the signature
+// differs from C++17 std::cyl_bessel_j / std::cyl_neumann — those take a
+// double order, while the DD kernels take an integer order seeded off
+// the fast-path j0/j1/y0/y1 rational fits and step up via Miller /
+// forward recurrence for |n| ≥ 2. The 4-arg yn overload fills a single
+// forward-recurrence sweep of n2-n1+1 outputs (cheaper than n2-n1+1
+// independent 2-arg calls); the 4-arg jn overload loops the scalar
+// Miller kernel because Jn forward-recurrence is unstable for n > x.
+float64x2 j0 (float64x2 const &x);
+float64x2 j1 (float64x2 const &x);
+float64x2 y0 (float64x2 const &x);
+float64x2 y1 (float64x2 const &x);
+float64x2 jn (int n, float64x2 const &x);
+float64x2 yn (int n, float64x2 const &x);
+void      jn (int n1, int n2, float64x2 const &x, float64x2 *out);
+void      yn (int n1, int n2, float64x2 const &x, float64x2 *out);
 
 // =============================================================================
 // Additional classification and ordered comparison

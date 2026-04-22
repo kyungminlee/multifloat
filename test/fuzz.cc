@@ -960,12 +960,12 @@ int main(int argc, char **argv) {
           CHK("by1", mf::detail::from_f64x2(::y1dd(mf::detail::to_f64x2(f1))),
               y1q(q1), q1, (q_t)0, mpfr::bessely1(m1));
 
-          // yn_rangedd: single forward-recurrence sweep filling out[0..5].
+          // yndd_range: single forward-recurrence sweep filling out[0..5].
           // Each output is compared individually against ynq(n, x). One
           // label "yn_range" covers all six so the stat row aggregates
           // error across the entire range sweep.
           float64x2_t yn_out[6];
-          ::yn_rangedd(0, 5, mf::detail::to_f64x2(f1), yn_out);
+          ::yndd_range(0, 5, mf::detail::to_f64x2(f1), yn_out);
           for (int n = 0; n <= 5; ++n)
             CHK("yn_range",
                 mf::detail::from_f64x2(yn_out[n]), ynq(n, q1),
