@@ -529,8 +529,17 @@ static void check(char const *op, mf::float64x2 const &got, q_t expected,
   // rel_err(DD vs qp).
   if (mp_isfinite(expected_mp) && !mp_isnan(expected_mp) &&
       !mp_below_subnormal_floor(expected_mp)) {
-    double rq  = mp_rel_err(to_mp(expected), expected_mp);
-    double rdd = mp_rel_err(to_mp(got),      expected_mp);
+    // Normalize absolute error by max(|expected|, input_mag) so ops whose
+    // true result is intrinsically small relative to the inputs (fmod near
+    // a zero, subtraction near cancellation) don't report astronomical
+    // relative error from dividing by a tiny denominator. For amplifying
+    // ops (mul, exp, …) |expected| ≥ input_mag so the max collapses to
+    // |expected| and the reading is unchanged.
+    mp_t denom_mp = mpfr::abs(expected_mp);
+    mp_t input_mag_mp = to_mp(input_mag);
+    if (denom_mp < input_mag_mp) denom_mp = input_mag_mp;
+    double rq  = (mpfr::abs(to_mp(expected) - expected_mp) / denom_mp).toDouble();
+    double rdd = (mpfr::abs(to_mp(got)      - expected_mp) / denom_mp).toDouble();
     update_stat(op, rq, rdd);
   }
 #else
@@ -772,6 +781,16 @@ int main(int argc, char **argv) {
   for (long i = 1; i <= iterations; ++i) {
     q_t q1, q2;
     rng.generate_pair(q1, q2);
+    // Round-trip through DD so every qp input is already representable
+    // in float64x2 exactly. Without this, qp carries 7 bits of precision
+    // past what DD's 106-bit pair can hold, and those bits surface as
+    // spurious DD-input error when DD and qp are measured against a
+    // shared mpreal oracle (`sub(q1, q1·(1+1e-15))` would otherwise read
+    // ~1e-17 qp rel-err instead of the actual 0.5 qp ulp). After the
+    // clamp, to_mp(q1) == to_mp(from_q(q1)), so both systems see the
+    // same math and the oracle can be sourced from either side.
+    q1 = to_q(from_q(q1));
+    q2 = to_q(from_q(q2));
     mf::float64x2 f1 = from_q(q1);
     mf::float64x2 f2 = from_q(q2);
     MP_STMT(mp_t m1 = to_mp(f1));
@@ -918,6 +937,9 @@ int main(int argc, char **argv) {
       // 3-argument min/max via nested fmin/fmax.
       if (both_finite) {
         q_t q3 = (q1 + q2) * (q_t)0.5q;
+        // q1+q2 of two DD-precision values can spill into bit 107; clamp
+        // back to DD so q3, f3, m3 stay fully round-trip consistent.
+        q3 = to_q(from_q(q3));
         mf::float64x2 f3 = from_q(q3);
         q_t min12 = q1 < q2 ? q1 : q2;
         q_t q_min3 = min12 < q3 ? min12 : q3;
