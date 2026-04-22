@@ -382,6 +382,44 @@ static void report_fail(char const *op, char const *detail) {
 #define CHK(op, mf_expr, q_expr, i1, i2, ...) \
     check(op, (mf_expr), (q_expr), (i1), (i2) MP_ARG(__VA_ARGS__))
 
+// Shorthand wrappers over CHK. Each one token-pastes the op name into
+// the DD / qp / mp function names following a convention, then forwards
+// to CHK. The scope names they depend on (f1/q1/m1 for scalar ops,
+// zd1/zq1/zm1/mag for complex ops) are set up once per main-loop
+// iteration — relocating a call site out of that scope means reverting
+// to raw CHK.
+//
+// Ops that don't follow the naming convention (abs, bjn, fmadd, sincos,
+// π-scaled trig, erfcx, cdd_conjg/proj/arg/abs/pow/expm1/log1p/log2/log10/
+// sinpi/cospi, mixed-mode add_fd/mul_df/pow_md/pow_dm/pow_int, min3/max3,
+// plus arithmetic operators) keep using raw CHK.
+
+// Scalar unary: mf::NAME(f1) / NAMEq(q1) / mpfr::NAME(m1).
+#define CHK1(NAME) \
+    CHK(#NAME, mf::NAME(f1), NAME##q(q1), q1, (q_t)0, mpfr::NAME(m1))
+
+// Scalar unary where mpreal spells the op differently (tgamma → gamma,
+// lgamma → lngamma).
+#define CHK1_MP(NAME, MPNAME) \
+    CHK(#NAME, mf::NAME(f1), NAME##q(q1), q1, (q_t)0, mpfr::MPNAME(m1))
+
+// Scalar binary: mf::NAME(f1, f2) / NAMEq(q1, q2) / mpfr::NAME(m1, m2).
+#define CHK2(NAME) \
+    CHK(#NAME, mf::NAME(f1, f2), NAME##q(q1, q2), q1, q2, mpfr::NAME(m1, m2))
+
+// Complex unary: ::cSTEMdd(zd1) / cSTEMq(zq1) / c_STEM(zm1). The stat
+// label is "cdd_STEM" to match the rest of the complex report.
+#define CHK_C1(STEM) \
+    CHK("cdd_" #STEM, ::c##STEM##dd(zd1), c##STEM##q(zq1), \
+        mag, (q_t)0, c_##STEM(zm1))
+
+// Complex binary via a qp operator: ::cSTEMdd(zd1, zd2) / zq1 OP zq2 /
+// c_STEM(zm1, zm2). Used for add/sub/mul/div — libquadmath has no
+// cadd/csub/... functions, so the qp side reads as an operator.
+#define CHK_COP(STEM, OP) \
+    CHK("cdd_" #STEM, ::c##STEM##dd(zd1, zd2), zq1 OP zq2, \
+        mag, (q_t)0, c_##STEM(zm1, zm2))
+
 static void check(char const *op, mf::float64x2 const &got, q_t expected,
                   q_t i1, q_t i2 MP_PARAM(mp_t const &expected_mp)) {
   // NaN: leading limb must be NaN.
@@ -710,14 +748,11 @@ int main(int argc, char **argv) {
     CHK("sub", f1 - f2, q1 - q2, q1, q2, m1 - m2);
     if (both_finite) CHK("mul", f1 * f2, q1 * q2, q1, q2, m1 * m2);
     if (both_finite && q2 != (q_t)0) CHK("div", f1 / f2, q1 / q2, q1, q2, m1 / m2);
-    if (q_isfinite(q1) && q1 >= (q_t)0)
-      CHK("sqrt", mf::sqrt(f1), sqrtq(q1), q1, (q_t)0, mpfr::sqrt(m1));
+    if (q_isfinite(q1) && q1 >= (q_t)0) CHK1(sqrt);
     CHK("abs", mf::abs(f1), q1 < 0 ? -q1 : q1, q1, (q_t)0, mpfr::abs(m1));
     CHK("neg", -f1, -q1, q1, (q_t)0, -m1);
-    if (q_isfinite(q1) && aq1 < (q_t)1e15q)
-      CHK("trunc", mf::trunc(f1), truncq(q1), q1, (q_t)0, mpfr::trunc(m1));
-    if (q_isfinite(q1) && aq1 < (q_t)1e15q)
-      CHK("round", mf::round(f1), roundq(q1), q1, (q_t)0, mpfr::round(m1));
+    if (q_isfinite(q1) && aq1 < (q_t)1e15q) CHK1(trunc);
+    if (q_isfinite(q1) && aq1 < (q_t)1e15q) CHK1(round);
 
     check_comp(f1, f2, q1, q2);
 
@@ -737,8 +772,7 @@ int main(int argc, char **argv) {
           (m2 >= 0 ? mpfr::abs(m1) : -mpfr::abs(m1)));
       CHK("fdim", mf::fdim(f1, f2), fdimq(q1, q2), q1, q2,
           (m1 > m2 ? m1 - m2 : mp_t(0)));
-      CHK("hypot", mf::hypot(f1, f2), hypotq(q1, q2), q1, q2,
-          mpfr::hypot(m1, m2));
+      CHK2(hypot);
 
       q_t aq2 = q2 < 0 ? -q2 : q2;
       if (q2 != (q_t)0 && aq1 < (q_t)1e20q && aq2 > (q_t)1e-20q)
@@ -758,19 +792,17 @@ int main(int argc, char **argv) {
     if (i % 100 == 0) {
       if (q_isfinite(q1)) {
         q_t qe = expq(q1);
-        if (q_isfinite(qe)) CHK("exp", mf::exp(f1), qe, q1, (q_t)0, mpfr::exp(m1));
+        if (q_isfinite(qe)) CHK1(exp);
       }
       if (q_isfinite(q1) && q1 > (q_t)0) {
-        CHK("log",   mf::log(f1),   logq(q1),   q1, (q_t)0, mpfr::log(m1));
-        CHK("log10", mf::log10(f1), log10q(q1), q1, (q_t)0, mpfr::log10(m1));
+        CHK1(log);
+        CHK1(log10);
       }
       if (q_isfinite(q1)) {
         q_t qem = expm1q(q1);
-        if (q_isfinite(qem))
-          CHK("expm1", mf::expm1(f1), qem, q1, (q_t)0, mpfr::expm1(m1));
+        if (q_isfinite(qem)) CHK1(expm1);
       }
-      if (q_isfinite(q1) && q1 > (q_t)-1)
-        CHK("log1p", mf::log1p(f1), log1pq(q1), q1, (q_t)0, mpfr::log1p(m1));
+      if (q_isfinite(q1) && q1 > (q_t)-1) CHK1(log1p);
 
       if (q_isfinite(q1)) {
         q_t qe2 = exp2q(q1);
@@ -786,10 +818,9 @@ int main(int argc, char **argv) {
 
       // Trig: keep magnitudes moderate.
       if (q_isfinite(q1) && aq1 < (q_t)1e6q) {
-        CHK("sin", mf::sin(f1), sinq(q1), q1, (q_t)0, mpfr::sin(m1));
-        CHK("cos", mf::cos(f1), cosq(q1), q1, (q_t)0, mpfr::cos(m1));
-        if (fabsq(cosq(q1)) > (q_t)1e-12q)
-          CHK("tan", mf::tan(f1), tanq(q1), q1, (q_t)0, mpfr::tan(m1));
+        CHK1(sin);
+        CHK1(cos);
+        if (fabsq(cosq(q1)) > (q_t)1e-12q) CHK1(tan);
 
         // Fused sincos: one range-reduction feeds both outputs.
         float64x2_t sc_s, sc_c;
@@ -800,16 +831,15 @@ int main(int argc, char **argv) {
             q1, (q_t)0, mpfr::cos(m1));
       }
       if (q_isfinite(q1) && aq1 <= (q_t)1) {
-        CHK("asin", mf::asin(f1), asinq(q1), q1, (q_t)0, mpfr::asin(m1));
-        CHK("acos", mf::acos(f1), acosq(q1), q1, (q_t)0, mpfr::acos(m1));
+        CHK1(asin);
+        CHK1(acos);
       }
-      if (q_isfinite(q1))
-        CHK("atan", mf::atan(f1), atanq(q1), q1, (q_t)0, mpfr::atan(m1));
+      if (q_isfinite(q1)) CHK1(atan);
 
       if (q_isfinite(q1) && aq1 < (q_t)700) {
-        CHK("sinh", mf::sinh(f1), sinhq(q1), q1, (q_t)0, mpfr::sinh(m1));
-        CHK("cosh", mf::cosh(f1), coshq(q1), q1, (q_t)0, mpfr::cosh(m1));
-        CHK("tanh", mf::tanh(f1), tanhq(q1), q1, (q_t)0, mpfr::tanh(m1));
+        CHK1(sinh);
+        CHK1(cosh);
+        CHK1(tanh);
 
         // Fused sinhcosh.
         float64x2_t hc_s, hc_c;
@@ -819,16 +849,13 @@ int main(int argc, char **argv) {
         CHK("sinhcosh_c", mf::detail::from_f64x2(hc_c), coshq(q1),
             q1, (q_t)0, mpfr::cosh(m1));
       }
-      if (q_isfinite(q1))
-        CHK("asinh", mf::asinh(f1), asinhq(q1), q1, (q_t)0, mpfr::asinh(m1));
-      if (q_isfinite(q1) && q1 >= (q_t)1)
-        CHK("acosh", mf::acosh(f1), acoshq(q1), q1, (q_t)0, mpfr::acosh(m1));
-      if (q_isfinite(q1) && aq1 <  (q_t)1)
-        CHK("atanh", mf::atanh(f1), atanhq(q1), q1, (q_t)0, mpfr::atanh(m1));
+      if (q_isfinite(q1)) CHK1(asinh);
+      if (q_isfinite(q1) && q1 >= (q_t)1) CHK1(acosh);
+      if (q_isfinite(q1) && aq1 <  (q_t)1) CHK1(atanh);
 
       if (q_isfinite(q1) && aq1 < (q_t)100) {
-        CHK("erf",  mf::erf(f1),  erfq(q1),  q1, (q_t)0, mpfr::erf(m1));
-        CHK("erfc", mf::erfc(f1), erfcq(q1), q1, (q_t)0, mpfr::erfc(m1));
+        CHK1(erf);
+        CHK1(erfc);
       }
       // erfcx(x) = exp(x²) * erfc(x). The DD kernel is precision-preserving
       // for the tail-tail cancellation; the qp oracle is the naive product.
@@ -842,12 +869,11 @@ int main(int argc, char **argv) {
             mpfr::exp(m1 * m1) * mpfr::erfc(m1));
       }
       if (q_isfinite(q1) && q1 > (q_t)0 && q1 < (q_t)100) {
-        CHK("tgamma", mf::tgamma(f1), tgammaq(q1), q1, (q_t)0, mpfr::gamma(m1));
-        CHK("lgamma", mf::lgamma(f1), lgammaq(q1), q1, (q_t)0, mpfr::lngamma(m1));
+        CHK1_MP(tgamma, gamma);
+        CHK1_MP(lgamma, lngamma);
       }
 
-      CHK("atan2", mf::atan2(f1, f2), atan2q(q1, q2), q1, q2,
-          mpfr::atan2(m1, m2));
+      CHK2(atan2);
 
       // atan2pi(y, x) = atan2(y, x) / π. Division by π has low
       // amplification, so full-DD tolerance holds here (unlike forward
@@ -863,7 +889,7 @@ int main(int argc, char **argv) {
       q_t aq2 = q2 < 0 ? -q2 : q2;
       if (q_isfinite(q1) && q1 > (q_t)1e-3q && q1 < (q_t)1e3q &&
           q_isfinite(q2) && aq2 < (q_t)30) {
-        CHK("pow", mf::pow(f1, f2), powq(q1, q2), q1, q2, mpfr::pow(m1, m2));
+        CHK2(pow);
         CHK("pow_md", mf::pow(f1, mf::float64x2(d2)), powq(q1, (q_t)d2),
             q1, (q_t)d2, mpfr::pow(m1, to_mp(d2)));
         CHK("pow_dm", mf::pow(mf::float64x2(d1), f2), powq((q_t)d1, q2),
@@ -1008,25 +1034,18 @@ int main(int argc, char **argv) {
           q_t mag  = mag1 > mag2 ? mag1 : mag2;
           if (mag < (q_t)1e-300q) mag = (q_t)1e-300q;
 
-          CHK("cdd_add", ::cadddd(zd1, zd2), zq1 + zq2, mag, (q_t)0,
-              c_add(zm1, zm2));
-          CHK("cdd_sub", ::csubdd(zd1, zd2), zq1 - zq2, mag, (q_t)0,
-              c_sub(zm1, zm2));
-          CHK("cdd_mul", ::cmuldd(zd1, zd2), zq1 * zq2, mag, (q_t)0,
-              c_mul(zm1, zm2));
-          if (mag2 > (q_t)0)
-            CHK("cdd_div", ::cdivdd(zd1, zd2), zq1 / zq2, mag, (q_t)0,
-                c_div(zm1, zm2));
+          CHK_COP(add, +);
+          CHK_COP(sub, -);
+          CHK_COP(mul, *);
+          if (mag2 > (q_t)0) CHK_COP(div, /);
           CHK("cdd_abs",
               mf::detail::from_f64x2(::cabsdd(zd1)), cabsq(zq1),
               mag, (q_t)0, c_abs(zm1));
           CHK("cdd_conjg", ::conjdd(zd1), conjq(zq1), mag, (q_t)0,
               c_conj(zm1));
 
-          CHK("cdd_sqrt", ::csqrtdd(zd1), csqrtq(zq1), mag, (q_t)0,
-              c_sqrt(zm1));
-          CHK("cdd_exp",  ::cexpdd(zd1),  cexpq(zq1),  mag, (q_t)0,
-              c_exp(zm1));
+          CHK_C1(sqrt);
+          CHK_C1(exp);
 
           // cexpm1: the DD kernel preserves precision for small |z|. The
           // qp oracle (cexpq(z) - 1) loses it there, so gate |z| > 1e-5
@@ -1042,8 +1061,7 @@ int main(int argc, char **argv) {
           // clog: guard |z| away from 0 (and away from overflow) so the
           // oracle's arg computation stays accurate.
           if (mag1 > (q_t)1e-200q && mag1 < (q_t)1e100q) {
-            CHK("cdd_log", ::clogdd(zd1), clogq(zq1), mag, (q_t)0,
-                c_log(zm1));
+            CHK_C1(log);
 
             // clog2 / clog10 / clog1p: libquadmath has no direct variants,
             // compose from clogq. Both components are divided by the real
@@ -1105,26 +1123,24 @@ int main(int argc, char **argv) {
               mf::detail::from_f64x2(::cargdd(zd1)), cargq(zq1), mag, (q_t)0,
               c_arg(zm1));
 
-          CHK("cdd_sin",  ::csindd(zd1),  csinq(zq1),  mag, (q_t)0, c_sin(zm1));
-          CHK("cdd_cos",  ::ccosdd(zd1),  ccosq(zq1),  mag, (q_t)0, c_cos(zm1));
-          CHK("cdd_sinh", ::csinhdd(zd1), csinhq(zq1), mag, (q_t)0, c_sinh(zm1));
-          CHK("cdd_cosh", ::ccoshdd(zd1), ccoshq(zq1), mag, (q_t)0, c_cosh(zm1));
+          CHK_C1(sin);
+          CHK_C1(cos);
+          CHK_C1(sinh);
+          CHK_C1(cosh);
 
           // c{tan,tanh}: zeros of the corresponding {cos,cosh} cause the
           // division inside the oracle to blow up. Gate on oracle magnitude.
           __complex128 ccz  = ccosq(zq1);
           __complex128 ccsh = ccoshq(zq1);
-          if (cabsq(ccz)  > (q_t)1e-10q)
-            CHK("cdd_tan",  ::ctandd(zd1),  ctanq(zq1),  mag, (q_t)0, c_tan(zm1));
-          if (cabsq(ccsh) > (q_t)1e-10q)
-            CHK("cdd_tanh", ::ctanhdd(zd1), ctanhq(zq1), mag, (q_t)0, c_tanh(zm1));
+          if (cabsq(ccz)  > (q_t)1e-10q) CHK_C1(tan);
+          if (cabsq(ccsh) > (q_t)1e-10q) CHK_C1(tanh);
 
-          CHK("cdd_asin",  ::casindd(zd1),  casinq(zq1),  mag, (q_t)0, c_asin(zm1));
-          CHK("cdd_acos",  ::cacosdd(zd1),  cacosq(zq1),  mag, (q_t)0, c_acos(zm1));
-          CHK("cdd_atan",  ::catandd(zd1),  catanq(zq1),  mag, (q_t)0, c_atan(zm1));
-          CHK("cdd_asinh", ::casinhdd(zd1), casinhq(zq1), mag, (q_t)0, c_asinh(zm1));
-          CHK("cdd_acosh", ::cacoshdd(zd1), cacoshq(zq1), mag, (q_t)0, c_acosh(zm1));
-          CHK("cdd_atanh", ::catanhdd(zd1), catanhq(zq1), mag, (q_t)0, c_atanh(zm1));
+          CHK_C1(asin);
+          CHK_C1(acos);
+          CHK_C1(atan);
+          CHK_C1(asinh);
+          CHK_C1(acosh);
+          CHK_C1(atanh);
         }
       }
     }
