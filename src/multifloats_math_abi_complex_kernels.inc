@@ -1,29 +1,22 @@
 // Complex overloads for the Kind-D parity gap functions — operations the
 // C ABI exposes via `c*dd` kernels but which have no std::complex free
-// function to specialize (expm1, log2, log10, log1p) or whose name is
-// outside the standard library (sinpi, cospi).
+// function to specialize (expm1, log2, log1p) or whose name is outside
+// the standard library (sinpi, cospi).
+//
+// log10 has a std::complex free-function template in C++17; placing it
+// as a std:: specialization in multifloats_math_complex_std.inc lets
+// `std::log10(z)` route to the DD path. The other five live here.
 //
 // Bodies mirror the original extern "C" c*dd implementations in
 // multifloats_math_abi_complex.inc; the C shim wrappers over there now
 // call these directly.
 
-namespace _abi {
-// Local marshaling helpers. The public `to_f64x2` / `from_f64x2` in
-// multifloats::detail handle the scalar conversion; wrap the complex
-// pair inline since std::complex<float64x2> ↔ complex64x2_t isn't
-// worth a separate header declaration.
-inline float64x2_t _c2(float64x2 const &x) { return {x._limbs[0], x._limbs[1]}; }
-inline float64x2 _f2(float64x2_t x) { float64x2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
-inline complex64x2_t _to(std::complex<float64x2> const &z) { return {_c2(z.real()), _c2(z.imag())}; }
-inline std::complex<float64x2> _from(complex64x2_t z) { return {_f2(z.re), _f2(z.im)}; }
-} // namespace _abi
-
-// log10(z) = log(z) · (1/ln 10). Routes through ::clogdd (the authoritative
-// DD complex-log kernel) so the DD precision profile matches the scalar path.
+// log10(z) = log(z) · (1/ln 10). Routes through std::log (the DD complex-
+// log kernel) so the DD precision profile matches the scalar path.
 std::complex<float64x2> log10(std::complex<float64x2> const &z) {
   static const float64x2 inv_ln10 = float64x2(0x1.bcb7b1526e50ep-2,
                                               0x1.95355baaafad3p-57);
-  std::complex<float64x2> l = _abi::_from(::clogdd(_abi::_to(z)));
+  std::complex<float64x2> l = std::log(z);
   return {l.real() * inv_ln10, l.imag() * inv_ln10};
 }
 
@@ -31,7 +24,7 @@ std::complex<float64x2> log10(std::complex<float64x2> const &z) {
 std::complex<float64x2> log2(std::complex<float64x2> const &z) {
   static const float64x2 inv_ln2 =
       float64x2(1.4426950408889634, 2.0355273740931033e-17);
-  std::complex<float64x2> l = _abi::_from(::clogdd(_abi::_to(z)));
+  std::complex<float64x2> l = std::log(z);
   return {l.real() * inv_ln2, l.imag() * inv_ln2};
 }
 
@@ -49,9 +42,16 @@ std::complex<float64x2> log1p(std::complex<float64x2> const &z) {
   return {r, phi};
 }
 
-// expm1(z) = e^z - 1 without losing precision for |z| << 1. See the long
-// cexpm1dd comment in multifloats_math_abi_complex.inc for the full
-// cancellation-guard derivation; this is the same body.
+// expm1(z) = e^z - 1. The half-angle DD form
+//   Re = expm1(a)·cos(b) − 2·sin²(b/2),  Im = e^a·sin(b)
+// gives full DD precision *except* on the cancellation surface
+// cos(b)·e^a = 1, where the two Re terms agree to many bits and the
+// DD abs-err floor ~2⁻¹⁰⁵·max_term bleeds through (1078 DD ulp at
+// fuzz N=10^7). We always compute the DD form; if the cancellation
+// ratio |Re|/max_term is tight enough to let that floor dominate, we
+// recompute Re through a TD-precision pipeline (exp_full_td ×
+// sincos_td − 1) rounded back to DD. Im stays DD either way — no
+// cancellation structure.
 std::complex<float64x2> expm1(std::complex<float64x2> const &z) {
   float64x2 a = z.real(), b = z.imag();
   float64x2 ea_m1 = expm1(a);

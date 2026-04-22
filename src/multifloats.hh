@@ -822,78 +822,46 @@ std::ostream &operator<<(std::ostream &os, float64x2 const &x);
 
 // ---- std::complex<multifloats::float64x2> specializations ------------------
 //
-// For `exp, sin, cos, tan, sinh, cosh, tanh, atanh, acos` the generic
-// <complex> template path is either slow (each call pair sin/cos or
-// sinh/cosh goes through two separate extern-C kernels; the compiler
-// can't fuse across the ABI boundary), or in the case of `acos`
-// incorrect at DD precision on platforms where `long double == double`
-// (libstdc++'s `(_Tp)1.5707963…L` truncates the π/2 low limb).
+// Explicit specializations for the C++17 <complex> free-function templates
+// on `std::complex<multifloats::float64x2>`. Definitions live in
+// multifloats_math.cc (multifloats_math_complex_std.inc); the C-ABI
+// `c*dd` symbols in multifloats_c.h are now thin wrappers that marshal
+// complex64x2_t ↔ std::complex<multifloats::float64x2> and call these.
 //
-// These specializations delegate to the `c*dd` symbols in
-// multifloats_math.cc, which use the fused sincos_full /
-// sinhcosh_full kernels and hard-code the DD π/2 constant.
+// Covers:
+//   • transcendentals: exp, log, sqrt, pow, sin, cos, tan, asin, acos,
+//     atan, sinh, cosh, tanh, asinh, acosh, atanh (16)
+//   • value accessors: abs, arg, proj (3)
 //
-// The remaining eight functions (log, log10, pow, sqrt, asin, atan,
-// asinh, acosh) are also exported via c*dd for Fortran / C callers,
-// but we leave `std::log(complex<float64x2>)` etc. on the generic template:
-// those paths offer no speedup and no correctness advantage here.
+// std::conj / std::real / std::imag ride the generic <complex> template
+// unchanged — they compile to componentwise limb ops already. The
+// Kind-D overloads that don't have std:: free functions (log1p, log2,
+// expm1, sinpi, cospi) live in `namespace multifloats` below.
 #include <complex>
 
 namespace std {
 
-#define MULTIFLOATS_CX_SPECIALIZE(fn)                                        \
-  template <>                                                                \
-  inline complex<multifloats::float64x2>                                     \
-  fn(complex<multifloats::float64x2> const &z) {                             \
-    ::complex64x2_t in = {multifloats::detail::to_f64x2(z.real()),           \
-                          multifloats::detail::to_f64x2(z.imag())};          \
-    ::complex64x2_t out = ::c##fn##dd(in);                                   \
-    return complex<multifloats::float64x2>(                                  \
-        multifloats::detail::from_f64x2(out.re),                             \
-        multifloats::detail::from_f64x2(out.im));                            \
-  }
+template <> complex<multifloats::float64x2> exp  (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> log  (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> sqrt (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> pow  (complex<multifloats::float64x2> const &z,
+                                                  complex<multifloats::float64x2> const &w);
+template <> complex<multifloats::float64x2> sin  (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> cos  (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> tan  (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> asin (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> acos (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> atan (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> sinh (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> cosh (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> tanh (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> asinh(complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> acosh(complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> atanh(complex<multifloats::float64x2> const &z);
 
-MULTIFLOATS_CX_SPECIALIZE(exp)
-MULTIFLOATS_CX_SPECIALIZE(sin)
-MULTIFLOATS_CX_SPECIALIZE(cos)
-MULTIFLOATS_CX_SPECIALIZE(tan)
-MULTIFLOATS_CX_SPECIALIZE(sinh)
-MULTIFLOATS_CX_SPECIALIZE(cosh)
-MULTIFLOATS_CX_SPECIALIZE(tanh)
-MULTIFLOATS_CX_SPECIALIZE(atanh)
-MULTIFLOATS_CX_SPECIALIZE(acos)
-
-#undef MULTIFLOATS_CX_SPECIALIZE
-
-// Real-returning / identity specializations that delegate to the
-// matching c*dd symbol. `abs` and `arg` match libquadmath's overflow-
-// safe hypot / atan2 paths. `proj` handles the Riemann-sphere case.
-template <>
-inline multifloats::float64x2
-abs(complex<multifloats::float64x2> const &z) {
-  ::complex64x2_t in = {multifloats::detail::to_f64x2(z.real()),
-                        multifloats::detail::to_f64x2(z.imag())};
-  return multifloats::detail::from_f64x2(::cabsdd(in));
-}
-
-template <>
-inline multifloats::float64x2
-arg(complex<multifloats::float64x2> const &z) {
-  ::complex64x2_t in = {multifloats::detail::to_f64x2(z.real()),
-                        multifloats::detail::to_f64x2(z.imag())};
-  return multifloats::detail::from_f64x2(::cargdd(in));
-}
-
-template <>
-inline complex<multifloats::float64x2>
-proj(complex<multifloats::float64x2> const &z) {
-  ::complex64x2_t in = {multifloats::detail::to_f64x2(z.real()),
-                        multifloats::detail::to_f64x2(z.imag())};
-  ::complex64x2_t out = ::cprojdd(in);
-  return complex<multifloats::float64x2>(
-      multifloats::detail::from_f64x2(out.re),
-      multifloats::detail::from_f64x2(out.im));
-}
+template <> multifloats::float64x2          abs  (complex<multifloats::float64x2> const &z);
+template <> multifloats::float64x2          arg  (complex<multifloats::float64x2> const &z);
+template <> complex<multifloats::float64x2> proj (complex<multifloats::float64x2> const &z);
 
 } // namespace std
 

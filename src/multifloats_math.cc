@@ -88,10 +88,97 @@ using multifloats::detail::td_from_dd;
 
 static inline float64x2 from(float64x2_t x) { float64x2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
 static inline float64x2_t to(float64x2 const &x) { return {x._limbs[0], x._limbs[1]}; }
+static inline std::complex<float64x2> cc_from(complex64x2_t z) { return {from(z.re), from(z.im)}; }
+static inline complex64x2_t cc_to(std::complex<float64x2> const &z) { return {to(z.real()), to(z.imag())}; }
 
+// Anon-namespace helpers shared by the std:: complex specializations and
+// the C-ABI cmul/cdiv wrappers (which keep compensated bodies because the
+// std::complex operator* template is not specializable).
+//   • dd_cross_diff(a,b,c,d) = a·b − c·d with compensated 14-term expansion
+//     through a triple-double accumulator, DD-accurate even when |a·b|≈|c·d|.
+//   • dd_x2y2m1(x,y)         = x² + y² − 1 without the 1 ± 1 cancellation;
+//     mirrors libquadmath __quadmath_x2y2m1q on DD inputs.
 namespace {
+
+__attribute__((noinline, cold))
+float64x2 dd_cross_diff(float64x2 a, float64x2 b, float64x2 c, float64x2 d) {
+  double a0 = a._limbs[0], a1 = a._limbs[1];
+  double b0 = b._limbs[0], b1 = b._limbs[1];
+  double c0 = c._limbs[0], c1 = c._limbs[1];
+  double d0 = d._limbs[0], d1 = d._limbs[1];
+  double ab00_h = a0 * b0, ab00_l = std::fma(a0, b0, -ab00_h);
+  double cd00_h = c0 * d0, cd00_l = std::fma(c0, d0, -cd00_h);
+  double ab01_h = a0 * b1, ab01_l = std::fma(a0, b1, -ab01_h);
+  double ab10_h = a1 * b0, ab10_l = std::fma(a1, b0, -ab10_h);
+  double cd01_h = c0 * d1, cd01_l = std::fma(c0, d1, -cd01_h);
+  double cd10_h = c1 * d0, cd10_l = std::fma(c1, d0, -cd10_h);
+  double ab11 = a1 * b1;
+  double cd11 = c1 * d1;
+  double T0 = 0, T1 = 0, T2 = 0;
+  #define TSUM(x) do { \
+    double _x = (x), _s, _bb, _e; \
+    _s = T0 + _x; _bb = _s - T0; _e = (T0 - (_s - _bb)) + (_x - _bb); \
+    T0 = _s; _x = _e; \
+    _s = T1 + _x; _bb = _s - T1; _e = (T1 - (_s - _bb)) + (_x - _bb); \
+    T1 = _s; T2 += _e; \
+  } while (0)
+  TSUM(ab00_h);  TSUM(-cd00_h);
+  TSUM(ab00_l);  TSUM(-cd00_l);
+  TSUM(ab01_h);  TSUM(ab10_h);  TSUM(-cd01_h); TSUM(-cd10_h);
+  TSUM(ab01_l);  TSUM(ab10_l);  TSUM(-cd01_l); TSUM(-cd10_l);
+  TSUM(ab11);    TSUM(-cd11);
+  #undef TSUM
+  { double s = T1 + T2, bb = s - T1; T2 = (T1 - (s - bb)) + (T2 - bb); T1 = s; }
+  { double s = T0 + T1, bb = s - T0; T1 = (T0 - (s - bb)) + (T1 - bb); T0 = s; }
+  T1 += T2;
+  double hi = T0 + T1;
+  double lo = T1 - (hi - T0);
+  return float64x2(hi, lo);
+}
+
+inline float64x2 dd_x2y2m1(float64x2 x, float64x2 y) {
+  double x0 = x._limbs[0], x1 = x._limbs[1];
+  double y0 = y._limbs[0], y1 = y._limbs[1];
+  double xx00_h = x0 * x0, xx00_l = std::fma(x0, x0, -xx00_h);
+  double yy00_h = y0 * y0, yy00_l = std::fma(y0, y0, -yy00_h);
+  double twox0 = x0 + x0, twoy0 = y0 + y0;          // exact (×2)
+  double xx01_h = twox0 * x1, xx01_l = std::fma(twox0, x1, -xx01_h);
+  double yy01_h = twoy0 * y1, yy01_l = std::fma(twoy0, y1, -yy01_h);
+  double xx11 = x1 * x1;
+  double yy11 = y1 * y1;
+  double T0 = 0, T1 = 0, T2 = 0;
+  #define TSUM(v) do { \
+    double _x = (v), _s, _bb, _e; \
+    _s = T0 + _x; _bb = _s - T0; _e = (T0 - (_s - _bb)) + (_x - _bb); \
+    T0 = _s; _x = _e; \
+    _s = T1 + _x; _bb = _s - T1; _e = (T1 - (_s - _bb)) + (_x - _bb); \
+    T1 = _s; T2 += _e; \
+  } while (0)
+  TSUM(xx00_h);  TSUM(yy00_h);  TSUM(-1.0);
+  TSUM(xx01_h);  TSUM(yy01_h);
+  TSUM(xx00_l);  TSUM(yy00_l);
+  TSUM(xx01_l);  TSUM(yy01_l);
+  TSUM(xx11);    TSUM(yy11);
+  #undef TSUM
+  { double s = T1 + T2, bb = s - T1; T2 = (T1 - (s - bb)) + (T2 - bb); T1 = s; }
+  { double s = T0 + T1, bb = s - T0; T1 = (T0 - (s - bb)) + (T1 - bb); T0 = s; }
+  T1 += T2;
+  double hi = T0 + T1;
+  double lo = T1 - (hi - T0);
+  return float64x2(hi, lo);
+}
+
 #include "multifloats_math_matmul.inc"
 } // anonymous namespace
+
+// std:: complex template specializations — bodies for every C++ <complex>
+// free function we override (exp/log/sqrt/pow, the trig/hyp triples and
+// their inverses, abs/arg/proj). Declarations live in multifloats.hh.
+// Pulled into namespace std so the explicit specialization syntax is in
+// the right enclosing namespace.
+namespace std {
+#include "multifloats_math_complex_std.inc"
+} // namespace std
 
 extern "C" {
 #include "multifloats_math_abi_scalar.inc"
