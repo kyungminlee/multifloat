@@ -177,7 +177,7 @@ std::ostream &operator<<(std::ostream &os, float64x2 const &x) {
 
 extern "C" {
 char *to_charsdd(float64x2_t x, int precision, char *first, char *last) {
-  return format_scientific_chars(multifloats::detail::from_f64x2(x),
+  return format_scientific_chars(multifloats::float64x2(x),
                                  precision, first, last);
 }
 } // extern "C"

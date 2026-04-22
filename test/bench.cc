@@ -40,13 +40,13 @@ namespace fx {
 // -- Real unary: NAMEdd and NAMEq -------------------------------------------
 #define WRAP_REAL_UNARY(NAME)                                                  \
   inline mf::float64x2 NAME(mf::float64x2 const &x) {                          \
-    return mf::detail::from_f64x2(::NAME##dd(mf::detail::to_f64x2(x)));        \
+    return mf::float64x2(::NAME##dd(static_cast<float64x2_t>(x)));        \
   }                                                                            \
   inline q_t NAME(q_t x) { return ::NAME##q(x); }
 
 // neg: libquadmath uses the unary `-` operator on q_t, not a `negq` fn.
 inline mf::float64x2 neg_op(mf::float64x2 const &x) {
-  return mf::detail::from_f64x2(::negdd(mf::detail::to_f64x2(x)));
+  return mf::float64x2(::negdd(static_cast<float64x2_t>(x)));
 }
 inline q_t neg_op(q_t x) { return -x; }
 
@@ -77,14 +77,14 @@ WRAP_REAL_UNARY(erfc)
 // erfcx: libquadmath has no direct variant; compose from erfc and exp(x²).
 // This is the same oracle fuzz.cc uses (in both its default and USE_MPFR modes).
 inline mf::float64x2 erfcx(mf::float64x2 const &x) {
-  return mf::detail::from_f64x2(::erfcxdd(mf::detail::to_f64x2(x)));
+  return mf::float64x2(::erfcxdd(static_cast<float64x2_t>(x)));
 }
 inline q_t erfcx(q_t x) { return ::expq(x * x) * ::erfcq(x); }
 WRAP_REAL_UNARY(tgamma)
 WRAP_REAL_UNARY(lgamma)
 // fabs: libquadmath is fabsq; DD is fabsdd. "abs" common name for readability.
 inline mf::float64x2 abs_op(mf::float64x2 const &x) {
-  return mf::detail::from_f64x2(::fabsdd(mf::detail::to_f64x2(x)));
+  return mf::float64x2(::fabsdd(static_cast<float64x2_t>(x)));
 }
 inline q_t abs_op(q_t x) { return ::fabsq(x); }
 #undef WRAP_REAL_UNARY
@@ -92,7 +92,7 @@ inline q_t abs_op(q_t x) { return ::fabsq(x); }
 // -- π-scaled trig (DD: NAMEdd, qp: library fn composed with π·x or /π) ----
 #define WRAP_PI_INPUT(NAME, FN)                                                \
   inline mf::float64x2 NAME(mf::float64x2 const &x) {                          \
-    return mf::detail::from_f64x2(::NAME##dd(mf::detail::to_f64x2(x)));        \
+    return mf::float64x2(::NAME##dd(static_cast<float64x2_t>(x)));        \
   }                                                                            \
   inline q_t NAME(q_t x) { return ::FN##q(q_t(M_PIq) * x); }
 
@@ -103,7 +103,7 @@ WRAP_PI_INPUT(tanpi, tan)
 
 #define WRAP_PI_OUTPUT(NAME, FN)                                               \
   inline mf::float64x2 NAME(mf::float64x2 const &x) {                          \
-    return mf::detail::from_f64x2(::NAME##dd(mf::detail::to_f64x2(x)));        \
+    return mf::float64x2(::NAME##dd(static_cast<float64x2_t>(x)));        \
   }                                                                            \
   inline q_t NAME(q_t x) { return ::FN##q(x) / q_t(M_PIq); }
 
@@ -115,7 +115,7 @@ WRAP_PI_OUTPUT(atanpi, atan)
 // -- Bessel (DD: NAMEdd, qp: NAMEq, both identical suffix scheme) ----------
 #define WRAP_BESSEL01(NAME)                                                    \
   inline mf::float64x2 NAME(mf::float64x2 const &x) {                          \
-    return mf::detail::from_f64x2(::NAME##dd(mf::detail::to_f64x2(x)));        \
+    return mf::float64x2(::NAME##dd(static_cast<float64x2_t>(x)));        \
   }                                                                            \
   inline q_t NAME(q_t x) { return ::NAME##q(x); }
 
@@ -127,7 +127,7 @@ WRAP_BESSEL01(y1)
 
 #define WRAP_BESSELN(NAME)                                                     \
   inline mf::float64x2 NAME(int n, mf::float64x2 const &x) {                   \
-    return mf::detail::from_f64x2(::NAME##dd(n, mf::detail::to_f64x2(x)));     \
+    return mf::float64x2(::NAME##dd(n, static_cast<float64x2_t>(x)));     \
   }                                                                            \
   inline q_t NAME(int n, q_t x) { return ::NAME##q(n, x); }
 
@@ -138,8 +138,8 @@ WRAP_BESSELN(yn)
 // -- Real binary -----------------------------------------------------------
 #define WRAP_REAL_BINARY(NAME)                                                 \
   inline mf::float64x2 NAME(mf::float64x2 const &a, mf::float64x2 const &b) {  \
-    return mf::detail::from_f64x2(                                             \
-        ::NAME##dd(mf::detail::to_f64x2(a), mf::detail::to_f64x2(b)));         \
+    return mf::float64x2(                                             \
+        ::NAME##dd(static_cast<float64x2_t>(a), static_cast<float64x2_t>(b)));         \
   }                                                                            \
   inline q_t NAME(q_t a, q_t b) { return ::NAME##q(a, b); }
 
@@ -155,8 +155,8 @@ WRAP_REAL_BINARY(atan2)
 
 // atan2pi: DD native, qp composed as atan2q(y, x) / M_PIq.
 inline mf::float64x2 atan2pi(mf::float64x2 const &y, mf::float64x2 const &x) {
-  return mf::detail::from_f64x2(::atan2pidd(
-      mf::detail::to_f64x2(y), mf::detail::to_f64x2(x)));
+  return mf::float64x2(::atan2pidd(
+      static_cast<float64x2_t>(y), static_cast<float64x2_t>(x)));
 }
 inline q_t atan2pi(q_t y, q_t x) { return ::atan2q(y, x) / (q_t)M_PIq; }
 
@@ -167,15 +167,15 @@ inline q_t atan2pi(q_t y, q_t x) { return ::atan2q(y, x) / (q_t)M_PIq; }
 //    outputs vs two calls" comparison.
 inline mf::float64x2 sincos_op(mf::float64x2 const &x) {
   float64x2_t s, c;
-  ::sincosdd(mf::detail::to_f64x2(x), &s, &c);
-  return mf::detail::from_f64x2(::adddd(s, c));
+  ::sincosdd(static_cast<float64x2_t>(x), &s, &c);
+  return mf::float64x2(::adddd(s, c));
 }
 inline q_t sincos_op(q_t x) { return ::sinq(x) + ::cosq(x); }
 
 inline mf::float64x2 sinhcosh_op(mf::float64x2 const &x) {
   float64x2_t s, c;
-  ::sinhcoshdd(mf::detail::to_f64x2(x), &s, &c);
-  return mf::detail::from_f64x2(::adddd(s, c));
+  ::sinhcoshdd(static_cast<float64x2_t>(x), &s, &c);
+  return mf::float64x2(::adddd(s, c));
 }
 inline q_t sinhcosh_op(q_t x) { return ::sinhq(x) + ::coshq(x); }
 
@@ -184,10 +184,10 @@ inline q_t sinhcosh_op(q_t x) { return ::sinhq(x) + ::coshq(x); }
 // everything and the compiler can't elide any output.
 inline mf::float64x2 yn_range_op(mf::float64x2 const &x) {
   float64x2_t out[6];
-  ::yndd_range(0, 5, mf::detail::to_f64x2(x), out);
+  ::yndd_range(0, 5, static_cast<float64x2_t>(x), out);
   float64x2_t acc = out[0];
   for (int k = 1; k < 6; ++k) acc = ::adddd(acc, out[k]);
-  return mf::detail::from_f64x2(acc);
+  return mf::float64x2(acc);
 }
 inline q_t yn_range_op(q_t x) {
   q_t acc = ::ynq(0, x);
@@ -197,9 +197,9 @@ inline q_t yn_range_op(q_t x) {
 
 // fma: (a, b, c) → a·b + c
 inline mf::float64x2 fma_op(mf::float64x2 const &a, mf::float64x2 const &b, mf::float64x2 const &c) {
-  return mf::detail::from_f64x2(::fmadd(mf::detail::to_f64x2(a),
-                                         mf::detail::to_f64x2(b),
-                                         mf::detail::to_f64x2(c)));
+  return mf::float64x2(::fmadd(static_cast<float64x2_t>(a),
+                                         static_cast<float64x2_t>(b),
+                                         static_cast<float64x2_t>(c)));
 }
 inline q_t fma_op(q_t a, q_t b, q_t c) { return ::fmaq(a, b, c); }
 
@@ -226,11 +226,11 @@ WRAP_COMPLEX_UNARY(atanh)
 #undef WRAP_COMPLEX_UNARY
 
 // cabs: complex → real
-inline mf::float64x2 cabs(complex64x2_t z) { return mf::detail::from_f64x2(::cabsdd(z)); }
+inline mf::float64x2 cabs(complex64x2_t z) { return mf::float64x2(::cabsdd(z)); }
 inline q_t           cabs(__complex128  z) { return ::cabsq(z); }
 
 // carg: complex → real (phase angle in (-π, π]).
-inline mf::float64x2 carg(complex64x2_t z) { return mf::detail::from_f64x2(::cargdd(z)); }
+inline mf::float64x2 carg(complex64x2_t z) { return mf::float64x2(::cargdd(z)); }
 inline q_t           carg(__complex128  z) { return ::cargq(z); }
 
 // conjg: complex → complex
@@ -346,13 +346,13 @@ static void init_data() {
     auto [qre, fre] = make_dd(away(u(rng)));
     auto [qim, fim] = make_dd(away(u(rng)));
     __real__ zq1[i] = qre;  __imag__ zq1[i] = qim;
-    zf1[i].re = mf::detail::to_f64x2(fre);
-    zf1[i].im = mf::detail::to_f64x2(fim);
+    zf1[i].re = static_cast<float64x2_t>(fre);
+    zf1[i].im = static_cast<float64x2_t>(fim);
     auto [qre2, fre2] = make_dd(away(u(rng)));
     auto [qim2, fim2] = make_dd(away(u(rng)));
     __real__ zq2[i] = qre2; __imag__ zq2[i] = qim2;
-    zf2[i].re = mf::detail::to_f64x2(fre2);
-    zf2[i].im = mf::detail::to_f64x2(fim2);
+    zf2[i].re = static_cast<float64x2_t>(fre2);
+    zf2[i].im = static_cast<float64x2_t>(fim2);
   }
 }
 
@@ -465,10 +465,10 @@ static void report(const char *name, long n_ops, double tq, double tf) {
 // =============================================================================
 
 static void bench_arith() {
-  BENCH("add",  REPS_FAST, q1[i] + q2[i], mf::detail::from_f64x2(adddd(mf::detail::to_f64x2(f1[i]), mf::detail::to_f64x2(f2[i]))), q1, f1);
-  BENCH("sub",  REPS_FAST, q1[i] - q2[i], mf::detail::from_f64x2(subdd(mf::detail::to_f64x2(f1[i]), mf::detail::to_f64x2(f2[i]))), q1, f1);
-  BENCH("mul",  REPS_FAST, q1[i] * q2[i], mf::detail::from_f64x2(muldd(mf::detail::to_f64x2(f1[i]), mf::detail::to_f64x2(f2[i]))), q1, f1);
-  BENCH("div",  REPS_FAST, q1[i] / q2[i], mf::detail::from_f64x2(divdd(mf::detail::to_f64x2(f1[i]), mf::detail::to_f64x2(f2[i]))), q1, f1);
+  BENCH("add",  REPS_FAST, q1[i] + q2[i], mf::float64x2(adddd(static_cast<float64x2_t>(f1[i]), static_cast<float64x2_t>(f2[i]))), q1, f1);
+  BENCH("sub",  REPS_FAST, q1[i] - q2[i], mf::float64x2(subdd(static_cast<float64x2_t>(f1[i]), static_cast<float64x2_t>(f2[i]))), q1, f1);
+  BENCH("mul",  REPS_FAST, q1[i] * q2[i], mf::float64x2(muldd(static_cast<float64x2_t>(f1[i]), static_cast<float64x2_t>(f2[i]))), q1, f1);
+  BENCH("div",  REPS_FAST, q1[i] / q2[i], mf::float64x2(divdd(static_cast<float64x2_t>(f1[i]), static_cast<float64x2_t>(f2[i]))), q1, f1);
   BENCH1(sqrt,  REPS_FAST, qpos, fpos);
   BENCH("fma",  REPS_FAST, fx::fma_op(q1[i], q2[i], qpos[i]),
                            fx::fma_op(f1[i], f2[i], fpos[i]), q1, f1);

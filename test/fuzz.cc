@@ -699,8 +699,8 @@ static void print_all_stats() {
 static void check(char const *op, complex64x2_t const &got,
                   __complex128 expected, q_t i1, q_t i2
                   MP_PARAM(CMp const &expected_mp)) {
-  mf::float64x2 got_re = mf::detail::from_f64x2(got.re);
-  mf::float64x2 got_im = mf::detail::from_f64x2(got.im);
+  mf::float64x2 got_re = mf::float64x2(got.re);
+  mf::float64x2 got_im = mf::float64x2(got.im);
   q_t exp_re = crealq(expected);
   q_t exp_im = cimagq(expected);
 
@@ -715,8 +715,8 @@ static void check(char const *op, complex64x2_t const &got,
 // through the *dd kernels.
 static inline complex64x2_t to_cdd(mf::float64x2 const &re, mf::float64x2 const &im) {
   complex64x2_t z;
-  z.re = mf::detail::to_f64x2(re);
-  z.im = mf::detail::to_f64x2(im);
+  z.re = static_cast<float64x2_t>(re);
+  z.im = static_cast<float64x2_t>(im);
   return z;
 }
 
@@ -837,10 +837,10 @@ int main(int argc, char **argv) {
       // fmadd(a, b, c) = a·b + c. Use d1 as the third input (DD-
       // representable) so the qp reference is exactly fmaq(q1, q2, d1).
       CHK("fmadd",
-          mf::detail::from_f64x2(::fmadd(
-              mf::detail::to_f64x2(f1),
-              mf::detail::to_f64x2(f2),
-              mf::detail::to_f64x2(mf::float64x2(d1)))),
+          mf::float64x2(::fmadd(
+              static_cast<float64x2_t>(f1),
+              static_cast<float64x2_t>(f2),
+              static_cast<float64x2_t>(mf::float64x2(d1)))),
           fmaq(q1, q2, (q_t)d1), q1, q2, mpfr::fma(m1, m2, to_mp(d1)));
     }
 
@@ -862,10 +862,10 @@ int main(int argc, char **argv) {
 
         // Fused sincos: one range-reduction feeds both outputs.
         float64x2_t sc_s, sc_c;
-        ::sincosdd(mf::detail::to_f64x2(f1), &sc_s, &sc_c);
-        CHK("sincos_s", mf::detail::from_f64x2(sc_s), sinq(q1),
+        ::sincosdd(static_cast<float64x2_t>(f1), &sc_s, &sc_c);
+        CHK("sincos_s", mf::float64x2(sc_s), sinq(q1),
             q1, (q_t)0, mpfr::sin(m1));
-        CHK("sincos_c", mf::detail::from_f64x2(sc_c), cosq(q1),
+        CHK("sincos_c", mf::float64x2(sc_c), cosq(q1),
             q1, (q_t)0, mpfr::cos(m1));
       }
       CHK1_IF(asin, q_isfinite(q1) && aq1 <= (q_t)1);
@@ -879,10 +879,10 @@ int main(int argc, char **argv) {
 
         // Fused sinhcosh.
         float64x2_t hc_s, hc_c;
-        ::sinhcoshdd(mf::detail::to_f64x2(f1), &hc_s, &hc_c);
-        CHK("sinhcosh_s", mf::detail::from_f64x2(hc_s), sinhq(q1),
+        ::sinhcoshdd(static_cast<float64x2_t>(f1), &hc_s, &hc_c);
+        CHK("sinhcosh_s", mf::float64x2(hc_s), sinhq(q1),
             q1, (q_t)0, mpfr::sinh(m1));
-        CHK("sinhcosh_c", mf::detail::from_f64x2(hc_c), coshq(q1),
+        CHK("sinhcosh_c", mf::float64x2(hc_c), coshq(q1),
             q1, (q_t)0, mpfr::cosh(m1));
       }
       CHK1_IF(asinh, q_isfinite(q1));
@@ -910,8 +910,8 @@ int main(int argc, char **argv) {
       // amplification, so full-DD tolerance holds here (unlike forward
       // sin/cos/tanpi — see is_pi_trig).
       CHK("atan2pi",
-          mf::detail::from_f64x2(::atan2pidd(
-              mf::detail::to_f64x2(f1), mf::detail::to_f64x2(f2))),
+          mf::float64x2(::atan2pidd(
+              static_cast<float64x2_t>(f1), static_cast<float64x2_t>(f2))),
           atan2q(q1, q2) / (q_t)M_PIq,
           q1, q2,
           mpfr::atan2(m1, m2) / mpfr::const_pi(multifloats_test::kMpfrPrec));
@@ -961,25 +961,25 @@ int main(int argc, char **argv) {
       // where the two implementations can disagree by more than the kernel
       // error alone.
       if (q_isfinite(q1) && aq1 < (q_t)200) {
-        CHK("bj0", mf::detail::from_f64x2(::j0dd(mf::detail::to_f64x2(f1))),
+        CHK("bj0", mf::float64x2(::j0dd(static_cast<float64x2_t>(f1))),
             j0q(q1), q1, (q_t)0, mpfr::besselj0(m1));
-        CHK("bj1", mf::detail::from_f64x2(::j1dd(mf::detail::to_f64x2(f1))),
+        CHK("bj1", mf::float64x2(::j1dd(static_cast<float64x2_t>(f1))),
             j1q(q1), q1, (q_t)0, mpfr::besselj1(m1));
 
         static constexpr int kBesselOrders[] = {2, 3, 5, 8};
         for (int n : kBesselOrders) {
           CHK("bjn",
-              mf::detail::from_f64x2(::jndd(n, mf::detail::to_f64x2(f1))),
+              mf::float64x2(::jndd(n, static_cast<float64x2_t>(f1))),
               jnq(n, q1), q1, (q_t)n, mpfr::besseljn((long)n, m1));
           CHK_IF(q1 > (q_t)0, "byn",
-                 mf::detail::from_f64x2(::yndd(n, mf::detail::to_f64x2(f1))),
+                 mf::float64x2(::yndd(n, static_cast<float64x2_t>(f1))),
                  ynq(n, q1), q1, (q_t)n, mpfr::besselyn((long)n, m1));
         }
 
         if (q1 > (q_t)0) {
-          CHK("by0", mf::detail::from_f64x2(::y0dd(mf::detail::to_f64x2(f1))),
+          CHK("by0", mf::float64x2(::y0dd(static_cast<float64x2_t>(f1))),
               y0q(q1), q1, (q_t)0, mpfr::bessely0(m1));
-          CHK("by1", mf::detail::from_f64x2(::y1dd(mf::detail::to_f64x2(f1))),
+          CHK("by1", mf::float64x2(::y1dd(static_cast<float64x2_t>(f1))),
               y1q(q1), q1, (q_t)0, mpfr::bessely1(m1));
 
           // yndd_range: single forward-recurrence sweep filling out[0..5].
@@ -987,10 +987,10 @@ int main(int argc, char **argv) {
           // label "yn_range" covers all six so the stat row aggregates
           // error across the entire range sweep.
           float64x2_t yn_out[6];
-          ::yndd_range(0, 5, mf::detail::to_f64x2(f1), yn_out);
+          ::yndd_range(0, 5, static_cast<float64x2_t>(f1), yn_out);
           for (int n = 0; n <= 5; ++n)
             CHK("yn_range",
-                mf::detail::from_f64x2(yn_out[n]), ynq(n, q1),
+                mf::float64x2(yn_out[n]), ynq(n, q1),
                 q1, (q_t)n, mpfr::besselyn((long)n, m1));
         }
       }
@@ -1007,30 +1007,30 @@ int main(int argc, char **argv) {
         // sinpi fails near integer x (sin(π·n)=0); cospi fails near
         // half-integer (cos(π·(n+1/2))=0). Gate each on its own magnitude.
         CHK_IF(fabsq(sp) > (q_t)1e-10q, "sinpi",
-               mf::detail::from_f64x2(::sinpidd(mf::detail::to_f64x2(f1))),
+               mf::float64x2(::sinpidd(static_cast<float64x2_t>(f1))),
                sp, q1, (q_t)0,
                mpfr::sin(mpfr::const_pi(multifloats_test::kMpfrPrec) * m1));
         CHK_IF(fabsq(cp) > (q_t)1e-10q, "cospi",
-               mf::detail::from_f64x2(::cospidd(mf::detail::to_f64x2(f1))),
+               mf::float64x2(::cospidd(static_cast<float64x2_t>(f1))),
                cp, q1, (q_t)0,
                mpfr::cos(mpfr::const_pi(multifloats_test::kMpfrPrec) * m1));
         CHK_IF(fabsq(cp) > (q_t)1e-10q && fabsq(sp) > (q_t)1e-10q, "tanpi",
-               mf::detail::from_f64x2(::tanpidd(mf::detail::to_f64x2(f1))),
+               mf::float64x2(::tanpidd(static_cast<float64x2_t>(f1))),
                sp / cp, q1, (q_t)0,
                mpfr::tan(mpfr::const_pi(multifloats_test::kMpfrPrec) * m1));
       }
       if (q_isfinite(q1) && aq1 <= (q_t)1) {
         CHK("asinpi",
-            mf::detail::from_f64x2(::asinpidd(mf::detail::to_f64x2(f1))),
+            mf::float64x2(::asinpidd(static_cast<float64x2_t>(f1))),
             asinq(q1) / (q_t)M_PIq, q1, (q_t)0,
             mpfr::asin(m1) / mpfr::const_pi(multifloats_test::kMpfrPrec));
         CHK("acospi",
-            mf::detail::from_f64x2(::acospidd(mf::detail::to_f64x2(f1))),
+            mf::float64x2(::acospidd(static_cast<float64x2_t>(f1))),
             acosq(q1) / (q_t)M_PIq, q1, (q_t)0,
             mpfr::acos(m1) / mpfr::const_pi(multifloats_test::kMpfrPrec));
       }
       CHK_IF(q_isfinite(q1), "atanpi",
-             mf::detail::from_f64x2(::atanpidd(mf::detail::to_f64x2(f1))),
+             mf::float64x2(::atanpidd(static_cast<float64x2_t>(f1))),
              atanq(q1) / (q_t)M_PIq, q1, (q_t)0,
              mpfr::atan(m1) / mpfr::const_pi(multifloats_test::kMpfrPrec));
 
@@ -1066,7 +1066,7 @@ int main(int argc, char **argv) {
           CHK_C2(mul);
           CHK_C2_IF(div, mag2 > (q_t)0);
           CHK("cabs",
-              mf::detail::from_f64x2(::cabsdd(zd1)), cabsq(zq1),
+              mf::float64x2(::cabsdd(zd1)), cabsq(zq1),
               mag, (q_t)0, cabsmp(zm1));
           CHK("cconjg", ::conjdd(zd1), conjq(zq1), mag, (q_t)0,
               cconjgmp(zm1));
@@ -1147,7 +1147,7 @@ int main(int argc, char **argv) {
           // (negative real axis) DD and qp agree as long as imag-limbs
           // sign matches, which they do for DD-representable inputs.
           CHK("carg",
-              mf::detail::from_f64x2(::cargdd(zd1)), cargq(zq1), mag, (q_t)0,
+              mf::float64x2(::cargdd(zd1)), cargq(zq1), mag, (q_t)0,
               cargmp(zm1));
 
           CHK_C1(sin);

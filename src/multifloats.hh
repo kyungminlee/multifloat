@@ -10,6 +10,12 @@
 #include <system_error>
 #include <type_traits>
 
+// Pulled in at global scope (not inside `namespace multifloats`) so the
+// extern "C" `NAMEdd` function declarations land where the C ABI expects,
+// and so `float64x2_t` is visible to the `float64x2` class's conversion
+// constructor and conversion operator below.
+#include "multifloats_c.h"
+
 // Every error-free transformation here (two_prod, reduce_pi_half, erfc x-split,
 // matmul mac_inl, ...) depends on std::fma being IEEE-compliant: a single
 // multiply-add with one rounding. C99/C++ guarantees this for conforming
@@ -88,6 +94,17 @@ public:
   // `float64x2{hi, lo}` used inside class-method bodies.
   constexpr float64x2(double arg) : _limbs{arg, 0.0} {}
   constexpr float64x2(double hi, double lo) : _limbs{hi, lo} {}
+
+  // C-ABI interchange. `float64x2_t` (from multifloats_c.h) has the same
+  // bit-layout (two back-to-back doubles), so these conversions compile to
+  // zero moves — they exist to name the boundary, not to reshape data.
+  // Both are `explicit` to keep the C/C++ type boundary visible at call sites.
+  //   C++ → C:  float64x2_t c = static_cast<float64x2_t>(x);  // or float64x2_t(x)
+  //   C → C++:  float64x2   x(c);                              // or float64x2{c}
+  constexpr explicit float64x2(float64x2_t c) noexcept : _limbs{c.hi, c.lo} {}
+  constexpr explicit operator float64x2_t() const noexcept {
+    return {_limbs[0], _limbs[1]};
+  }
 
   constexpr explicit operator double() const { return _limbs[0]; }
 
@@ -613,20 +630,6 @@ namespace detail {
 // decisions are unchanged; the public header no longer carries ~250 lines
 // of Estrin switch bodies.
 
-} // namespace detail
-
-// =============================================================================
-// C ABI handoff: include the extern "C" `*dd` function declarations at
-// namespace global scope, then convert between float64x2 and float64x2_t.
-// =============================================================================
-
-} // namespace multifloats
-#include "multifloats_c.h"
-namespace multifloats {
-
-namespace detail {
-inline constexpr float64x2_t to_f64x2(float64x2 const &x) { return {x._limbs[0], x._limbs[1]}; }
-inline constexpr float64x2 from_f64x2(float64x2_t x) { float64x2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
 } // namespace detail
 
 // =============================================================================
