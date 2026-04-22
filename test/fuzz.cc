@@ -51,6 +51,16 @@ using multifloats_test::q_isfinite;
 using multifloats_test::q_isnan;
 using multifloats_test::qstr;
 
+// Inline wrappers so complex arithmetic on __complex128 reads as
+// caddq/csubq/cmulq/cdivq function calls, matching the cSTEMdd /
+// cSTEMmp naming used by the DD kernels and mp oracle. This lets
+// CHK_C2 treat the qp leg the same way as the other two and removes
+// the need for a separate operator-taking macro.
+static inline __complex128 caddq(__complex128 a, __complex128 b) { return a + b; }
+static inline __complex128 csubq(__complex128 a, __complex128 b) { return a - b; }
+static inline __complex128 cmulq(__complex128 a, __complex128 b) { return a * b; }
+static inline __complex128 cdivq(__complex128 a, __complex128 b) { return a / b; }
+
 // =============================================================================
 // USE_MPFR mode — all mpreal-specific types, helpers, the complex oracle,
 // and the three call-site macros (MP_PARAM / MP_ARG / MP_STMT) live in this
@@ -81,23 +91,27 @@ using multifloats_test::mp_isnan;
 // the kernel share branch conventions.
 struct CMp { mp_t re, im; };
 
-static inline CMp c_add (CMp const &a, CMp const &b) { return {a.re + b.re, a.im + b.im}; }
-static inline CMp c_sub (CMp const &a, CMp const &b) { return {a.re - b.re, a.im - b.im}; }
-static inline CMp c_mul (CMp const &a, CMp const &b) {
+// Naming convention for the mp oracle: cNAMEmp(z), to mirror the DD
+// kernel's cNAMEdd(z) and libquadmath's cNAMEq(z). This keeps CHK_C1 /
+// CHK_COP below able to derive all three function names from a single
+// STEM token via `## dd`, `## q`, `## mp`.
+static inline CMp caddmp (CMp const &a, CMp const &b) { return {a.re + b.re, a.im + b.im}; }
+static inline CMp csubmp (CMp const &a, CMp const &b) { return {a.re - b.re, a.im - b.im}; }
+static inline CMp cmulmp (CMp const &a, CMp const &b) {
   return {a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re};
 }
-static inline CMp c_div (CMp const &a, CMp const &b) {
+static inline CMp cdivmp (CMp const &a, CMp const &b) {
   mp_t d = b.re * b.re + b.im * b.im;
   return {(a.re * b.re + a.im * b.im) / d, (a.im * b.re - a.re * b.im) / d};
 }
-static inline CMp  c_conj(CMp const &z) { return {z.re, -z.im}; }
-static inline mp_t c_abs (CMp const &z) { return mpfr::hypot(z.re, z.im); }
-static inline mp_t c_arg (CMp const &z) { return mpfr::atan2(z.im, z.re); }
+static inline CMp  cconjgmp(CMp const &z) { return {z.re, -z.im}; }
+static inline mp_t cabsmp (CMp const &z) { return mpfr::hypot(z.re, z.im); }
+static inline mp_t cargmp (CMp const &z) { return mpfr::atan2(z.im, z.re); }
 
 // C99 Annex G csqrt (Kahan form): branch cut on negative real axis,
 // result in the right half-plane.
-static CMp c_sqrt(CMp const &z) {
-  mp_t az = c_abs(z);
+static CMp csqrtmp(CMp const &z) {
+  mp_t az = cabsmp(z);
   if (az == 0) return {mp_t(0), mp_t(0)};
   mp_t u, v;
   if (z.re >= 0) {
@@ -111,48 +125,48 @@ static CMp c_sqrt(CMp const &z) {
   return {u, v};
 }
 
-static CMp c_exp (CMp const &z) { mp_t e = mpfr::exp(z.re); return {e*mpfr::cos(z.im), e*mpfr::sin(z.im)}; }
-static CMp c_log (CMp const &z) { return {mpfr::log(c_abs(z)), c_arg(z)}; }
-static CMp c_sin (CMp const &z) { return {mpfr::sin(z.re)*mpfr::cosh(z.im),  mpfr::cos(z.re)*mpfr::sinh(z.im)}; }
-static CMp c_cos (CMp const &z) { return {mpfr::cos(z.re)*mpfr::cosh(z.im), -mpfr::sin(z.re)*mpfr::sinh(z.im)}; }
-static CMp c_sinh(CMp const &z) { return {mpfr::sinh(z.re)*mpfr::cos(z.im),  mpfr::cosh(z.re)*mpfr::sin(z.im)}; }
-static CMp c_cosh(CMp const &z) { return {mpfr::cosh(z.re)*mpfr::cos(z.im),  mpfr::sinh(z.re)*mpfr::sin(z.im)}; }
-static CMp c_tan (CMp const &z) { return c_div(c_sin(z),  c_cos(z)); }
-static CMp c_tanh(CMp const &z) { return c_div(c_sinh(z), c_cosh(z)); }
+static CMp cexpmp (CMp const &z) { mp_t e = mpfr::exp(z.re); return {e*mpfr::cos(z.im), e*mpfr::sin(z.im)}; }
+static CMp clogmp (CMp const &z) { return {mpfr::log(cabsmp(z)), cargmp(z)}; }
+static CMp csinmp (CMp const &z) { return {mpfr::sin(z.re)*mpfr::cosh(z.im),  mpfr::cos(z.re)*mpfr::sinh(z.im)}; }
+static CMp ccosmp (CMp const &z) { return {mpfr::cos(z.re)*mpfr::cosh(z.im), -mpfr::sin(z.re)*mpfr::sinh(z.im)}; }
+static CMp csinhmp(CMp const &z) { return {mpfr::sinh(z.re)*mpfr::cos(z.im),  mpfr::cosh(z.re)*mpfr::sin(z.im)}; }
+static CMp ccoshmp(CMp const &z) { return {mpfr::cosh(z.re)*mpfr::cos(z.im),  mpfr::sinh(z.re)*mpfr::sin(z.im)}; }
+static CMp ctanmp (CMp const &z) { return cdivmp(csinmp(z),  ccosmp(z)); }
+static CMp ctanhmp(CMp const &z) { return cdivmp(csinhmp(z), ccoshmp(z)); }
 
-// asin(z) = -i · log(iz + sqrt(1 - z²))
-static CMp c_asin(CMp const &z) {
-  CMp zz = c_mul(z, z);
-  CMp arg = c_add({-z.im, z.re}, c_sqrt({mp_t(1) - zz.re, -zz.im}));
-  CMp l = c_log(arg);
+// casin(z) = -i · log(iz + sqrt(1 - z²))
+static CMp casinmp(CMp const &z) {
+  CMp zz = cmulmp(z, z);
+  CMp arg = caddmp({-z.im, z.re}, csqrtmp({mp_t(1) - zz.re, -zz.im}));
+  CMp l = clogmp(arg);
   return {l.im, -l.re};
 }
-// acos(z) = π/2 − asin(z)
-static CMp c_acos(CMp const &z) {
+// cacos(z) = π/2 − casin(z)
+static CMp cacosmp(CMp const &z) {
   static const mp_t half_pi = mpfr::const_pi(multifloats_test::kMpfrPrec) / 2;
-  CMp a = c_asin(z);
+  CMp a = casinmp(z);
   return {half_pi - a.re, -a.im};
 }
-// atan(z) = (-i/2) · log((1 + iz)/(1 - iz))    [C99 Annex G principal]
-static CMp c_atan(CMp const &z) {
+// catan(z) = (-i/2) · log((1 + iz)/(1 - iz))    [C99 Annex G principal]
+static CMp catanmp(CMp const &z) {
   CMp num = {mp_t(1) - z.im,  z.re};
   CMp den = {mp_t(1) + z.im, -z.re};
-  CMp l = c_log(c_div(num, den));
+  CMp l = clogmp(cdivmp(num, den));
   return {l.im / 2, -l.re / 2};
 }
-// asinh(z) = log(z + sqrt(z² + 1))
-static CMp c_asinh(CMp const &z) {
-  CMp zz = c_mul(z, z);
-  return c_log(c_add(z, c_sqrt({zz.re + 1, zz.im})));
+// casinh(z) = log(z + sqrt(z² + 1))
+static CMp casinhmp(CMp const &z) {
+  CMp zz = cmulmp(z, z);
+  return clogmp(caddmp(z, csqrtmp({zz.re + 1, zz.im})));
 }
-// acosh(z) = log(z + sqrt(z-1)·sqrt(z+1))   [C99 Annex G principal]
-static CMp c_acosh(CMp const &z) {
-  CMp s = c_mul(c_sqrt({z.re - 1, z.im}), c_sqrt({z.re + 1, z.im}));
-  return c_log(c_add(z, s));
+// cacosh(z) = log(z + sqrt(z-1)·sqrt(z+1))   [C99 Annex G principal]
+static CMp cacoshmp(CMp const &z) {
+  CMp s = cmulmp(csqrtmp({z.re - 1, z.im}), csqrtmp({z.re + 1, z.im}));
+  return clogmp(caddmp(z, s));
 }
-// atanh(z) = ½ · log((1 + z)/(1 - z))
-static CMp c_atanh(CMp const &z) {
-  CMp l = c_log(c_div({mp_t(1) + z.re,  z.im}, {mp_t(1) - z.re, -z.im}));
+// catanh(z) = ½ · log((1 + z)/(1 - z))
+static CMp catanhmp(CMp const &z) {
+  CMp l = clogmp(cdivmp({mp_t(1) + z.re,  z.im}, {mp_t(1) - z.re, -z.im}));
   return {l.re / 2, l.im / 2};
 }
 
@@ -266,23 +280,23 @@ static bool is_full_dd(char const *op) {
       "erf", "erfc", "erfcx",
       "tgamma", "lgamma",
       "bj0", "bj1", "bjn", "by0", "by1", "byn", "yn_range",
-      "cdd_add_re", "cdd_add_im", "cdd_sub_re", "cdd_sub_im",
-      "cdd_mul_re", "cdd_mul_im", "cdd_div_re", "cdd_div_im",
-      "cdd_abs", "cdd_arg", "cdd_conjg_re", "cdd_conjg_im",
-      "cdd_proj_re", "cdd_proj_im",
-      "cdd_sqrt_re", "cdd_sqrt_im",
-      "cdd_exp_re", "cdd_exp_im",
-      // cdd_expm1 lives in is_reduced_dd — qp range-reduces im(z) against
+      "cadd_re", "cadd_im", "csub_re", "csub_im",
+      "cmul_re", "cmul_im", "cdiv_re", "cdiv_im",
+      "cabs", "carg", "cconjg_re", "cconjg_im",
+      "cproj_re", "cproj_im",
+      "csqrt_re", "csqrt_im",
+      "cexp_re", "cexp_im",
+      // cexpm1 lives in is_reduced_dd — qp range-reduces im(z) against
       // its own π approximation and loses precision when im(z) is near nπ.
-      "cdd_log_re", "cdd_log_im",
-      "cdd_log2_re", "cdd_log2_im", "cdd_log10_re", "cdd_log10_im",
-      "cdd_log1p_re", "cdd_log1p_im",
-      "cdd_pow_re", "cdd_pow_im",
-      "cdd_sin_re", "cdd_sin_im", "cdd_cos_re", "cdd_cos_im",
-      "cdd_tan_re", "cdd_tan_im",
-      "cdd_sinh_re", "cdd_sinh_im", "cdd_cosh_re", "cdd_cosh_im",
-      "cdd_tanh_re", "cdd_tanh_im",
-      "cdd_asinh_re", "cdd_asinh_im",
+      "clog_re", "clog_im",
+      "clog2_re", "clog2_im", "clog10_re", "clog10_im",
+      "clog1p_re", "clog1p_im",
+      "cpow_re", "cpow_im",
+      "csin_re", "csin_im", "ccos_re", "ccos_im",
+      "ctan_re", "ctan_im",
+      "csinh_re", "csinh_im", "ccosh_re", "ccosh_im",
+      "ctanh_re", "ctanh_im",
+      "casinh_re", "casinh_im",
       // casin / cacos / catan / cacosh / catanh live in is_reduced_dd —
       // libquadmath's implementations lose precision on branch cuts.
       // csinpi / ccospi also live in is_reduced_dd — π-representation
@@ -316,14 +330,14 @@ static bool is_full_dd(char const *op) {
 static bool is_reduced_dd(char const *op) {
   static char const *kList[] = {
       "sinpi", "cospi", "tanpi",
-      "cdd_asin_re", "cdd_asin_im",
-      "cdd_acos_re", "cdd_acos_im",
-      "cdd_atan_re", "cdd_atan_im",
-      "cdd_acosh_re", "cdd_acosh_im",
-      "cdd_atanh_re", "cdd_atanh_im",
-      "cdd_sinpi_re", "cdd_sinpi_im",
-      "cdd_cospi_re", "cdd_cospi_im",
-      "cdd_expm1_re", "cdd_expm1_im",
+      "casin_re", "casin_im",
+      "cacos_re", "cacos_im",
+      "catan_re", "catan_im",
+      "cacosh_re", "cacosh_im",
+      "catanh_re", "catanh_im",
+      "csinpi_re", "csinpi_im",
+      "ccospi_re", "ccospi_im",
+      "cexpm1_re", "cexpm1_im",
       nullptr};
   for (int i = 0; kList[i]; ++i) {
     if (std::strcmp(kList[i], op) == 0) {
@@ -369,7 +383,7 @@ static void report_fail(char const *op, char const *detail) {
 // identical across USE_MPFR on/off.
 //
 // The mp slot is variadic (`...` / `__VA_ARGS__`), not a named positional
-// arg: a call site like `CHK("cdd_expm1", ..., mag, (q_t)0, CMp{a, b})`
+// arg: a call site like `CHK("cexpm1", ..., mag, (q_t)0, CMp{a, b})`
 // has a comma inside the `CMp{...}` brace list that would otherwise get
 // consumed by CHK itself (splitting the expression into two macro args).
 // __VA_ARGS__ captures everything after the first five named slots as one
@@ -390,9 +404,9 @@ static void report_fail(char const *op, char const *detail) {
 // to raw CHK.
 //
 // Ops that don't follow the naming convention (abs, bjn, fmadd, sincos,
-// π-scaled trig, erfcx, cdd_conjg/proj/arg/abs/pow/expm1/log1p/log2/log10/
-// sinpi/cospi, mixed-mode add_fd/mul_df/pow_md/pow_dm/pow_int, min3/max3,
-// plus arithmetic operators) keep using raw CHK.
+// π-scaled trig, erfcx, cconjg/cproj/carg/cabs/cpow/cexpm1/clog1p/clog2/
+// clog10/csinpi/ccospi, mixed-mode add_fd/mul_df/pow_md/pow_dm/pow_int,
+// min3/max3, plus arithmetic operators) keep using raw CHK.
 
 // Scalar unary: mf::NAME(f1) / NAMEq(q1) / mpfr::NAME(m1).
 #define CHK1(NAME) \
@@ -407,18 +421,19 @@ static void report_fail(char const *op, char const *detail) {
 #define CHK2(NAME) \
     CHK(#NAME, mf::NAME(f1, f2), NAME##q(q1, q2), q1, q2, mpfr::NAME(m1, m2))
 
-// Complex unary: ::cSTEMdd(zd1) / cSTEMq(zq1) / c_STEM(zm1). The stat
-// label is "cdd_STEM" to match the rest of the complex report.
+// Complex unary: ::cSTEMdd(zd1) / cSTEMq(zq1) / cSTEMmp(zm1). Label is
+// "cSTEM" (e.g. "csin", "csqrt") — matches libquadmath's cNAMEq naming
+// with the q stripped.
 #define CHK_C1(STEM) \
-    CHK("cdd_" #STEM, ::c##STEM##dd(zd1), c##STEM##q(zq1), \
-        mag, (q_t)0, c_##STEM(zm1))
+    CHK("c" #STEM, ::c##STEM##dd(zd1), c##STEM##q(zq1), \
+        mag, (q_t)0, c##STEM##mp(zm1))
 
-// Complex binary via a qp operator: ::cSTEMdd(zd1, zd2) / zq1 OP zq2 /
-// c_STEM(zm1, zm2). Used for add/sub/mul/div — libquadmath has no
-// cadd/csub/... functions, so the qp side reads as an operator.
-#define CHK_COP(STEM, OP) \
-    CHK("cdd_" #STEM, ::c##STEM##dd(zd1, zd2), zq1 OP zq2, \
-        mag, (q_t)0, c_##STEM(zm1, zm2))
+// Complex binary: ::cSTEMdd(zd1, zd2) / cSTEMq(zq1, zq2) / cSTEMmp(zm1, zm2).
+// The qp leg reads as a function call thanks to the caddq/csubq/cmulq/cdivq
+// inline wrappers above — this parallelizes cleanly with CHK_C1.
+#define CHK_C2(STEM) \
+    CHK("c" #STEM, ::c##STEM##dd(zd1, zd2), c##STEM##q(zq1, zq2), \
+        mag, (q_t)0, c##STEM##mp(zm1, zm2))
 
 static void check(char const *op, mf::float64x2 const &got, q_t expected,
                   q_t i1, q_t i2 MP_PARAM(mp_t const &expected_mp)) {
@@ -1034,15 +1049,15 @@ int main(int argc, char **argv) {
           q_t mag  = mag1 > mag2 ? mag1 : mag2;
           if (mag < (q_t)1e-300q) mag = (q_t)1e-300q;
 
-          CHK_COP(add, +);
-          CHK_COP(sub, -);
-          CHK_COP(mul, *);
-          if (mag2 > (q_t)0) CHK_COP(div, /);
-          CHK("cdd_abs",
+          CHK_C2(add);
+          CHK_C2(sub);
+          CHK_C2(mul);
+          if (mag2 > (q_t)0) CHK_C2(div);
+          CHK("cabs",
               mf::detail::from_f64x2(::cabsdd(zd1)), cabsq(zq1),
-              mag, (q_t)0, c_abs(zm1));
-          CHK("cdd_conjg", ::conjdd(zd1), conjq(zq1), mag, (q_t)0,
-              c_conj(zm1));
+              mag, (q_t)0, cabsmp(zm1));
+          CHK("cconjg", ::conjdd(zd1), conjq(zq1), mag, (q_t)0,
+              cconjgmp(zm1));
 
           CHK_C1(sqrt);
           CHK_C1(exp);
@@ -1054,8 +1069,8 @@ int main(int argc, char **argv) {
           // CHK's variadic tail.
           if (mag1 > (q_t)1e-5q) {
             __complex128 one_c; __real__ one_c = (q_t)1; __imag__ one_c = (q_t)0;
-            CHK("cdd_expm1", ::cexpm1dd(zd1), cexpq(zq1) - one_c, mag, (q_t)0,
-                CMp{c_exp(zm1).re - 1, c_exp(zm1).im});
+            CHK("cexpm1", ::cexpm1dd(zd1), cexpq(zq1) - one_c, mag, (q_t)0,
+                CMp{cexpmp(zm1).re - 1, cexpmp(zm1).im});
           }
 
           // clog: guard |z| away from 0 (and away from overflow) so the
@@ -1073,12 +1088,12 @@ int main(int argc, char **argv) {
                                __imag__ lg2  = cimagq(lg) / log_2;
             __complex128 lg10; __real__ lg10 = crealq(lg) / log_10;
                                __imag__ lg10 = cimagq(lg) / log_10;
-            MP_STMT(CMp cdd_log2_mp  = {c_log(zm1).re / mpfr::log(mp_t(2)),
-                                        c_log(zm1).im / mpfr::log(mp_t(2))});
-            MP_STMT(CMp cdd_log10_mp = {c_log(zm1).re / mpfr::log(mp_t(10)),
-                                        c_log(zm1).im / mpfr::log(mp_t(10))});
-            CHK("cdd_log2",  ::clog2dd(zd1),  lg2,  mag, (q_t)0, cdd_log2_mp);
-            CHK("cdd_log10", ::clog10dd(zd1), lg10, mag, (q_t)0, cdd_log10_mp);
+            MP_STMT(CMp clog2_oracle  = {clogmp(zm1).re / mpfr::log(mp_t(2)),
+                                         clogmp(zm1).im / mpfr::log(mp_t(2))});
+            MP_STMT(CMp clog10_oracle = {clogmp(zm1).re / mpfr::log(mp_t(10)),
+                                         clogmp(zm1).im / mpfr::log(mp_t(10))});
+            CHK("clog2",  ::clog2dd(zd1),  lg2,  mag, (q_t)0, clog2_oracle);
+            CHK("clog10", ::clog10dd(zd1), lg10, mag, (q_t)0, clog10_oracle);
           }
 
           // clog1p: oracle = clogq(1 + z). Gate |1+z| to avoid oracle
@@ -1087,15 +1102,15 @@ int main(int argc, char **argv) {
             __complex128 one_c; __real__ one_c = (q_t)1; __imag__ one_c = (q_t)0;
             __complex128 one_plus_z = one_c + zq1;
             if (cabsq(one_plus_z) > (q_t)1e-5q)
-              CHK("cdd_log1p", ::clog1pdd(zd1), clogq(one_plus_z), mag, (q_t)0,
-                  c_log({zm1.re + 1, zm1.im}));
+              CHK("clog1p", ::clog1pdd(zd1), clogq(one_plus_z), mag, (q_t)0,
+                  clogmp({zm1.re + 1, zm1.im}));
           }
 
           // cpow: keep base and exponent modest — pow amplifies input
           // precision, so a wide exponent would swamp the tolerance.
           if (mag1 > (q_t)1e-2q && mag1 < (q_t)1e2q && mag2 < (q_t)10)
-            CHK("cdd_pow", ::cpowdd(zd1, zd2), cpowq(zq1, zq2), mag, (q_t)0,
-                c_exp(c_mul(zm2, c_log(zm1))));
+            CHK("cpow", ::cpowdd(zd1, zd2), cpowq(zq1, zq2), mag, (q_t)0,
+                cexpmp(cmulmp(zm2, clogmp(zm1))));
 
           // csinpi / ccospi: forward π-scaled complex trig. Same π
           // representation mismatch as scalar {sin,cos}pi — reduced_dd
@@ -1104,24 +1119,24 @@ int main(int argc, char **argv) {
             __complex128 pi_c; __real__ pi_c = (q_t)M_PIq; __imag__ pi_c = (q_t)0;
             __complex128 pi_z = pi_c * zq1;
             MP_STMT(mp_t mpi = mpfr::const_pi(multifloats_test::kMpfrPrec));
-            CHK("cdd_sinpi", ::csinpidd(zd1), csinq(pi_z), mag, (q_t)0,
-                c_sin({mpi * zm1.re, mpi * zm1.im}));
-            CHK("cdd_cospi", ::ccospidd(zd1), ccosq(pi_z), mag, (q_t)0,
-                c_cos({mpi * zm1.re, mpi * zm1.im}));
+            CHK("csinpi", ::csinpidd(zd1), csinq(pi_z), mag, (q_t)0,
+                csinmp({mpi * zm1.re, mpi * zm1.im}));
+            CHK("ccospi", ::ccospidd(zd1), ccosq(pi_z), mag, (q_t)0,
+                ccosmp({mpi * zm1.re, mpi * zm1.im}));
           }
 
           // cproj: finite inputs → identity; only meaningful distinction
           // from a plain copy happens on infinite inputs (which the
           // narrow generator doesn't produce). Still worth testing to
           // pin the finite path.
-          CHK("cdd_proj", ::cprojdd(zd1), cprojq(zq1), mag, (q_t)0, zm1);
+          CHK("cproj", ::cprojdd(zd1), cprojq(zq1), mag, (q_t)0, zm1);
 
           // carg: complex → real scalar phase. Near ±π on the branch cut
           // (negative real axis) DD and qp agree as long as imag-limbs
           // sign matches, which they do for DD-representable inputs.
-          CHK("cdd_arg",
+          CHK("carg",
               mf::detail::from_f64x2(::cargdd(zd1)), cargq(zq1), mag, (q_t)0,
-              c_arg(zm1));
+              cargmp(zm1));
 
           CHK_C1(sin);
           CHK_C1(cos);
