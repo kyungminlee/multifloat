@@ -480,6 +480,14 @@ public:
     float64x2 out;
     double p00 = 0.0, e00 = 0.0;
     detail::two_prod(_limbs[0], rhs._limbs[0], p00, e00);
+    // Non-finite: two_prod's fma residual is NaN whenever p00 overflows
+    // or either input is ±Inf/NaN (e.g. inf*2 → p00=inf, e00=fma(inf,
+    // 2,-inf)=NaN). Short-circuit so the EFT residual doesn't contaminate
+    // out._limbs[1]; IEEE supplies the correct leading limb in p00.
+    if (!std::isfinite(p00)) {
+      out._limbs[0] = p00;
+      return out;
+    }
     double p01 = detail::one_prod(_limbs[0], rhs._limbs[1]);
     double p10 = detail::one_prod(_limbs[1], rhs._limbs[0]);
     p01 += p10;
@@ -564,7 +572,9 @@ constexpr std::size_t first_nonzero_limb_index(float64x2 const &x) {
 
 inline constexpr float64x2 fabs(float64x2 const &x) {
   std::size_t i = detail::first_nonzero_limb_index(x);
-  if (i == 2) return x;
+  // All limbs are a (possibly signed) zero: return canonical +0 so
+  // fabs((-0, 0)) yields (+0, +0), matching IEEE fabs(-0.0) = +0.0.
+  if (i == 2) return float64x2();
   return std::signbit(x._limbs[i]) ? -x : x;
 }
 

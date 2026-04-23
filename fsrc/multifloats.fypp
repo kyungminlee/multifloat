@@ -1434,9 +1434,9 @@ $:C_DELEGATE_BINARY(ffull, csym)
 #:if func == 'abs'
         ! Match C++ multifloats::fabs: resolve the sign via the first
         ! nonzero limb; if every limb is a (possibly signed) zero,
-        ! return the input unchanged (preserves (-0, 0) identity).
+        ! return canonical +0 so abs(-0.0) = +0.0 as IEEE expects.
         if (x%limbs(1) == 0.0_dp .and. x%limbs(2) == 0.0_dp) then
-            res = x
+            res = DD_ZERO
         else if (dd_signbit(x)) then
             res%limbs = -x%limbs
         else
@@ -2900,11 +2900,19 @@ $:dd_minmax_body(func, n)
         end if
 #:elif opname == 'mul'
         call two_prod(xh, yh, p00, e00)
-        p01 = xh * yl
-        p10 = xl * yh
-        p01 = p01 + p10
-        e00 = e00 + p01
-        call fast_two_sum(p00, e00, res%limbs(1), res%limbs(2))
+        if (.not. ieee_is_finite(p00)) then
+            ! two_prod's fma residual goes NaN whenever p00 overflows or
+            ! either input is ±Inf/NaN (e.g. inf*2 → e00=fma(inf,2,-inf)
+            ! =NaN). Short-circuit so the EFT residual doesn't contaminate
+            ! the lo limb — matches operator* in include/multifloats.h.
+            res%limbs = [p00, 0.0_dp]
+        else
+            p01 = xh * yl
+            p10 = xl * yh
+            p01 = p01 + p10
+            e00 = e00 + p01
+            call fast_two_sum(p00, e00, res%limbs(1), res%limbs(2))
+        end if
 #:else
         ! div: Dekker-style single Newton refinement (match operator/).
         q1 = xh / yh
