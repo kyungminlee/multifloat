@@ -82,8 +82,8 @@ qp ulp, both legs are behaving as specified.
 | acospi | 0.9 qp ulp |
 | atan | 0.7 qp ulp |
 | atanpi | 0.3 qp ulp |
-| atan2 | 0.6 qp ulp |
-| atan2pi | 1.1 qp ulp |
+| atan2 | 1.1 qp ulp |
+| atan2pi | 1.3 qp ulp |
 | sinh | 1.2 qp ulp |
 | cosh | 0.8 qp ulp |
 | sinhcosh | 1.2 qp ulp (sinh) / 0.8 qp ulp (cosh) |
@@ -148,29 +148,29 @@ qp ulp, both legs are behaving as specified.
 | erfc\_scaled | — |
 | cdd\_add | 0.5 qp ulp (re) / 0.5 qp ulp (im) |
 | cdd\_sub | 0.5 qp ulp (re) / 0.5 qp ulp (im) |
-| cdd\_mul | 0.9 qp ulp (re) / 0.9 qp ulp (im) |
-| cdd\_div | 54 qp ulp (re) / 36 qp ulp (im) |
+| cdd\_mul | 0.6 qp ulp (re) / 2.0 qp ulp (im) |
+| cdd\_div | 14 qp ulp (re) / 11 qp ulp (im) |
 | cdd\_abs | 0.7 qp ulp |
-| cdd\_sqrt | 1.0 qp ulp (re) / 0.9 qp ulp (im) |
-| cdd\_exp | 1.2 qp ulp (re) / 1.1 qp ulp (im) |
-| cdd\_expm1 | 1936 qp ulp (re) / 1.1 qp ulp (im) |
-| cdd\_log | 1.1 qp ulp (re) / 0.9 qp ulp (im) |
-| cdd\_log2 | 1.7 qp ulp (re) / 1.2 qp ulp (im) |
-| cdd\_log10 | 1.2 qp ulp (re) / 1.2 qp ulp (im) |
-| cdd\_log1p | 1129 qp ulp (re) / 1.1 qp ulp (im) |
-| cdd\_pow | 112 qp ulp (re) / 4057 qp ulp (im) |
+| cdd\_sqrt | 1.1 qp ulp (re) / 1.1 qp ulp (im) |
+| cdd\_exp | 1.4 qp ulp (re) / 1.1 qp ulp (im) |
+| cdd\_expm1 | 1267 qp ulp (re) / 1.1 qp ulp (im) |
+| cdd\_log | 1.1 qp ulp (re) / 1.0 qp ulp (im) |
+| cdd\_log2 | 1.2 qp ulp (re) / 1.2 qp ulp (im) |
+| cdd\_log10 | 1.1 qp ulp (re) / 1.0 qp ulp (im) |
+| cdd\_log1p | 2149 qp ulp (re) / 1.0 qp ulp (im) |
+| cdd\_pow | 2083 qp ulp (re) / 1093 qp ulp (im) |
 | cdd\_sin | 1.4 qp ulp (re) / 1.3 qp ulp (im) |
-| cdd\_cos | 1.3 qp ulp (re) / 1.3 qp ulp (im) |
-| cdd\_tan | 1.7 qp ulp (re) / 2.2 qp ulp (im) |
-| cdd\_sinh | 1.5 qp ulp (re) / 1.4 qp ulp (im) |
-| cdd\_cosh | 1.4 qp ulp (re) / 1.4 qp ulp (im) |
-| cdd\_tanh | 2.2 qp ulp (re) / 1.9 qp ulp (im) |
-| cdd\_asin | 1.3 qp ulp (re) / 1.5 qp ulp (im) |
-| cdd\_acos | 1.1 qp ulp (re) / 1.5 qp ulp (im) |
-| cdd\_atan | 1.2 qp ulp (re) / 2.1 qp ulp (im) |
-| cdd\_asinh | 1.7 qp ulp (re) / 1.5 qp ulp (im) |
-| cdd\_acosh | 1.5 qp ulp (re) / 1.1 qp ulp (im) |
-| cdd\_atanh | 1.7 qp ulp (re) / 1.0 qp ulp (im) |
+| cdd\_cos | 1.3 qp ulp (re) / 1.4 qp ulp (im) |
+| cdd\_tan | 1.8 qp ulp (re) / 2.0 qp ulp (im) |
+| cdd\_sinh | 1.5 qp ulp (re) / 1.5 qp ulp (im) |
+| cdd\_cosh | 1.3 qp ulp (re) / 1.3 qp ulp (im) |
+| cdd\_tanh | 2.0 qp ulp (re) / 1.4 qp ulp (im) |
+| cdd\_asin | 1.3 qp ulp (re) / 1.7 qp ulp (im) |
+| cdd\_acos | 1.1 qp ulp (re) / 1.7 qp ulp (im) |
+| cdd\_atan | 1.1 qp ulp (re) / 1.9 qp ulp (im) |
+| cdd\_asinh | 1.6 qp ulp (re) / 1.7 qp ulp (im) |
+| cdd\_acosh | 1.7 qp ulp (re) / 1.1 qp ulp (im) |
+| cdd\_atanh | 2.4 qp ulp (re) / 0.9 qp ulp (im) |
 | arr\_sum (n=8) | — |
 | arr\_product (n=8) | — |
 | arr\_maxval (n=8) | — |
@@ -202,7 +202,7 @@ input MPFR fuzz run.
 | add | 0.7 ulp | **2.8×** | Julia: two\_sum EFT |
 | sub | 0.7 ulp | **2.5×** | Julia: two\_sum EFT (negate + add) |
 | mul | 2.0 ulp | **11×** | Julia: two\_prod EFT via FMA |
-| div | 3.1 ulp | **7.5×** | original: Newton refinement (1/y seed, one step) |
+| div | 3.2 ulp | **7.5×** | original: Newton refinement (1/y seed, one step) |
 | sqrt | 1.7 ulp | **44×** | Julia: Karp–Markstein (reciprocal sqrt seed + Newton) |
 | fma | — | **80×** | original: x\*y + z via DD ops |
 | abs | exact | **2.1×** | original: sign-check + negate limbs |
@@ -223,52 +223,52 @@ input MPFR fuzz run.
 | fmax | exact | **5.1×** | original: DD comparison + select |
 | fdim | 0.7 ulp | **5.5×** | original: DD comparison, then subtract or zero |
 | copysign | exact | 1.8× | original: sign-bit copy to hi, propagate to lo |
-| fmod | 1.0 ulp | 0.96× | sample: floor-multiple reduction loop; fallback to div chain |
-| hypot | 2.4 ulp | **10×** | original: scaled sqrt(x²+y²) |
+| fmod | 0.9 ulp | 0.96× | sample: floor-multiple reduction loop; fallback to div chain |
+| hypot | 2.0 ulp | **10×** | original: scaled sqrt(x²+y²) |
 
 ### Exponential / logarithmic
 
 | op | M1 Max err | M1 Max × | approach |
 |---|---|---|---|
-| exp | 1.4 ulp | **3.6×** | Julia: exp2 polynomial (14-term Horner) + ldexp reconstruction |
+| exp | 1.6 ulp | **3.6×** | Julia: exp2 polynomial (14-term Horner) + ldexp reconstruction |
 | exp2 | — | **4.9×** | Julia: exp2 polynomial (14-term Horner) |
 | expm1 | 1.5 ulp | **5.5×** | original: exp(x) − 1 via DD sub |
-| log | 1.4 ulp | **6.4×** | Julia: log2 table lookup (32 centers) + polynomial (7-term Horner) |
+| log | 1.2 ulp | **6.4×** | Julia: log2 table lookup (32 centers) + polynomial (7-term Horner) |
 | log10 | 1.2 ulp | **8.7×** | Julia: log2 kernel × DD log10(2) |
 | log2 | — | **8.3×** | Julia: log2 table lookup + polynomial |
 | log1p | 3.7 ulp | **7.0×** | original: log(1 + x) via DD add |
-| pow | 11 ulp | **5.7×** | Julia: exp(y × log(x)) |
+| pow | 12 ulp | **5.7×** | Julia: exp(y × log(x)) |
 
 ### Trigonometric
 
 | op | M1 Max err | M1 Max × | approach |
 |---|---|---|---|
-| sin | 1.4 ulp | **3.5×** | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split |
-| cos | 1.1 ulp | **3.4×** | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split |
-| sincos | 1.4 ulp (sin) / 1.1 ulp (cos) | **5.6×** | fused sin/cos: one range-reduction, two Taylor outputs |
+| sin | 1.1 ulp | **3.5×** | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split |
+| cos | 1.3 ulp | **3.4×** | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split |
+| sincos | 1.1 ulp (sin) / 1.3 ulp (cos) | **5.6×** | fused sin/cos: one range-reduction, two Taylor outputs |
 | sinpi | 1.5 ulp | **4.5×** | Julia: sinpi Horner polynomial, direct |
-| cospi | 1.4 ulp | **4.6×** | Julia: cospi Horner polynomial, direct |
+| cospi | 1.8 ulp | **4.6×** | Julia: cospi Horner polynomial, direct |
 | tan | 2.3 ulp | **2.5×** | original: sin/cos Taylor kernels + DD divide |
-| tanpi | 1.9 ulp | **3.4×** | original: sinpi/cospi ratio |
+| tanpi | 2.1 ulp | **3.4×** | original: sinpi/cospi ratio |
 | asin | 0.7 ulp | **6.0×** | original: piecewise rational P/Q (3 regions, from libquadmath asinq.c) |
 | asinpi | 0.5 ulp | **6.0×** | original: asin(x)/π with exact-DD π division |
 | acos | 0.6 ulp | **6.2×** | original: asin polynomial + half-angle identity |
-| acospi | 1.2 ulp | **6.1×** | original: acos(x)/π with exact-DD π division |
+| acospi | 1.3 ulp | **6.1×** | original: acos(x)/π with exact-DD π division |
 | atan | 0.7 ulp | **4.1×** | original: 84-entry table lookup + rational P(t²)/Q(t²) (from libquadmath atanq.c) |
-| atanpi | 0.6 ulp | **4.3×** | original: atan(x)/π with exact-DD π division |
-| atan2 | 0.8 ulp | **3.5×** | original: table-based atan + quadrant correction |
-| atan2pi | 1.4 ulp | **3.6×** | original: atan2(y,x)/π with exact-DD π division |
+| atanpi | 0.5 ulp | **4.3×** | original: atan(x)/π with exact-DD π division |
+| atan2 | 1.3 ulp | **3.5×** | original: table-based atan + quadrant correction |
+| atan2pi | 1.3 ulp | **3.6×** | original: atan2(y,x)/π with exact-DD π division |
 
 ### Hyperbolic
 
 | op | M1 Max err | M1 Max × | approach |
 |---|---|---|---|
-| sinh | 4.3 ulp | **3.1×** | original: Taylor series (\|x\|<0.1) or (exp−exp⁻¹)/2 |
+| sinh | 9.0 ulp | **3.1×** | original: Taylor series (\|x\|<0.1) or (exp−exp⁻¹)/2 |
 | cosh | 1.0 ulp | **2.2×** | original: (exp+exp⁻¹)/2 |
-| sinhcosh | 4.3 ulp (sinh) / 1.0 ulp (cosh) | **4.7×** | fused sinh/cosh: one range-reduction, two outputs |
-| tanh | 4.1 ulp | **3.7×** | original: sinh/cosh (\|x\|<0.5) or (1−e⁻²ˣ)/(1+e⁻²ˣ) |
-| asinh | 2.0 ulp | **7.2×** | original: Taylor series (\|x\|<0.01) or log(x+√(x²+1)) with Newton |
-| acosh | 0.8 ulp | **7.2×** | original: log(x+√(x²−1)) with Newton correction |
+| sinhcosh | 9.0 ulp (sinh) / 1.0 ulp (cosh) | **4.7×** | fused sinh/cosh: one range-reduction, two outputs |
+| tanh | 8.4 ulp | **3.7×** | original: sinh/cosh (\|x\|<0.5) or (1−e⁻²ˣ)/(1+e⁻²ˣ) |
+| asinh | 1.8 ulp | **7.2×** | original: Taylor series (\|x\|<0.01) or log(x+√(x²+1)) with Newton |
+| acosh | 0.7 ulp | **7.2×** | original: log(x+√(x²−1)) with Newton correction |
 | atanh | 2.0 ulp | **6.4×** | original: Taylor series (\|x\|<0.01) or ½·log((1+x)/(1−x)) |
 
 ### Error / special functions
@@ -279,14 +279,14 @@ input MPFR fuzz run.
 | erfc | 0.5 ulp | **3.9×** | piecewise rational approx + split exp(-x^2) |
 | erfcx | 328 ulp | **4.0×** | exp(x²)·erfc(x); scaled form avoiding tail cancellation |
 | tgamma | 18 ulp | **8.5×** | piecewise rational approx + Stirling + reflection, exp(lgamma) |
-| lgamma | 2.0 ulp | **4.8×** | piecewise rational approx + Stirling asymptotic |
+| lgamma | 1.8 ulp | **4.8×** | piecewise rational approx + Stirling asymptotic |
 | bessel\_j0 | 0.2 ulp | **6.5×** | piecewise rational + Hankel asymptotic (j0q.c) |
 | bessel\_j1 | 0.4 ulp | **6.7×** | piecewise rational + Hankel asymptotic (j1q.c) |
 | bessel\_jn(3,.) | 0.5 ulp | **4.4×** | forward/backward recurrence from j0/j1 |
-| bessel\_y0 | 2.0 ulp | **7.0×** | piecewise rational + Hankel asymptotic (j0q.c) |
-| bessel\_y1 | 1.5 ulp | **7.3×** | piecewise rational + Hankel asymptotic (j1q.c) |
-| bessel\_yn(3,.) | 7.6 ulp | **6.9×** | forward recurrence from y0/y1 |
-| bessel\_yn\_range(0..5) | 5.4 ulp | **29×** | single forward-recurrence sweep, 6 outputs / call |
+| bessel\_y0 | 2.2 ulp | **7.0×** | piecewise rational + Hankel asymptotic (j0q.c) |
+| bessel\_y1 | 2.2 ulp | **7.3×** | piecewise rational + Hankel asymptotic (j1q.c) |
+| bessel\_yn(3,.) | 10 ulp | **6.9×** | forward recurrence from y0/y1 |
+| bessel\_yn\_range(0..5) | 8.5 ulp | **29×** | single forward-recurrence sweep, 6 outputs / call |
 
 ### Complex arithmetic
 
@@ -345,7 +345,7 @@ surface; C-section duplicates omit it for table width.
 | add | full DD | 0.7 ulp | 2.0× | Julia: two\_sum EFT |
 | sub | full DD | 0.7 ulp | **2.2×** | Julia: two\_sum EFT (negate + add) |
 | mul | full DD | 2.0 ulp | **4.6×** | Julia: two\_prod EFT via FMA |
-| div | full DD | 3.1 ulp | **2.8×** | original: Newton refinement (1/y seed, one step) |
+| div | full DD | 3.2 ulp | **2.8×** | original: Newton refinement (1/y seed, one step) |
 | sqrt | full DD | 1.7 ulp | **42×** | Julia: Karp–Markstein (reciprocal sqrt seed + Newton) |
 | add (dd+dp) | exact | exact | 1.9× | Julia: two\_sum EFT |
 | mul (dp\*dd) | full DD | 1.0 ulp | **5.0×** | Julia: two\_prod EFT via FMA |
@@ -372,7 +372,7 @@ surface; C-section duplicates omit it for table width.
 | max3 | full DD | exact | **2.9×** | original: chained max |
 | sign | exact | — | 1.1× | original: sign-check + negate |
 | dim | full DD | — | **2.8×** | original: DD comparison, then subtract or zero |
-| hypot | full DD | 2.4 ulp | **4.2×** | original: scaled sqrt(x²+y²) |
+| hypot | full DD | 2.0 ulp | **4.2×** | original: scaled sqrt(x²+y²) |
 | mod | full DD | — | 0.45× | sample: floor-multiple reduction loop; fallback to div chain |
 | modulo | full DD | — | 0.94× | original: mod + sign adjustment |
 
@@ -380,42 +380,42 @@ surface; C-section duplicates omit it for table width.
 
 | op | prec | M1 Max err | M1 Max × | approach |
 |---|---|---|---|---|
-| exp | full DD | 1.4 ulp | **3.9×** | Julia: exp2 polynomial (14-term Horner) + ldexp reconstruction |
-| log | full DD | 1.4 ulp | **6.5×** | Julia: log2 table lookup (32 centers) + polynomial (7-term Horner) |
+| exp | full DD | 1.6 ulp | **3.9×** | Julia: exp2 polynomial (14-term Horner) + ldexp reconstruction |
+| log | full DD | 1.2 ulp | **6.5×** | Julia: log2 table lookup (32 centers) + polynomial (7-term Horner) |
 | log10 | full DD | 1.2 ulp | **8.9×** | Julia: log2 kernel × DD log10(2) |
-| pow | full DD | 11 ulp | **5.3×** | Julia: exp(y × log(x)) |
+| pow | full DD | 12 ulp | **5.3×** | Julia: exp(y × log(x)) |
 | pow\_int | full DD | 11 ulp | **7.6×** | original: repeated squaring via DD mul |
 
 ### Trigonometric
 
 | op | prec | M1 Max err | M1 Max × | approach |
 |---|---|---|---|---|
-| sin | full DD | 1.4 ulp | **3.5×** | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split |
-| cos | full DD | 1.1 ulp | **3.4×** | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split |
-| sincos | full DD | 1.4 ulp (sin) / 1.1 ulp (cos) | **5.4×** | fused sin/cos: one range-reduction, two Taylor outputs |
+| sin | full DD | 1.1 ulp | **3.5×** | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split |
+| cos | full DD | 1.3 ulp | **3.4×** | original: 13-term Taylor Horner + 3-part Cody–Waite π/2 + π/8 split |
+| sincos | full DD | 1.1 ulp (sin) / 1.3 ulp (cos) | **5.4×** | fused sin/cos: one range-reduction, two Taylor outputs |
 | sinpi | full DD | 1.5 ulp | **4.4×** | Julia: sinpi Horner polynomial, direct |
-| cospi | full DD | 1.4 ulp | **4.5×** | Julia: cospi Horner polynomial, direct |
+| cospi | full DD | 1.8 ulp | **4.5×** | Julia: cospi Horner polynomial, direct |
 | tan | full DD | 2.3 ulp | **2.5×** | original: sin/cos Taylor kernels + DD divide |
-| tanpi | full DD | 1.9 ulp | **3.3×** | original: sinpi/cospi ratio |
+| tanpi | full DD | 2.1 ulp | **3.3×** | original: sinpi/cospi ratio |
 | asin | full DD | 0.7 ulp | **6.1×** | original: piecewise rational P/Q (3 regions, from libquadmath asinq.c) |
 | asinpi | full DD | 0.5 ulp | **5.8×** | original: asin(x)/π with exact-DD π division |
 | acos | full DD | 0.6 ulp | **6.1×** | original: asin polynomial + half-angle identity |
-| acospi | full DD | 1.2 ulp | **6.1×** | original: acos(x)/π with exact-DD π division |
+| acospi | full DD | 1.3 ulp | **6.1×** | original: acos(x)/π with exact-DD π division |
 | atan | full DD | 0.7 ulp | **3.9×** | original: 84-entry table lookup + rational P(t²)/Q(t²) (from libquadmath atanq.c) |
-| atanpi | full DD | 0.6 ulp | **4.5×** | original: atan(x)/π with exact-DD π division |
-| atan2 | full DD | 0.8 ulp | **3.4×** | original: table-based atan + quadrant correction |
-| atan2pi | full DD | 1.4 ulp | **3.6×** | original: atan2(y,x)/π with exact-DD π division |
+| atanpi | full DD | 0.5 ulp | **4.5×** | original: atan(x)/π with exact-DD π division |
+| atan2 | full DD | 1.3 ulp | **3.4×** | original: table-based atan + quadrant correction |
+| atan2pi | full DD | 1.3 ulp | **3.6×** | original: atan2(y,x)/π with exact-DD π division |
 
 ### Hyperbolic
 
 | op | prec | M1 Max err | M1 Max × | approach |
 |---|---|---|---|---|
-| sinh | full DD | 4.3 ulp | **3.1×** | original: Taylor series (\|x\|<0.1) or (exp−exp⁻¹)/2 |
+| sinh | full DD | 9.0 ulp | **3.1×** | original: Taylor series (\|x\|<0.1) or (exp−exp⁻¹)/2 |
 | cosh | full DD | 1.0 ulp | **2.2×** | original: (exp+exp⁻¹)/2 |
-| sinhcosh | full DD | 4.3 ulp (sinh) / 1.0 ulp (cosh) | **4.7×** | fused sinh/cosh: one range-reduction, two outputs |
-| tanh | full DD | 4.1 ulp | **3.5×** | original: sinh/cosh (\|x\|<0.5) or (1−e⁻²ˣ)/(1+e⁻²ˣ) |
-| asinh | full DD | 2.0 ulp | **7.3×** | original: Taylor series (\|x\|<0.01) or log(x+√(x²+1)) with Newton |
-| acosh | full DD | 0.8 ulp | **6.8×** | original: log(x+√(x²−1)) with Newton correction |
+| sinhcosh | full DD | 9.0 ulp (sinh) / 1.0 ulp (cosh) | **4.7×** | fused sinh/cosh: one range-reduction, two outputs |
+| tanh | full DD | 8.4 ulp | **3.5×** | original: sinh/cosh (\|x\|<0.5) or (1−e⁻²ˣ)/(1+e⁻²ˣ) |
+| asinh | full DD | 1.8 ulp | **7.3×** | original: Taylor series (\|x\|<0.01) or log(x+√(x²+1)) with Newton |
+| acosh | full DD | 0.7 ulp | **6.8×** | original: log(x+√(x²−1)) with Newton correction |
 | atanh | full DD | 2.0 ulp | **6.4×** | original: Taylor series (\|x\|<0.01) or ½·log((1+x)/(1−x)) |
 
 ### Error / special functions
@@ -426,49 +426,49 @@ surface; C-section duplicates omit it for table width.
 | erfc | full DD | 0.5 ulp | **3.9×** | piecewise rational approx + split exp(-x^2) |
 | erfc\_scaled | full DD | — | **5.9×** | exp(x^2)·erfc(x) with asymptotic cancellation |
 | gamma | full DD | 18 ulp | **7.5×** | piecewise rational approx + Stirling + reflection |
-| log\_gamma | full DD | 2.0 ulp | **5.2×** | piecewise rational approx + Stirling asymptotic |
+| log\_gamma | full DD | 1.8 ulp | **5.2×** | piecewise rational approx + Stirling asymptotic |
 | bessel\_j0 | full DD | 0.2 ulp | **6.8×** | piecewise rational + Hankel asymptotic (j0q.c) via C++ |
 | bessel\_j1 | full DD | 0.4 ulp | **6.8×** | piecewise rational + Hankel asymptotic (j1q.c) via C++ |
 | bessel\_jn(3,.) | full DD | 0.5 ulp | **4.2×** | forward/backward recurrence from j0/j1 |
-| bessel\_y0 | full DD | 2.0 ulp | **7.0×** | piecewise rational + Hankel asymptotic (j0q.c) via C++ |
-| bessel\_y1 | full DD | 1.5 ulp | **7.1×** | piecewise rational + Hankel asymptotic (j1q.c) via C++ |
-| bessel\_yn(3,.) | full DD | 7.6 ulp | **6.9×** | forward recurrence from y0/y1 |
+| bessel\_y0 | full DD | 2.2 ulp | **7.0×** | piecewise rational + Hankel asymptotic (j0q.c) via C++ |
+| bessel\_y1 | full DD | 2.2 ulp | **7.1×** | piecewise rational + Hankel asymptotic (j1q.c) via C++ |
+| bessel\_yn(3,.) | full DD | 10 ulp | **6.9×** | forward recurrence from y0/y1 |
 
 ### Complex arithmetic
 
 | op | prec | M1 Max err | M1 Max × | approach |
 |---|---|---|---|---|
-| cdd\_add | full DD | 0.7 ulp (re) / 0.7 ulp (im) | **2.7×** | original: component-wise DD add |
-| cdd\_sub | full DD | 0.7 ulp (re) / 0.6 ulp (im) | **2.7×** | original: component-wise DD sub |
-| cdd\_mul | full DD | 1.7 ulp (re) / 1.2 ulp (im) | **2.1×** | original: (ac−bd, ad+bc) via DD ops |
-| cdd\_div | full DD / deriv | 40 ulp (re) / 1.9 ulp (im) | **4.2×** | original: (ac+bd, bc−ad)/(c²+d²) |
+| cdd\_add | full DD | 0.7 ulp (re) / 0.6 ulp (im) | **2.7×** | original: component-wise DD add |
+| cdd\_sub | full DD | 0.7 ulp (re) / 0.7 ulp (im) | **2.7×** | original: component-wise DD sub |
+| cdd\_mul | full DD | 1.3 ulp (re) / 1.9 ulp (im) | **2.1×** | original: (ac−bd, ad+bc) via DD ops |
+| cdd\_div | full DD / deriv | 8.6 ulp (re) / 2.2 ulp (im) | **4.2×** | original: (ac+bd, bc−ad)/(c²+d²) |
 | cdd\_conjg | exact | exact | **2.2×** | original: negate im limbs |
-| cdd\_abs | full DD | 1.9 ulp | **5.1×** | original: hypot(re, im) |
+| cdd\_abs | full DD | 2.0 ulp | **5.1×** | original: hypot(re, im) |
 
 ### Complex transcendentals
 
 | op | prec | M1 Max err | M1 Max × | approach |
 |---|---|---|---|---|
-| cdd\_sqrt | full DD | 1.9 ulp (re) / 1.8 ulp (im) | **7.5×** | original: Kahan-style (\|z\|+\|a\|)/2 with scaling |
-| cdd\_exp | full DD | 2.1 ulp (re) / 2.0 ulp (im) | **3.6×** | original: exp(re)·(cos(im), sin(im)) |
-| cdd\_expm1 | reduced DD | 1.8 ulp (re) / 2.0 ulp (im) | 1.5× | original: expm1 + complex rotation with cancellation-safe Re |
-| cdd\_log | full DD | 1.6 ulp (re) / 1.1 ulp (im) | **4.9×** | original: (log(\|z\|), atan2(im,re)) |
-| cdd\_log2 | full DD | 1.7 ulp (re) / 1.2 ulp (im) | **5.7×** | original: clog / log(2) component-wise |
-| cdd\_log10 | full DD | 1.5 ulp (re) / 1.4 ulp (im) | **5.7×** | original: clog / log(10) component-wise |
-| cdd\_log1p | full DD | 20769 ulp (re) / 2.0 ulp (im) | **6.0×** | original: cancellation-safe log(1+z) near z=0 |
-| cdd\_pow | full DD | 695 ulp (re) / 2498 ulp (im) | **4.0×** | original: exp(w·log(z)) |
-| cdd\_sin | full DD | 2.8 ulp (re) / 4.2 ulp (im) | **4.4×** | original: sin(re)cosh(im), cos(re)sinh(im) |
-| cdd\_cos | full DD | 1.8 ulp (re) / 3.0 ulp (im) | **4.2×** | original: cos(re)cosh(im), −sin(re)sinh(im) |
-| cdd\_tan | full DD | 3.9 ulp (re) / 5.8 ulp (im) | **4.1×** | original: complex sin/cos ratio |
-| cdd\_sinh | full DD | 3.3 ulp (re) / 2.2 ulp (im) | **4.4×** | original: sinh(re)cos(im), cosh(re)sin(im) |
-| cdd\_cosh | full DD | 1.8 ulp (re) / 2.2 ulp (im) | **4.6×** | original: cosh(re)cos(im), sinh(re)sin(im) |
-| cdd\_tanh | full DD | 5.2 ulp (re) / 4.7 ulp (im) | **4.7×** | original: complex tanh via sinh/cosh |
-| cdd\_asin | deriv / full DD | 1.9 ulp (re) / 2.3 ulp (im) | **5.2×** | original: −i·log(iz+√(1−z²)) |
-| cdd\_acos | full DD | 1.6 ulp (re) / 2.5 ulp (im) | **4.5×** | original: π/2 − asin(z) |
-| cdd\_atan | full DD | 1.6 ulp (re) / 2.2 ulp (im) | **4.5×** | original: (i/2)·log((i+z)/(i−z)) |
-| cdd\_asinh | deriv / full DD | 2.1 ulp (re) / 1.7 ulp (im) | **4.7×** | original: log(z+√(z²+1)) |
-| cdd\_acosh | full DD | 2.5 ulp (re) / 1.6 ulp (im) | **4.7×** | original: log(z+√(z²−1)) |
-| cdd\_atanh | deriv / full DD | 2.4 ulp (re) / 1.9 ulp (im) | **4.9×** | original: ½·log((1+z)/(1−z)) |
+| cdd\_sqrt | full DD | 2.1 ulp (re) / 2.4 ulp (im) | **7.5×** | original: Kahan-style (\|z\|+\|a\|)/2 with scaling |
+| cdd\_exp | full DD | 1.9 ulp (re) / 2.3 ulp (im) | **3.6×** | original: exp(re)·(cos(im), sin(im)) |
+| cdd\_expm1 | reduced DD | 2.1 ulp (re) / 2.3 ulp (im) | 1.5× | original: expm1 + complex rotation with cancellation-safe Re |
+| cdd\_log | full DD | 1.5 ulp (re) / 1.6 ulp (im) | **4.9×** | original: (log(\|z\|), atan2(im,re)) |
+| cdd\_log2 | full DD | 2.0 ulp (re) / 1.7 ulp (im) | **5.7×** | original: clog / log(2) component-wise |
+| cdd\_log10 | full DD | 1.7 ulp (re) / 1.2 ulp (im) | **5.7×** | original: clog / log(10) component-wise |
+| cdd\_log1p | full DD | 136 ulp (re) / 2.2 ulp (im) | **6.0×** | original: cancellation-safe log(1+z) near z=0 |
+| cdd\_pow | full DD | 466 ulp (re) / 1157 ulp (im) | **4.0×** | original: exp(w·log(z)) |
+| cdd\_sin | full DD | 2.2 ulp (re) / 7.2 ulp (im) | **4.4×** | original: sin(re)cosh(im), cos(re)sinh(im) |
+| cdd\_cos | full DD | 2.0 ulp (re) / 2.2 ulp (im) | **4.2×** | original: cos(re)cosh(im), −sin(re)sinh(im) |
+| cdd\_tan | full DD | 2.7 ulp (re) / 6.7 ulp (im) | **4.1×** | original: complex sin/cos ratio |
+| cdd\_sinh | full DD | 4.4 ulp (re) / 1.9 ulp (im) | **4.4×** | original: sinh(re)cos(im), cosh(re)sin(im) |
+| cdd\_cosh | full DD | 2.0 ulp (re) / 1.9 ulp (im) | **4.6×** | original: cosh(re)cos(im), sinh(re)sin(im) |
+| cdd\_tanh | full DD | 5.1 ulp (re) / 3.8 ulp (im) | **4.7×** | original: complex tanh via sinh/cosh |
+| cdd\_asin | deriv / full DD | 1.7 ulp (re) / 2.1 ulp (im) | **5.2×** | original: −i·log(iz+√(1−z²)) |
+| cdd\_acos | full DD | 1.6 ulp (re) / 2.1 ulp (im) | **4.5×** | original: π/2 − asin(z) |
+| cdd\_atan | full DD | 1.6 ulp (re) / 2.6 ulp (im) | **4.5×** | original: (i/2)·log((i+z)/(i−z)) |
+| cdd\_asinh | deriv / full DD | 2.3 ulp (re) / 1.8 ulp (im) | **4.7×** | original: log(z+√(z²+1)) |
+| cdd\_acosh | full DD | 2.1 ulp (re) / 1.6 ulp (im) | **4.7×** | original: log(z+√(z²−1)) |
+| cdd\_atanh | deriv / full DD | 2.5 ulp (re) / 1.1 ulp (im) | **4.9×** | original: ½·log((1+z)/(1−z)) |
 
 ### Array reductions
 
