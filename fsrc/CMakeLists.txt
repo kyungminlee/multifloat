@@ -40,14 +40,22 @@ fortran_module_layout(multifloatsf)
 target_include_directories(multifloatsf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
-# Fat LTO for GCC; plain -flto for LLVM.
+# Fat LTO: keep regular object code alongside the LTO bitcode so the
+# installed archive can be linked by a different compiler/toolchain than
+# the one that built it (non-LTO or LTO-incompatible linker driver
+# falls back to the embedded native objects). GCC supports
+# -ffat-lto-objects natively; Flang/Clang >=18 accepts it too. Probe so
+# older LLVM-family compilers silently fall back to plain LTO.
+include(CheckFortranCompilerFlag)
+check_fortran_compiler_flag(-ffat-lto-objects MULTIFLOATSF_HAS_FAT_LTO)
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "")
-    if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-        target_compile_options(multifloatsf PRIVATE -O3 -flto -ffat-lto-objects)
-        target_link_options(multifloatsf PUBLIC -flto)
-    elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "LLVMFlang")
+    if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU"
+       OR CMAKE_Fortran_COMPILER_ID STREQUAL "LLVMFlang")
         target_compile_options(multifloatsf PRIVATE -O3 -flto)
         target_link_options(multifloatsf PUBLIC -flto)
+        if(MULTIFLOATSF_HAS_FAT_LTO)
+            target_compile_options(multifloatsf PRIVATE -ffat-lto-objects)
+        endif()
     elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
         # ifx defaults to -fp-model=fast at -O2+. DD error-free
         # transformations require strict IEEE associativity and no FMA
