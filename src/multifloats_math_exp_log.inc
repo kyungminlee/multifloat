@@ -396,6 +396,16 @@ float64x2 log1p(float64x2 const &x) {
 // thus accurate to ~ulp_dd·|y| in absolute terms regardless of |e_x|.
 float64x2 pow(float64x2 const &x, float64x2 const &y) {
   if (x._limbs[0] == 0.0 && y._limbs[0] == 0.0) return float64x2(1.0);
+
+  // Integer-exponent fast path: y exact integer with |y| ≤ 2^31.
+  // Uses repeated squaring (powi) — bit-cleaner than exp(y*log(x)) and
+  // it is the only path that yields a real result for x < 0.
+  if (y._limbs[1] == 0.0 && std::isfinite(y._limbs[0]) &&
+      y._limbs[0] == std::trunc(y._limbs[0]) &&
+      std::abs(y._limbs[0]) <= 2147483647.0) {
+    return powi(x, static_cast<int>(y._limbs[0]));
+  }
+
   if (!std::isfinite(x._limbs[0]) || !std::isfinite(y._limbs[0]) ||
       x._limbs[0] <= 0.0) {
     return exp(y * log(x));
