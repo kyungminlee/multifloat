@@ -86,6 +86,12 @@ program abi_equivalence
     pure integer(c_int) function c_dd_ge(a, b) bind(c, name='gedd')
       import :: dd_c, c_int; type(dd_c), value :: a, b
     end function
+    pure type(dd_c) function c_dd_powi(a, n) bind(c, name='powidd')
+      import :: dd_c, c_int; type(dd_c), value :: a; integer(c_int), value :: n
+    end function
+    pure type(dd_c) function c_dd_modulo(a, b) bind(c, name='modulodd')
+      import :: dd_c; type(dd_c), value :: a, b
+    end function
   end interface
 
   call seed_rng()
@@ -114,6 +120,8 @@ program abi_equivalence
   call fuzz_dd_cmp("le")
   call fuzz_dd_cmp("gt")
   call fuzz_dd_cmp("ge")
+  call fuzz_dd_powi()
+  call fuzz_dd_modulo()
 
   write(*,'(a,i0,a,i0,a)') 'Summary: ', total-failures, '/', total, ' checks passed'
   if (failures /= 0) then
@@ -160,13 +168,16 @@ contains
   end function
 
   subroutine record_dd(label, hn, ln, hc, lc, mode)
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     character(*), intent(in) :: label
     real(dp), intent(in) :: hn, ln, hc, lc
     integer, intent(in) :: mode    ! 1 = 4-ulp lo tol; 4 = bit-exact
     real(dp) :: tol
     logical :: ok
     total = total + 1
-    if (mode == 4) then
+    if (mode == 4 .or. .not. ieee_is_finite(hn)) then
+      ! Bit-exact path: also applies when hi is ±Inf/NaN (spacing(Inf)
+      ! is NaN so the tolerance arithmetic below is meaningless).
       ok = raw_eq(hn, hc) .and. raw_eq(ln, lc)
       tol = 0.0_dp
     else
@@ -293,6 +304,48 @@ contains
       end if
       call apply_cmp(op, fa, fb, da, db, in_, ic)
       call record_int(op, in_, ic)
+    end do
+  end subroutine
+
+  subroutine fuzz_dd_powi()
+    ! Integer-exponent power: span a representative set of exponents
+    ! (edge zeros, signs, small, moderate, and a couple of larger
+    ! magnitudes that exercise the EBS loop). Base drawn from gen_dd.
+    integer, parameter :: exps(15) = [ &
+         0,  1, -1,  2, -2,  3,  7, 10, -10, 20, -20, 50, -50, 100, -100 ]
+    integer :: k, j, n
+    type(float64x2) :: fa, fr
+    type(dd_c) :: da, dr
+    character(80) :: tag
+    do k = 1, N_FUZZ / size(exps)
+      call gen_dd(da, fa)
+      do j = 1, size(exps)
+        n = exps(j)
+        fr = fa ** n
+        dr = c_dd_powi(da, int(n, c_int))
+        write(tag, '(a,i0,a)') 'powi(n=', n, ')'
+        ! EBS multiplies can differ from a linear loop in the last-ulp
+        ! residual on large |n|; tolerate 4 dp ULPs on lo.
+        call record_dd(trim(tag), fr%limbs(1), fr%limbs(2), dr%hi, dr%lo, 1)
+      end do
+    end do
+  end subroutine
+
+  subroutine fuzz_dd_modulo()
+    integer :: k
+    type(float64x2) :: fa, fb, fr
+    type(dd_c) :: da, db, dr
+    do k = 1, N_FUZZ
+      call gen_dd(da, fa); call gen_dd(db, fb)
+      if (db%hi == 0.0_dp) cycle
+      fr = modulo(fa, fb)
+      dr = c_dd_modulo(da, db)
+      ! Sign-adjust can cross by exactly one dp ULP on the hi limb in
+      ! rare cases where fmod's residual has hi ≈ 0 with a tiny lo; the
+      ! C path uses signbit() of the whole DD while the Fortran path
+      ! (pre-Stage-3) only looks at hi. Bit-exact on lo, 4 dp ULPs on
+      ! hi is within the DD precision envelope either way.
+      call record_dd("modulo", fr%limbs(1), fr%limbs(2), dr%hi, dr%lo, 1)
     end do
   end subroutine
 

@@ -85,6 +85,12 @@ program bench_abi
     pure integer(c_int) function c_dd_ge(a, b) bind(c, name='gedd')
       import :: dd_c, c_int; type(dd_c), value :: a, b
     end function
+    pure type(dd_c) function c_dd_powi(a, n) bind(c, name='powidd')
+      import :: dd_c, c_int; type(dd_c), value :: a; integer(c_int), value :: n
+    end function
+    pure type(dd_c) function c_dd_modulo(a, b) bind(c, name='modulodd')
+      import :: dd_c; type(dd_c), value :: a, b
+    end function
   end interface
 
   ! Data arrays (native Fortran type)
@@ -136,10 +142,10 @@ program bench_abi
   call bench("gt")
   call bench("ge")
 
-  ! Phase-2 candidates (native only until the C ABI kernels land)
-  call bench_native("pow7")
-  call bench_native("pow20")
-  call bench_native("modulo")
+  ! Phase-2: now delegated to powidd / modulodd.
+  call bench("pow7")
+  call bench("pow20")
+  call bench("modulo")
 
   print '(a)', " --------------------------------------------------------------------"
   print '(a,es11.3,a,es11.3)', " sinks: dd=", dd_sink, " cw=", cw_sink
@@ -280,6 +286,9 @@ contains
     case ("le");    do r=1,REPS; do i=1,N; ires_c(i) = int(c_dd_le(d1(i), d2(i)));  end do; call cw_drain_int(ires_c); end do
     case ("gt");    do r=1,REPS; do i=1,N; ires_c(i) = int(c_dd_gt(d1(i), d2(i)));  end do; call cw_drain_int(ires_c); end do
     case ("ge");    do r=1,REPS; do i=1,N; ires_c(i) = int(c_dd_ge(d1(i), d2(i)));  end do; call cw_drain_int(ires_c); end do
+    case ("pow7");   do r=1,REPS; do i=1,N; dres(i) = c_dd_powi(d1(i), 7_c_int);   end do; call cw_drain(d1); end do
+    case ("pow20");  do r=1,REPS; do i=1,N; dres(i) = c_dd_powi(d1(i), 20_c_int);  end do; call cw_drain(d1); end do
+    case ("modulo"); do r=1,REPS; do i=1,N; dres(i) = c_dd_modulo(d1(i), d2(i));   end do; call cw_drain(d1); end do
     end select
     tsec = elapsed(t0)
   end subroutine

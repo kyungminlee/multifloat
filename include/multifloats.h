@@ -86,7 +86,16 @@ MULTIFLOATS_API float64x2_t fmindd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API float64x2_t fmaxdd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API float64x2_t hypotdd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API float64x2_t powdd(float64x2_t a, float64x2_t b);
+/* Integer-exponent power via exponentiation-by-squaring: ⌈log2|n|⌉
+ * squarings plus popcount(|n|) multiplies, exact up to DD precision
+ * per step. One DD division at the end when n < 0. */
+MULTIFLOATS_API float64x2_t powidd(float64x2_t a, int n);
 MULTIFLOATS_API float64x2_t fmoddd(float64x2_t a, float64x2_t b);
+/* Floored modulo (Fortran `modulo` semantics): same sign as y.
+ * modulodd(x, y) = fmod(x, y), plus y if the remainder and y have
+ * opposite signs. Uses DD signbit (first-nonzero-limb), so
+ * non-canonical DDs with hi==0 still get the right sign. */
+MULTIFLOATS_API float64x2_t modulodd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API float64x2_t fdimdd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API float64x2_t copysigndd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API float64x2_t fmadd(float64x2_t a, float64x2_t b, float64x2_t c);
@@ -861,6 +870,39 @@ inline constexpr float64x2 fmod(float64x2 const &x, float64x2 const &y) {
   }
 
   return x_neg ? -r : r;
+}
+
+// Floored modulo (matches Fortran `modulo` intrinsic): the result has
+// the same sign as y, or is +0. Uses fmod for the truncated remainder
+// then lifts to the floored form by adding y when the remainder and y
+// have opposite signs. signbit() resolves the sign via the first
+// nonzero limb, so non-canonical DDs (e.g. (+0, -eps)) get the correct
+// sign adjustment — a subtlety the naive hi-only check misses.
+inline constexpr float64x2 modulo(float64x2 const &x, float64x2 const &y) {
+  float64x2 r = fmod(x, y);
+  if (r._limbs[0] == 0.0 && r._limbs[1] == 0.0) return r;
+  return (signbit(r) != signbit(y)) ? r + y : r;
+}
+
+// Integer-exponent power via exponentiation-by-squaring. Returns exact
+// 1 for n == 0 (including for 0**0, matching C pow and Fortran). For
+// n < 0 returns 1 / powi(base, -n), adding one DD division at the end.
+inline constexpr float64x2 powi(float64x2 base, int n) {
+  if (n == 0) return float64x2(1.0);
+  bool neg = (n < 0);
+  // Promote through long long so INT_MIN negates without overflowing int.
+  unsigned long long u = neg
+      ? static_cast<unsigned long long>(-static_cast<long long>(n))
+      : static_cast<unsigned long long>(n);
+  float64x2 result(1.0);
+  float64x2 b = base;
+  for (;;) {
+    if (u & 1ull) result = result * b;
+    u >>= 1;
+    if (u == 0ull) break;
+    b = b * b;
+  }
+  return neg ? (float64x2(1.0) / result) : result;
 }
 
 inline constexpr float64x2 remainder(float64x2 const &x, float64x2 const &y) {

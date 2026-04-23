@@ -735,6 +735,7 @@ module multifloats
     ('dd_atan2pi_full', 'atan2pidd'), &
     ('dd_hypot_full',   'hypotdd'),   &
     ('dd_fmod_full',    'fmoddd'),    &
+    ('dd_modulo_full',  'modulodd'),  &
     ('dd_pow_full',     'powdd') ]
 
     interface
@@ -758,6 +759,13 @@ module multifloats
             import :: complex64x2_t; type(complex64x2_t), value, intent(in) :: a, b
         end function
 #:endfor
+        ! Integer-exponent power: exponent comes in as a plain C int, so
+        ! the delegate map shape (dd, dd)->dd doesn't fit — declare by hand.
+        pure type(float64x2_t) function c_dd_powi(a, n) bind(c, name='powidd')
+            import :: float64x2_t, c_int
+            type(float64x2_t), value, intent(in) :: a
+            integer(c_int), value, intent(in) :: n
+        end function
         ! Integer-order Bessel (recurrence in C++; seeded by j0dd/j1dd/y0dd/y1dd).
         pure type(float64x2_t) function c_dd_jn(n, a) bind(c, name='jndd')
             import :: float64x2_t, c_int
@@ -1668,14 +1676,10 @@ $:C_DELEGATE_BINARY(ffull, csym)
 #:elif func == 'mod'
         res = dd_fmod_full(x, y)
 #:elif func == 'modulo'
-        ! modulo via mod + sign adjustment
-        res = ${n1}$_mod_${n2}$(a, b)
-        if (res%limbs(1) /= 0.0_dp) then
-            if ((res%limbs(1) > 0.0_dp .and. y%limbs(1) < 0.0_dp) .or. &
-                (res%limbs(1) < 0.0_dp .and. y%limbs(1) > 0.0_dp)) then
-                res = res + y
-            end if
-        end if
+        ! Delegate to multifloats::modulo. The C++ sign-adjust uses
+        ! signbit() (first-nonzero-limb), which fixes the old Fortran
+        ! composition's bug on non-canonical DDs with hi == 0.
+        res = dd_modulo_full(x, y)
 #:elif func == 'dim'
         ! multifloats::fdim : (x > y) ? x - y : 0
         if (x > y) then
@@ -2959,17 +2963,16 @@ $:cdd_arith_body(opname)
             end if
         end block
 #:else
-        ! Integer-power on a real base via repeated multiplication.
+        ! Integer-power on a real base: delegate to multifloats::powi
+        ! (exponentiation-by-squaring in C++), so the algorithm stays
+        ! single-sourced and O(log n) mults instead of O(n).
         block
             type(float64x2) :: base
-            integer :: k, n
+            type(float64x2_t) :: r
             base = a
-            res = DD_ONE
-            n = abs(b)
-            do k = 1, n
-                res = res * base
-            end do
-            if (b < 0) res = DD_ONE / res
+            r = c_dd_powi(float64x2_t(base%limbs(1), base%limbs(2)), &
+                          int(b, c_int))
+            res%limbs = [r%hi, r%lo]
         end block
 #:endif
 #:elif rc
