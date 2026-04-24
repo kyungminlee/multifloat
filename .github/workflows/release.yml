@@ -8,6 +8,14 @@ on:
 permissions:
   contents: write
 
+# Node 20 is being phased out on GitHub-hosted runners (forced default to
+# Node 24 from 2026-06-02, Node 20 removal from 2026-09-16). Opt in now
+# so actions/checkout, actions/upload-artifact and actions/download-artifact
+# run on Node 24 and the deprecation warning stops firing on every job.
+# Safe to remove once Node 24 is the runner default.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 # Per-job CPU baseline:
 #   Linux x86_64 → -march=haswell  (AVX2 + FMA + BMI2)
 #   macOS arm64  → -mcpu=apple-m1  (Apple Silicon baseline; M2/M3/M4 are supersets)

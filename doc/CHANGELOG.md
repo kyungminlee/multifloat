@@ -8,6 +8,43 @@ Dates are ISO-8601 UTC.
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-04-24
+
+### Fixed
+
+- Silence gfortran's `-Wlto-type-mismatch` on the Fortran ↔ C bind(c)
+  boundary (≈1500 warnings per build). The Fortran bridge types
+  `float64x2_t` / `complex64x2_t` are still layout-compatible with
+  `multifloats::float64x2` / `std::complex<multifloats::float64x2>`
+  (pinned by header static_asserts + verified by
+  `precision_abi_equivalence` and `crosscheck_cpp_fortran`); only the
+  type *names* differ, which gfortran's LTO type-checker flags.
+  Scoped `-Wno-lto-type-mismatch` to GNU + LTO builds on the
+  `multifloatsf` target.
+
+### Changed
+
+- CI / release workflows opt in to the Node.js 24 runtime
+  (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`) to silence the
+  `actions/checkout@v4` / `actions/upload-artifact@v4` /
+  `actions/download-artifact@v4` Node 20 deprecation warnings. Safe
+  to drop after GitHub's 2026-06-02 force-default-to-Node-24
+  transition.
+
+## [0.3.2] — 2026-04-24
+
+### Fixed
+
+- Release-CI install failure on every non-GCC matrix entry (Intel
+  oneAPI, LLVM Flang). The dual-variant `.f90` install in v0.3.0/0.3.1
+  expected both `multifloats-quad.f90` and `multifloats-noquad.f90` to
+  exist, but the non-GCC entries used `cmake --build --target
+  multifloats --target multifloatsf`, which bypasses ALL-linked custom
+  targets and only generated the variant the build host's REAL(16)
+  probe had picked. `add_dependencies(multifloatsf
+  multifloatsf_sources)` wires both fypp expansions as a side effect
+  of building the library target.
+
 ## [0.3.1] — 2026-04-24
 
 ### Added
