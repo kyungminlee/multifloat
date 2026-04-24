@@ -59,12 +59,15 @@ float64x2 exp2_from_reduced(double n_d, double rh, double rl) {
   float64x2 mantissa = T * pow2s;
 
   int n = static_cast<int>(n_d);
-  int half_n = n / 2;
+  // Single ldexp per limb: the previous half_n split was defensive but
+  // unnecessary. |mantissa.hi| ≤ 2 (table T·pow2s), so ldexp(., n) for
+  // n in the capped range [exp2_min, exp2_max] = [-1056, 1024] cannot
+  // overflow the *intermediate* — only the final result, which is what
+  // we want (inf at n≥1024, 0 at n≤-1056). Splitting at half_n produced
+  // identical results at both rim cases.
   float64x2 r;
-  r._limbs[0] = std::ldexp(mantissa._limbs[0], half_n);
-  r._limbs[1] = std::ldexp(mantissa._limbs[1], half_n);
-  r._limbs[0] = std::ldexp(r._limbs[0], n - half_n);
-  r._limbs[1] = std::ldexp(r._limbs[1], n - half_n);
+  r._limbs[0] = std::ldexp(mantissa._limbs[0], n);
+  r._limbs[1] = std::ldexp(mantissa._limbs[1], n);
   return r;
 }
 
@@ -486,6 +489,12 @@ float64x2 pow(float64x2 const &x, float64x2 const &y) {
   tsum3_finalize(T0, T1, T2);
 
   float64x2 res = exp2_from_reduced(n_d, T0, T1);
+  // At the overflow rim (|n_d| past the exp2 saturation cap) `res._limbs[0]`
+  // is ±inf or 0. The linear correction `res * LN2 * T2` would then be
+  // inf*finite (still inf, OK) or inf*0 = NaN (when T2 happens to be 0),
+  // and `res + NaN` poisons the answer. Skip the correction in that regime —
+  // the answer is already saturated to its ±inf / 0 sentinel.
+  if (!std::isfinite(res._limbs[0])) return res;
   // 0x1.62e42fefa39efp-1 = round-to-nearest double of ln 2.
   constexpr double LN2 = 0x1.62e42fefa39efp-1;
   double corr = res._limbs[0] * (LN2 * T2);
