@@ -146,12 +146,17 @@ jobs:
           if [ "${{ matrix.compiler }}" = "intel" ]; then
             source /opt/intel/oneapi/setvars.sh 2>/dev/null || true
           fi
+          # MULTIFLOATS_BUILD_BENCH=OFF: CI doesn't run microbenchmarks
+          # and the Fortran bench source uses gfortran-13+-only
+          # `!GCC$ ATTRIBUTES NOINLINE` (would break gcc-12). Saves
+          # build time on all matrix entries.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=${{ matrix.cc }} \
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DCMAKE_Fortran_COMPILER=${{ matrix.fc }} \
             -DMULTIFLOATS_USE_LTO=ON \
+            -DMULTIFLOATS_BUILD_BENCH=OFF \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
 
       # GCC matrix entries build everything (libraries + test executables);
@@ -226,6 +231,7 @@ jobs:
             -DCMAKE_Fortran_COMPILER=gfortran-14 \
             -DMULTIFLOATS_USE_LTO=OFF \
             -DMULTIFLOATS_STRIP_SYMBOLS=OFF \
+            -DMULTIFLOATS_BUILD_BENCH=OFF \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
           cmake --build build -j$(nproc)
 
