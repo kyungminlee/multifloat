@@ -149,23 +149,41 @@ install(FILES ${_SRC_QUAD} ${_SRC_NOQUAD}
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/multifloats.fypp
     DESTINATION ${MULTIFLOATSF_SHARE_DIR})
 
-# Opt-in: also install a precompiled compiler-tagged archive + .mod. The
-# source-build path in Config.cmake still takes precedence; these are
-# convenience artifacts for distro packagers who want the system-compiler
-# build of the module pre-built alongside.
+# Opt-in: also install a precompiled compiler-tagged archive + .mod for
+# consumers whose Fortran compiler matches a shipped tag. Config.cmake
+# prefers this path when available and falls back to source-build
+# otherwise, so the two modes compose cleanly. We cannot call
+# fortran_install_library() here because that helper also writes a
+# multifloatsfConfig.cmake of its own (best-fit-or-fail, no source
+# fallback); it would clobber the unified Config we install below. So
+# we inline just the tagged-archive + tagged-export install pieces.
 if(MULTIFLOATSF_INSTALL_PRECOMPILED_MOD)
-    fortran_install_library(multifloatsf)
+    set_target_properties(multifloatsf PROPERTIES
+        OUTPUT_NAME "multifloatsf-${FORTRAN_COMPILER_TAG}")
+    install(TARGETS multifloatsf
+        EXPORT multifloatsfTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(EXPORT multifloatsfTargets
+        FILE multifloatsfTargets-${FORTRAN_COMPILER_TAG}.cmake
+        NAMESPACE multifloats::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/multifloatsf)
     fortran_install_modules(multifloatsf)
 endif()
 
-# Config.cmake: source-build selector. The template sits next to the
-# project's other CMake helpers under cmake/.
+# Config.cmake: unified selector (precompiled-first, source-fallback).
+# The `@FC_DETECT_CODE@` placeholder in the template is expanded from
+# the _FC_DETECT_CODE snippet that FortranCompiler.cmake wrote at its
+# own configure-time — so producer and consumer compute identical tags.
 include(CMakePackageConfigHelpers)
+set(FC_DETECT_CODE "${_FC_DETECT_CODE}")
 configure_package_config_file(
     ${CMAKE_SOURCE_DIR}/cmake/multifloatsfConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/multifloatsfConfig.cmake
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/multifloatsf
     PATH_VARS MULTIFLOATSF_SHARE_DIR)
+unset(FC_DETECT_CODE)
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/multifloatsfConfigVersion.cmake
     VERSION ${MULTIFLOATS_ABI_VERSION}.0.0
