@@ -8,6 +8,30 @@ Dates are ISO-8601 UTC.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-24
+
+### Added
+
+- **Dual-mode Fortran package distribution**: `find_package(multifloatsf)`
+  now prefers a precompiled compiler-tagged archive + `.mod` when one
+  matches the consumer's Fortran compiler (`multifloatsfTargets-<tag>.cmake`
+  under `<prefix>/lib/cmake/multifloatsf/`), and falls back to the
+  source-build path otherwise. Release tarballs now ship one tagged
+  precompiled variant per build-matrix entry alongside the pre-expanded
+  `.f90` source — consumers whose compiler exactly matches skip the
+  module recompile entirely.
+- `-DMULTIFLOATSF_INSTALL_PRECOMPILED_MOD=ON` wired into all release CI
+  configure steps (`build-lto`, `build-lto-mac`) so the release artifact
+  set carries per-compiler precompiled bundles.
+
+### Changed
+
+- `multifloatsfConfig.cmake` selector reworked from "always source" to
+  "precompiled preferred, source fallback". The `@FC_DETECT_CODE@`
+  placeholder in the template is now expanded at library-configure time
+  from the `_FC_DETECT_CODE` snippet in `cmake/FortranCompiler.cmake`, so
+  producer and consumer compute identical compiler tags.
+
 ## [0.3.0] — 2026-04-24
 
 ### Breaking

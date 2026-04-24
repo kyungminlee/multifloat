@@ -159,6 +159,7 @@ jobs:
             -DCMAKE_Fortran_COMPILER=${{ matrix.fc }} \
             -DMULTIFLOATS_USE_LTO=ON \
             -DMULTIFLOATS_BUILD_BENCH=OFF \
+            -DMULTIFLOATSF_INSTALL_PRECOMPILED_MOD=ON \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
 
       # GCC matrix entries build everything (libraries + test executables);
@@ -302,6 +303,7 @@ jobs:
             -DCMAKE_Fortran_COMPILER=${{ matrix.fc }} \
             -DMULTIFLOATS_USE_LTO=ON \
             -DMULTIFLOATS_BUILD_BENCH=OFF \
+            -DMULTIFLOATSF_INSTALL_PRECOMPILED_MOD=ON \
             $STRIP_FLAG \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
 
