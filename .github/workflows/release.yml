@@ -27,21 +27,42 @@ jobs:
       - name: Install fypp and mpmath
         run: pip install fypp mpmath
 
-      - name: Configure & build
+      # LTO build — produces libmultifloats-gcc-14.a (compiler-tagged
+      # because the static archive embeds gcc-14 GIMPLE bytecode).
+      - name: Configure & build (LTO)
         run: |
-          cmake -B build \
+          cmake -B build-lto \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc-14 \
             -DCMAKE_CXX_COMPILER=g++-14 \
             -DCMAKE_Fortran_COMPILER=gfortran-14 \
+            -DMULTIFLOATS_USE_LTO=ON \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
-          cmake --build build -j$(nproc)
+          cmake --build build-lto -j$(nproc)
 
-      - name: Test
-        run: cd build && ctest --output-on-failure -j$(nproc)
+      - name: Test (LTO build)
+        run: cd build-lto && ctest --output-on-failure -j$(nproc)
 
-      - name: Install C++ only
-        run: cmake --install build --component Unspecified
+      - name: Install C++ only (LTO)
+        run: cmake --install build-lto --component Unspecified
+
+      # Non-LTO build — produces plain libmultifloats.a. No bytecode in
+      # the archive, so it links against any compiler/version. The
+      # generated multifloatsConfig.cmake selects the LTO build for
+      # consumers using gcc-14 and falls back to this one otherwise.
+      - name: Configure & build (non-LTO)
+        run: |
+          cmake -B build-nolto \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_Fortran_COMPILER=gfortran-14 \
+            -DMULTIFLOATS_USE_LTO=OFF \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
+          cmake --build build-nolto -j$(nproc)
+
+      - name: Install C++ only (non-LTO)
+        run: cmake --install build-nolto --component Unspecified
 
       - name: Package
         run: |

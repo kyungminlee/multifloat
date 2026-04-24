@@ -154,16 +154,26 @@ install(EXPORT multifloatsTargets
     NAMESPACE multifloats::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/multifloats)
 
-# Config.cmake: smart-selector when LTO is on (consumer's compiler tag
-# must match an installed targets file); plain include otherwise.
+# Config.cmake: best-fit selector. Always generated the same way (whether
+# this build is LTO-on or LTO-off) so multiple builds installed into the
+# same prefix don't overwrite each other's Config with a less-capable
+# variant. The selector at consumer find_package() time:
+#   1. Derives the consumer's compiler tag (gcc-15 / clang-19 / ...).
+#   2. Looks for an exact-match `multifloatsTargets-<tag>.cmake` (an LTO
+#      build keyed to that exact compiler).
+#   3. Falls back to `multifloatsTargets.cmake` (an untagged non-LTO
+#      build, which contains plain machine code and is portable).
+#   4. Errors out only if neither exists.
 include(CMakePackageConfigHelpers)
-if(MULTIFLOATS_LTO_ON)
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/multifloatsConfig.cmake"
-"# multifloatsConfig.cmake — auto-generated, tag-aware (LTO build).
-# Picks the matching multifloatsTargets-<tag>.cmake based on the
-# consumer's C++ compiler family + version.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/multifloatsConfig.cmake"
+"# multifloatsConfig.cmake — auto-generated, best-fit selector.
+# Tries an exact compiler-tag match first (LTO build), falls back to
+# the untagged variant (portable non-LTO build).
 ${_MF_CXX_DETECT_CODE}
 set(_mf_targets \"\${CMAKE_CURRENT_LIST_DIR}/multifloatsTargets-\${_mf_cxx_tag}.cmake\")
+if(NOT EXISTS \"\${_mf_targets}\")
+    set(_mf_targets \"\${CMAKE_CURRENT_LIST_DIR}/multifloatsTargets.cmake\")
+endif()
 if(NOT EXISTS \"\${_mf_targets}\")
     file(GLOB _mf_available \"\${CMAKE_CURRENT_LIST_DIR}/multifloatsTargets-*.cmake\")
     set(_mf_avail_tags \"\")
@@ -181,7 +191,7 @@ if(NOT EXISTS \"\${_mf_targets}\")
     list(JOIN _mf_avail_tags \", \" _mf_avail_list)
     set(\${CMAKE_FIND_PACKAGE_NAME}_FOUND FALSE)
     set(\${CMAKE_FIND_PACKAGE_NAME}_NOT_FOUND_MESSAGE
-        \"multifloats: no LTO build for compiler '\${_mf_cxx_tag}'. Available: [\${_mf_avail_list}]. Rebuild with the same compiler, or install a non-LTO build (-DMULTIFLOATS_USE_LTO=OFF).\")
+        \"multifloats: no build matching compiler '\${_mf_cxx_tag}' and no portable non-LTO build installed. LTO tags available: [\${_mf_avail_list}]. Rebuild with the same compiler, or install a non-LTO build (-DMULTIFLOATS_USE_LTO=OFF).\")
     unset(_mf_cxx_tag)
     unset(_mf_targets)
     unset(_mf_available)
@@ -193,11 +203,6 @@ include(\"\${_mf_targets}\")
 unset(_mf_cxx_tag)
 unset(_mf_targets)
 ")
-else()
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/multifloatsConfig.cmake"
-"include(\"\${CMAKE_CURRENT_LIST_DIR}/multifloatsTargets.cmake\")
-")
-endif()
 # Version file so `find_package(multifloats <N> REQUIRED)` actually
 # enforces the requested major. SameMajorVersion: any installed N.x.x
 # satisfies a request for N (matching what MULTIFLOATS_ABI_VERSION ==
