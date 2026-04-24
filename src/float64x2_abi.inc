@@ -182,6 +182,78 @@ MF_ABI_CMP(le, <=)
 MF_ABI_CMP(gt, >)
 MF_ABI_CMP(ge, >=)
 
+// libquadmath parity — every NAMEq in <quadmath.h> has a matching NAMEdd
+// shim below. Each delegates to the canonical multifloats:: helper.
+
+// Floating-point manipulation
+MF_ABI_UNARY(cbrt)
+MF_ABI_UNARY(ceil)
+MF_ABI_UNARY(floor)
+MF_ABI_UNARY(nearbyint)
+MF_ABI_UNARY(rint)
+MF_ABI_UNARY(logb)
+MF_ABI_BINARY(nextafter)
+MF_ABI_BINARY(remainder)
+
+// Out-pointer / int-arg variants — don't fit MF_ABI_UNARY/BINARY.
+float64x2_t frexpdd(float64x2_t a, int *exp) {
+  return to(multifloats::frexp(from(a), exp));
+}
+float64x2_t modfdd(float64x2_t a, float64x2_t *iptr) {
+  multifloats::float64x2 ip;
+  multifloats::float64x2 frac = multifloats::modf(from(a), &ip);
+  *iptr = to(ip);
+  return to(frac);
+}
+float64x2_t ldexpdd(float64x2_t a, int n) {
+  return to(multifloats::ldexp(from(a), n));
+}
+float64x2_t scalbndd(float64x2_t a, int n) {
+  return to(multifloats::scalbn(from(a), n));
+}
+float64x2_t scalblndd(float64x2_t a, long n) {
+  return to(multifloats::scalbln(from(a), n));
+}
+float64x2_t remquodd(float64x2_t a, float64x2_t b, int *quo) {
+  return to(multifloats::remquo(from(a), from(b), quo));
+}
+int ilogbdd(float64x2_t a) { return multifloats::ilogb(from(a)); }
+
+// Integer rounding
+long      lrounddd (float64x2_t a) { return multifloats::lround (from(a)); }
+long long llrounddd(float64x2_t a) { return multifloats::llround(from(a)); }
+long      lrintdd  (float64x2_t a) { return multifloats::lrint  (from(a)); }
+long long llrintdd (float64x2_t a) { return multifloats::llrint (from(a)); }
+
+// Classification
+int isnandd   (float64x2_t a) { return multifloats::isnan   (from(a)) ? 1 : 0; }
+int isinfdd   (float64x2_t a) { return multifloats::isinf   (from(a)) ? 1 : 0; }
+int isfinitedd(float64x2_t a) { return multifloats::isfinite(from(a)) ? 1 : 0; }
+int finitedd  (float64x2_t a) { return multifloats::isfinite(from(a)) ? 1 : 0; }
+int signbitdd (float64x2_t a) { return multifloats::signbit (from(a)) ? 1 : 0; }
+
+int issignalingdd(float64x2_t a) {
+#if defined(__has_builtin)
+#  if __has_builtin(__builtin_issignaling)
+  return __builtin_issignaling(a.hi) ? 1 : 0;
+#  else
+  (void)a; return 0;
+#  endif
+#elif defined(__GNUC__) && __GNUC__ >= 13 && !defined(__clang__)
+  return __builtin_issignaling(a.hi) ? 1 : 0;
+#else
+  (void)a; return 0;
+#endif
+}
+
+// NaN with payload tag
+float64x2_t nandd(const char *tagp) { return to(multifloats::nan(tagp)); }
+
+// cis(x) = cos(x) + i sin(x)
+complex64x2_t cexpidd(float64x2_t a) {
+  return cc_to(multifloats::cexpi(from(a)));
+}
+
 #undef MF_ABI_UNARY
 #undef MF_ABI_BINARY
 #undef MF_ABI_BINARY_OP

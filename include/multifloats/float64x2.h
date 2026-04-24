@@ -290,6 +290,58 @@ MULTIFLOATS_API int ledd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API int gtdd(float64x2_t a, float64x2_t b);
 MULTIFLOATS_API int gedd(float64x2_t a, float64x2_t b);
 
+/* libquadmath parity — every NAMEq in <quadmath.h> has a NAMEdd entry
+ * here. Implementations are the canonical `multifloats::NAME` C++
+ * helpers in the header section below; the C-ABI symbols in
+ * src/float64x2_abi.inc are thin marshaling shims. */
+
+/* Cube root, integer rounding (toward ±inf, nearest-current-mode), exponent
+ * split / rescale, integer/fractional split, ulp-step, IEEE remainder. */
+MULTIFLOATS_API float64x2_t cbrtdd(float64x2_t a);
+MULTIFLOATS_API float64x2_t ceildd(float64x2_t a);
+MULTIFLOATS_API float64x2_t floordd(float64x2_t a);
+MULTIFLOATS_API float64x2_t nearbyintdd(float64x2_t a);
+MULTIFLOATS_API float64x2_t rintdd(float64x2_t a);
+MULTIFLOATS_API float64x2_t logbdd(float64x2_t a);
+MULTIFLOATS_API float64x2_t frexpdd(float64x2_t a, int *exp);
+MULTIFLOATS_API float64x2_t modfdd(float64x2_t a, float64x2_t *iptr);
+MULTIFLOATS_API float64x2_t ldexpdd(float64x2_t a, int n);
+MULTIFLOATS_API float64x2_t scalbndd(float64x2_t a, int n);
+MULTIFLOATS_API float64x2_t scalblndd(float64x2_t a, long n);
+MULTIFLOATS_API float64x2_t nextafterdd(float64x2_t a, float64x2_t b);
+MULTIFLOATS_API float64x2_t remainderdd(float64x2_t a, float64x2_t b);
+MULTIFLOATS_API float64x2_t remquodd(float64x2_t a, float64x2_t b, int *quo);
+MULTIFLOATS_API int ilogbdd(float64x2_t a);
+
+/* Integer rounding — leading-limb's libm result with a half-integer
+ * fixup that consults the lo limb (so e.g. lround((0.5, -ε)) = 0). */
+MULTIFLOATS_API long lrounddd(float64x2_t a);
+MULTIFLOATS_API long long llrounddd(float64x2_t a);
+MULTIFLOATS_API long lrintdd(float64x2_t a);
+MULTIFLOATS_API long long llrintdd(float64x2_t a);
+
+/* Classification — C99 isnan/isinf/signbit/isfinite contract: non-zero
+ * for true. `finitedd` mirrors libquadmath's legacy `finiteq` spelling
+ * (alias for isfinitedd). */
+MULTIFLOATS_API int isnandd(float64x2_t a);
+MULTIFLOATS_API int isinfdd(float64x2_t a);
+MULTIFLOATS_API int isfinitedd(float64x2_t a);
+MULTIFLOATS_API int finitedd(float64x2_t a);
+MULTIFLOATS_API int signbitdd(float64x2_t a);
+/* Signaling-NaN test on the leading limb. Uses the compiler builtin
+ * where available (gcc >= 13, clang with __has_builtin); otherwise
+ * returns 0 — multifloats never constructs sNaNs internally, so the
+ * fallback only loses signal when the caller explicitly passed an
+ * sNaN through the C ABI. */
+MULTIFLOATS_API int issignalingdd(float64x2_t a);
+
+/* NaN with payload tag (libquadmath nanq parity). Calls std::nan(tagp)
+ * for the leading limb; lo is set to 0. */
+MULTIFLOATS_API float64x2_t nandd(const char *tagp);
+
+/* cis(x) = cos(x) + i sin(x). Mirrors libquadmath cexpiq. */
+MULTIFLOATS_API complex64x2_t cexpidd(float64x2_t a);
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif
@@ -551,6 +603,17 @@ public:
 
 // =============================================================================
 // <cmath>-style free functions (ADL on float64x2)
+//
+// Canonical-implementation convention: every header-inline definition below
+// is the *single source of truth* for that operation. The extern "C"
+// `NAMEdd` symbols in the C-ABI block above (declared, defined in
+// src/float64x2_abi.inc) are thin marshaling shims that call the
+// corresponding `multifloats::NAME` here — never separate implementations
+// that could drift. Out-of-line transcendentals (exp, log, trig, …) flip
+// the relationship: the header carries only the `multifloats::NAME`
+// declaration, the body lives in src/multifloats_math.cc, and the C-ABI
+// shim still calls through `multifloats::NAME`. In both directions the
+// C-ABI surface is a forwarder, not a parallel implementation.
 // =============================================================================
 
 namespace detail {
@@ -834,6 +897,12 @@ inline constexpr float64x2 nextafter(float64x2 const &x, float64x2 const &y) {
 
 inline constexpr float64x2 nexttoward(float64x2 const &x, float64x2 const &y) {
   return nextafter(x, y);
+}
+
+// libquadmath nanq parity. The tag string encodes the NaN payload via
+// std::nan; lo is set to 0 so the result is a canonical DD NaN.
+inline float64x2 nan(const char *tagp) {
+  return float64x2(std::nan(tagp ? tagp : ""), 0.0);
 }
 
 // =============================================================================
@@ -1326,6 +1395,14 @@ std::complex<float64x2> expm1 (std::complex<float64x2> const &z);
 std::complex<float64x2> log2  (std::complex<float64x2> const &z);
 std::complex<float64x2> log10 (std::complex<float64x2> const &z);
 std::complex<float64x2> log1p (std::complex<float64x2> const &z);
+
+// cis(x) = cos(x) + i·sin(x). One fused sincos covers both components.
+// Mirrors libquadmath cexpiq.
+inline std::complex<float64x2> cexpi(float64x2 const &x) {
+  float64x2 s, c;
+  sincos(x, s, c);
+  return std::complex<float64x2>(c, s);
+}
 } // namespace multifloats
 
 #endif  /* __cplusplus */
