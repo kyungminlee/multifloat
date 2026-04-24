@@ -48,7 +48,12 @@ add_custom_command(
     VERBATIM)
 
 # Aggregate target so both variants are built whenever anything in this
-# tree depends on "the fypp output" (needed before install).
+# tree depends on "the fypp output" (needed before install). The `ALL`
+# attachment ensures both land during plain `cmake --build`, but CI
+# release jobs that invoke `cmake --build build --target multifloats
+# --target multifloatsf` (LTO non-GCC matrix entries) bypass ALL-linked
+# targets — wire the aggregate to `multifloatsf` explicitly as well so
+# both .f90 variants exist by the time `cmake --install` runs.
 add_custom_target(multifloatsf_sources ALL
     DEPENDS ${_SRC_QUAD} ${_SRC_NOQUAD})
 
@@ -72,6 +77,7 @@ add_custom_command(
 add_custom_target(multifloatsf_compat_alias ALL DEPENDS ${_COMPAT_SRC})
 
 add_library(multifloatsf STATIC ${_GENERATED_SRC})
+add_dependencies(multifloatsf multifloatsf_sources)
 fortran_module_layout(multifloatsf)
 target_include_directories(multifloatsf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src)
