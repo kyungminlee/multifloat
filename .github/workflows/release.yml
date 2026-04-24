@@ -18,69 +18,16 @@ env:
 
 jobs:
   # ===========================================================================
-  # C++ library — built once (compiler-independent ABI)
+  # LTO build — per-compiler matrix.
+  #
+  # Both libraries (multifloats C++ and multifloatsf Fortran) are built with
+  # LTO. Each matrix entry produces compiler-tagged archives that can coexist
+  # in one install prefix:
+  #   libmultifloats-<cxx-tag>.a       (e.g. libmultifloats-gcc-15.a)
+  #   libmultifloatsf-<ftn-tag>.a      (e.g. libmultifloatsf-gfortran-15.a)
+  # The smart Config.cmake on the consumer side picks the matching one.
   # ===========================================================================
-  build-cpp:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install fypp and mpmath
-        run: pip install fypp mpmath
-
-      # LTO build — produces libmultifloats-gcc-14.a (compiler-tagged
-      # because the static archive embeds gcc-14 GIMPLE bytecode).
-      - name: Configure & build (LTO)
-        run: |
-          cmake -B build-lto \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=gcc-14 \
-            -DCMAKE_CXX_COMPILER=g++-14 \
-            -DCMAKE_Fortran_COMPILER=gfortran-14 \
-            -DMULTIFLOATS_USE_LTO=ON \
-            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
-          cmake --build build-lto -j$(nproc)
-
-      - name: Test (LTO build)
-        run: cd build-lto && ctest --output-on-failure -j$(nproc)
-
-      - name: Install C++ only (LTO)
-        run: cmake --install build-lto --component Unspecified
-
-      # Non-LTO build — produces plain libmultifloats.a. No bytecode in
-      # the archive, so it links against any compiler/version. The
-      # generated multifloatsConfig.cmake selects the LTO build for
-      # consumers using gcc-14 and falls back to this one otherwise.
-      - name: Configure & build (non-LTO)
-        run: |
-          cmake -B build-nolto \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=gcc-14 \
-            -DCMAKE_CXX_COMPILER=g++-14 \
-            -DCMAKE_Fortran_COMPILER=gfortran-14 \
-            -DMULTIFLOATS_USE_LTO=OFF \
-            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
-          cmake --build build-nolto -j$(nproc)
-
-      - name: Install C++ only (non-LTO)
-        run: cmake --install build-nolto --component Unspecified
-
-      - name: Package
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          ARCHIVE="multifloats-${TAG}-linux-x86_64.tar.gz"
-          tar czf "${ARCHIVE}" -C install .
-          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: multifloats-cpp
-          path: ${{ env.ARCHIVE }}
-
-  # ===========================================================================
-  # Fortran library — per-compiler builds (ABI/mod-format specific)
-  # ===========================================================================
-  build-fortran:
+  build-lto:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -194,7 +141,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.oneapi_pkg }}
 
-      # --- Build Fortran library only ---
       - name: Configure
         run: |
           if [ "${{ matrix.compiler }}" = "intel" ]; then
@@ -205,42 +151,88 @@ jobs:
             -DCMAKE_C_COMPILER=${{ matrix.cc }} \
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DCMAKE_Fortran_COMPILER=${{ matrix.fc }} \
+            -DMULTIFLOATS_USE_LTO=ON \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
 
-      - name: Build Fortran library
-        run: cmake --build build --target multifloatsf -j$(nproc)
+      - name: Build everything (C++ + Fortran)
+        run: cmake --build build -j$(nproc)
 
-      - name: Install Fortran library
-        run: |
-          # Install just the Fortran subproject outputs
-          cmake --install build/fsrc
-
-      # --- Test (GCC only) ---
+      # Tests run on GCC entries only — the C++ tests require libquadmath
+      # (__float128) and the test scaffolding (-fext-numeric-literals) that
+      # only GCC ships. Other compilers still get a build smoke-test.
       - name: Test
         if: matrix.compiler == 'gcc'
-        run: |
-          cmake --build build --target fortran_fuzz -j$(nproc)
-          cd build && ./fortran_fuzz
+        run: cd build && ctest --output-on-failure -j$(nproc)
 
-      # --- Package ---
+      - name: Install (C++ + Fortran)
+        run: cmake --install build
+
       - name: Package
         run: |
           TAG="${GITHUB_REF_NAME}"
-          ARCHIVE="multifloatsf-${TAG}-linux-x86_64-${{ matrix.compiler }}-${{ matrix.version }}.tar.gz"
+          ARCHIVE="multifloats-${TAG}-linux-x86_64-lto-${{ matrix.compiler }}-${{ matrix.version }}.tar.gz"
           tar czf "${ARCHIVE}" -C install .
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: multifloatsf-${{ matrix.compiler }}-${{ matrix.version }}
+          name: multifloats-lto-${{ matrix.compiler }}-${{ matrix.version }}
+          path: ${{ env.ARCHIVE }}
+
+  # ===========================================================================
+  # Non-LTO build — single C++-only build.
+  #
+  # No bytecode in the archive, so libmultifloats.a links against any
+  # compiler/version. Acts as the portable fallback when the consumer's
+  # compiler doesn't match any of the per-compiler LTO entries above.
+  # No Fortran build here: a Fortran consumer is always tied to a specific
+  # gfortran/flang/ifx .mod format, so the LTO-tagged Fortran libraries
+  # already cover every reachable Fortran consumer.
+  # ===========================================================================
+  build-non-lto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install fypp and mpmath
+        run: pip install fypp mpmath
+
+      - name: Configure & build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DCMAKE_CXX_COMPILER=g++-14 \
+            -DCMAKE_Fortran_COMPILER=gfortran-14 \
+            -DMULTIFLOATS_USE_LTO=OFF \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
+          cmake --build build -j$(nproc)
+
+      - name: Test
+        run: cd build && ctest --output-on-failure -j$(nproc)
+
+      - name: Install C++ only
+        run: cmake --install build --component Unspecified
+
+      - name: Package
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ARCHIVE="multifloats-${TAG}-linux-x86_64-no-lto.tar.gz"
+          tar czf "${ARCHIVE}" -C install .
+          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: multifloats-no-lto
           path: ${{ env.ARCHIVE }}
 
   # ===========================================================================
   # Create GitHub Release with all artifacts
   # ===========================================================================
   release:
-    needs: [build-cpp, build-fortran]
+    needs: [build-lto, build-non-lto]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -248,9 +240,11 @@ jobs:
         with:
           path: artifacts
 
-      # Merge all per-compiler installs into a single combined tarball.
-      # Files are laid out so multiple compiler variants coexist (each has
-      # its own library name, .mod path, and cmake targets file).
+      # Merge all installs into a single combined tarball. The per-compiler
+      # tagged C++ and Fortran archives coexist by name; the non-LTO
+      # libmultifloats.a sits alongside them as the portable fallback.
+      # multifloatsConfig.cmake is the smart selector — same content from
+      # every per-compiler install, so last-write-wins is safe.
       - name: Create combined archive
         run: |
           TAG="${GITHUB_REF_NAME}"
