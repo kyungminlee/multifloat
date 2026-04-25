@@ -1643,7 +1643,7 @@ int main(int argc, char **argv) {
           q_t a_res = res_q < 0 ? -res_q : res_q;
           if (q_isfinite(res_q) && a_res > (q_t)1e-300q && a_res < (q_t)1e300q) {
             CHK("rootn", mf::rootn(f1, n), res_q, q1, (q_t)n,
-                mpfr::pow(m1, to_mp((double)n).inv()));
+                mpfr::pow(m1, mp_t(1) / to_mp((double)n)));
           }
         }
         // C23 compoundn: (1+x)^n. Gate q1 ∈ (-1, 100) so result stays

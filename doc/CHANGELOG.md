@@ -8,6 +8,8 @@ Dates are ISO-8601 UTC.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-25
+
 ### Changed
 
 - **Default CMake build is now library-only.** A plain
