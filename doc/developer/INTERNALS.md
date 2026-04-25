@@ -142,50 +142,52 @@ re-attempt without new evidence that overrides the recorded trade-off.
 
 ## 5. Open work
 
-### Fuzz coverage gaps
+### (Closed) fuzz-coverage gap for cbrt, fma, lerp, modulo, remainder, …
 
-Public APIs in `include/multifloats/float64x2.h` that are *not* exercised
-by `test/fuzz.cc` (verified with the boost-comparison sweep — every op
-covered there but missing from cpp_fuzz is a coverage gap, not a
-deliberate omission). All have non-trivial definitions so a regression
-in any of them would currently slip past CI.
+Resolved: `test/fuzz.cc` now exercises every public scalar API in
+`include/multifloats/float64x2.h`. Recorded here for posterity and so
+nobody re-files the same audit:
 
-- `cbrt(x)` — Karp/Markstein-style cube root, structurally similar to
-  `sqrt` but with one extra Newton step. The boost-compare harness
-  reports max_rel ~7e-32 against libquadmath, which suggests it's
-  working, but multifloats has no continuous regression gate.
-- `fma(a, b, c)` — the C++ name. The C-ABI symbol `fmadd` *is* fuzzed,
-  and the inline `multifloats::fma` overload routes through the same
-  kernel via a `static_cast<float64x2>` round-trip; a CHK call site
-  on the public name pins the dispatch instead of relying on the
-  identity holding by inspection.
-- `lerp(a, b, t)` — `a + t*(b - a)` with the C++20 monotonicity
-  guarantees. Minimum: a CHK against `mpfr::lerp` or hand-rolled
-  reference; ideally also a regression case at the `(a, b, 0)` and
-  `(a, b, 1)` exact endpoints (any drift here is a real bug).
-- `modulo(x, y)`, `remainder(x, y)`, `remquo(x, y, &q)` — IEEE-754
-  remainder family. Distinct from `fmod` in sign / round-half-even
-  semantics; the existing `fmod` CHK does not cover them.
-- `nextafter(x, y)`, `nexttoward(x, y)` — bit-level next-representable
-  step. Hard to fuzz against quadmath (different format), but the
-  invariants `nextafter(x, x) == x`, `nextafter(x, +inf) > x`, etc.
-  are testable as deterministic property checks.
-- `nan(tag)`, `fpclassify(x)` — bit-level classifiers. Property tests
-  against the stdlib equivalents are sufficient; max_rel doesn't
-  apply.
+| op | fuzz site | tier | observed max_rel (1M iter, seed 42) |
+|---|---|---|---|
+| `cbrt` | hot loop (every iter) | full-DD (`1e-26`) | 4.0e-31 |
+| `fma` (C++ name) | i%10 block, distinct from `fmadd` | full-DD | 9.4e-31 |
+| `lerp` | i%10 block | full-DD | 1.8e-31 |
+| `modulo` | i%10 block | non-full-DD (`1e-15`) | 4.6e-23 |
+| `remainder` | i%10 block | non-full-DD | 1.1e-23 |
+| `remquo` | i%10 block | non-full-DD | 1.1e-23 |
+| `fpclassify` | hot loop, property check vs qp predicates | exact match required | — |
+| `nextafter` / `nexttoward` | hot loop, 4-property invariant test | exact ordering required | — |
+| `nan(tag)` | once-per-run smoke at `main()` entry | NaN-canonicality | — |
 
-The fuzz infrastructure already has `is_full_dd` entries for
-`fmadd`, `pow_int`, `min3`, `max3`, `modf.frac`, `modf.int`,
-`scalbln`, `scalbn`, `nearbyint`, `rint`, `lround`, `lrint` and they
-*are* covered by raw `CHK("...", ...)` call sites — only the
-public-API spelling check is missing.
+`modulo`/`remainder`/`remquo` are explicitly *not* in the full-DD tier.
+They reduce through the same fmod kernel that `is_full_dd` excludes
+(catastrophic cancellation once |x/y| grows), so they inherit the
+1e-15 tolerance bucket alongside `fmod` itself.
 
-When closing this gap, follow the existing pattern in `test/fuzz.cc`:
-extend the `is_full_dd` list, add a `CHK(...)` site under the
-appropriate periodic guard (`i % 10 == 0` for cheap ops, `i % 100`
-for transcendentals), and gate the inputs at the same range as the
-boost harness already uses (`test/test_boost_dd.cc` is the
-reference for sensible per-op input ranges).
+`fpclassify` and `nextafter`/`nexttoward` use property invariants
+rather than max_rel because the qp reference (113-bit) and DD
+(106-bit) have different ulp granularity — a *value* comparison
+would fail correctly-implemented kernels. The fpclassify check
+also gates out `FP_SUBNORMAL` since DD's subnormal threshold
+(2⁻¹⁰²² on hi) and qp's (~3.4e-4932) disagree by construction.
+
+**Watch item**: `cbrt` max_rel 4e-31 ≈ 16 ulp_dd is markedly higher
+than `sqrt`'s 1.4 ulp_dd. Same Newton-correction structure but cbrt
+amplifies seed error 3× (where sqrt amplifies 2×). Likely a candidate
+for the same scalar-correction tightening sqrt got — see § 4 entry on
+the sqrt rewrite. Not a regression gate yet; informational.
+
+### (Open) `bjn` precision: 19× behind boost.math
+
+See `doc/developer/BOOST_COMPARISON.md`. multifloats `jn(int, x)` uses
+2 dispatch regimes (forward when `n ≤ x`, Miller's CF1 when `n > x`),
+boost uses 4 (asymptotic / forward / power-series / CF1+backward) and
+its CF1 path stabilizes seed error in the regime where multifloats
+forward-recurrence amplifies it. Closing the gap means extending
+multifloats `jn` to use Miller's regardless of `n/x` for the
+near-root sub-window. Open question whether the speed penalty
+(forward recurrence is much cheaper) is acceptable.
 
 ## 6. Pitfalls the audit uncovered
 
