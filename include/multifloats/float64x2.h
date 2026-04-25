@@ -395,6 +395,7 @@ MULTIFLOATS_API float64x2 fmadd(float64x2 a, float64x2 b, float64x2 c);
  * falls through to the standard `exp` / `log` paths. */
 MULTIFLOATS_API float64x2 expdd(float64x2 a);
 MULTIFLOATS_API float64x2 exp2dd(float64x2 a);
+MULTIFLOATS_API float64x2 exp10dd(float64x2 a);
 MULTIFLOATS_API float64x2 expm1dd(float64x2 a);
 MULTIFLOATS_API float64x2 logdd(float64x2 a);
 MULTIFLOATS_API float64x2 log2dd(float64x2 a);
@@ -770,6 +771,78 @@ inline constexpr float64x2 fmin(float64x2 const &a, float64x2 const &b) {
 
 inline constexpr float64x2 fmax(float64x2 const &a, float64x2 const &b) {
   return (a < b) ? b : a;
+}
+
+// C23 min/max variants. fmax/fmin treat NaN as missing data ("if exactly
+// one is NaN, return the other"); the C23 fmaximum/fminimum family
+// instead propagates NaN, and also pins the signed-zero result so
+// fmaximum(+0, -0) = +0 / fminimum(+0, -0) = -0 regardless of order.
+// The *_num suffix variants restore the NaN-as-missing semantics on top
+// of the signed-zero pinning, which is what most code wants when one
+// operand may be a sentinel NaN. Predicates live on limbs[0] (the
+// sign-bearing limb when the DD is a zero) so these inline before the
+// dedicated isnan/signbit overloads later in the header.
+
+inline constexpr float64x2 _nan_dd() {
+  float64x2 r;
+  r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+  r.limbs[1] = 0.0;
+  return r;
+}
+
+inline constexpr float64x2 _negzero_dd() {
+  float64x2 r;
+  r.limbs[0] = -0.0;
+  r.limbs[1] = 0.0;
+  return r;
+}
+
+inline constexpr float64x2 fmaximum(float64x2 const &a, float64x2 const &b) {
+  if (std::isnan(a.limbs[0]) || std::isnan(b.limbs[0])) return _nan_dd();
+  if (a.limbs[0] == 0.0 && b.limbs[0] == 0.0) {
+    return (std::signbit(a.limbs[0]) && std::signbit(b.limbs[0]))
+               ? _negzero_dd()
+               : float64x2();
+  }
+  return (a < b) ? b : a;
+}
+
+inline constexpr float64x2 fminimum(float64x2 const &a, float64x2 const &b) {
+  if (std::isnan(a.limbs[0]) || std::isnan(b.limbs[0])) return _nan_dd();
+  if (a.limbs[0] == 0.0 && b.limbs[0] == 0.0) {
+    return (std::signbit(a.limbs[0]) || std::signbit(b.limbs[0]))
+               ? _negzero_dd()
+               : float64x2();
+  }
+  return (a < b) ? a : b;
+}
+
+inline constexpr float64x2 fmaximum_num(float64x2 const &a,
+                                         float64x2 const &b) {
+  bool an = std::isnan(a.limbs[0]), bn = std::isnan(b.limbs[0]);
+  if (an && bn) return _nan_dd();
+  if (an) return b;
+  if (bn) return a;
+  if (a.limbs[0] == 0.0 && b.limbs[0] == 0.0) {
+    return (std::signbit(a.limbs[0]) && std::signbit(b.limbs[0]))
+               ? _negzero_dd()
+               : float64x2();
+  }
+  return (a < b) ? b : a;
+}
+
+inline constexpr float64x2 fminimum_num(float64x2 const &a,
+                                         float64x2 const &b) {
+  bool an = std::isnan(a.limbs[0]), bn = std::isnan(b.limbs[0]);
+  if (an && bn) return _nan_dd();
+  if (an) return b;
+  if (bn) return a;
+  if (a.limbs[0] == 0.0 && b.limbs[0] == 0.0) {
+    return (std::signbit(a.limbs[0]) || std::signbit(b.limbs[0]))
+               ? _negzero_dd()
+               : float64x2();
+  }
+  return (a < b) ? a : b;
 }
 
 
@@ -1270,6 +1343,7 @@ inline constexpr float64x2 hypot(float64x2 const &x, float64x2 const &y) {
 // Power, exponential and logarithm
 float64x2 exp   (float64x2 const &x);
 float64x2 exp2  (float64x2 const &x);
+float64x2 exp10 (float64x2 const &x);
 float64x2 expm1 (float64x2 const &x);
 float64x2 log   (float64x2 const &x);
 float64x2 log10 (float64x2 const &x);

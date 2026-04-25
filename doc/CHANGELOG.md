@@ -27,6 +27,13 @@ Dates are ISO-8601 UTC.
 
 ### Added
 
+- C23 `<math.h>` additions: `fmaximum`, `fminimum`, `fmaximum_num`,
+  `fminimum_num` (C23 NaN-quiet/propagating min/max with signed-zero
+  pinning), and `exp10` (10^x via TD-internal `exp2(x · log2(10))`,
+  full DD precision — fuzz max_rel 4.2e-32, on the DD floor with
+  `exp` / `exp2` / `log10`). Wired through the C ABI as `exp10dd`
+  and the Fortran `dd_exp10_full` delegate. Closes the C99 + C11 +
+  C17 `<math.h>` coverage and adds the C23 min/max + exp10 set.
 - `boost::multiprecision::cpp_double_double` precision and speed
   comparison harnesses (`boost_dd_fuzz`, `boost_dd_bench`) plus a
   `bjn_probe` regime sweep, gated behind

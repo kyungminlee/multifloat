@@ -712,6 +712,7 @@ module multifloats
     ('dd_trunc_full',     'truncdd'),  &
     ('dd_round_full',     'rounddd'),  &
     ('dd_exp2_full',      'exp2dd'),   &
+    ('dd_exp10_full',     'exp10dd'),  &
     ('dd_exp_full',       'expdd'),    &
     ('dd_expm1_full',     'expm1dd'),  &
     ('dd_log2_full',      'log2dd'),   &

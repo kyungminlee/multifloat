@@ -42,6 +42,15 @@ inline constexpr double ln_2_lo = 0x1.abc9e3b39803fp-56;
 inline constexpr double log10_2_hi = 0x1.34413509f79ffp-2;
 inline constexpr double log10_2_lo = -0x1.9dc1da994fd21p-59;
 
+// log2(10) = 1/log10(2) — for exp10
+inline constexpr double log2_10_hi  = 0x1.a934f0979a371p+1;
+inline constexpr double log2_10_lo  = 0x1.7f2495fb7fa6dp-53;
+inline constexpr double log2_10_lo2 = 0x1.fb699b2d8abfcp-107;
+
+// ln(10) — for exp10
+inline constexpr double ln_10_hi = 0x1.26bb1bbb55516p+1;
+inline constexpr double ln_10_lo = -0x1.f48ad494ea3e9p-53;
+
 // 1/pi
 inline constexpr double inv_pi_hi = 0x1.45f306dc9c883p-2;
 inline constexpr double inv_pi_lo = -0x1.6b01ec5417056p-56;
