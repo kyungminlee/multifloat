@@ -620,3 +620,88 @@ float64x2 pow(float64x2 const &x, float64x2 const &y) {
   double corr = res.limbs[0] * (LN2 * T2);
   return res + float64x2(corr);
 }
+
+// ---- C23 powr / rootn ------------------------------------------------------
+// powr(x, y) is the strict mathematical x^y for x >= 0, distinct from
+// `pow` in the corner cases: powr(±0, 0) = NaN (vs pow returning 1),
+// powr(1, ±inf) = NaN (vs pow returning 1), powr(x<0, y) = NaN
+// regardless of y. Inside the strict domain it forwards to pow.
+//
+// rootn(x, n) is x^(1/n). For x >= 0 we forward to pow. For x < 0
+// rootn is defined only when n is odd (then result = -pow(|x|, 1/n));
+// even-n on negative input is undefined → NaN. n = 0 is undefined → NaN.
+
+float64x2 powr(float64x2 const &x, float64x2 const &y) {
+  // NaN propagation.
+  double xh = x.limbs[0], yh = y.limbs[0];
+  if (std::isnan(xh) || std::isnan(yh)) {
+    float64x2 r;
+    r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  // Domain: x < 0 → NaN.
+  if (xh < 0.0) {
+    float64x2 r;
+    r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  // x = 0 with y = 0 → NaN; pow returns 1 in that case (C99 quirk).
+  if (xh == 0.0 && yh == 0.0) {
+    float64x2 r;
+    r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  // x == 1, y = ±inf → NaN (pow returns 1).
+  if (xh == 1.0 && x.limbs[1] == 0.0 && std::isinf(yh)) {
+    float64x2 r;
+    r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  return pow(x, y);
+}
+
+float64x2 rootn(float64x2 const &x, int n) {
+  if (n == 0) {
+    float64x2 r;
+    r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  double xh = x.limbs[0];
+  if (std::isnan(xh)) {
+    float64x2 r;
+    r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  // x = 0: result is signed zero (n > 0 odd preserves sign of x; even n
+  // forces +0; n < 0 produces signed inf).
+  if (xh == 0.0) {
+    bool n_odd = (n & 1);
+    bool x_neg = std::signbit(xh);
+    float64x2 r;
+    r.limbs[1] = 0.0;
+    if (n > 0) {
+      r.limbs[0] = (n_odd && x_neg) ? -0.0 : 0.0;
+    } else {
+      double inf = std::numeric_limits<double>::infinity();
+      r.limbs[0] = (n_odd && x_neg) ? -inf : inf;
+    }
+    return r;
+  }
+  // x < 0: only defined for odd n (then result = -pow(|x|, 1/n)).
+  if (xh < 0.0) {
+    if ((n & 1) == 0) {
+      float64x2 r;
+      r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+      r.limbs[1] = 0.0;
+      return r;
+    }
+    return -pow(-x, float64x2(1.0) / float64x2(static_cast<double>(n)));
+  }
+  return pow(x, float64x2(1.0) / float64x2(static_cast<double>(n)));
+}

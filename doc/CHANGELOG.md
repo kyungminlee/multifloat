@@ -62,6 +62,12 @@ Dates are ISO-8601 UTC.
   qp ulp ≈ 2e-34 around 1) drops below the dominant Taylor term
   `x · ln(base)`. Replaced with cancellation-free `expm1q(x · ln(base))`
   oracles that hold across the small-x range.
+- C23 `powr(x, y)` (strict mathematical power, NaN for `x < 0` or
+  `0^0` or `1^±inf`) and `rootn(x, n)` (n-th root with full odd /
+  even / signed-zero / negative-x dispatch). `powr` forwards to `pow`
+  inside the strict domain; `rootn` forwards to `pow(x, 1/n)` with
+  appropriate sign handling for negative `x` with odd `n`. Fuzz:
+  `powr` 1.77e-31 (matches `pow`), `rootn` 4.69e-32 (full DD).
 - `boost::multiprecision::cpp_double_double` precision and speed
   comparison harnesses (`boost_dd_fuzz`, `boost_dd_bench`) plus a
   `bjn_probe` regime sweep, gated behind

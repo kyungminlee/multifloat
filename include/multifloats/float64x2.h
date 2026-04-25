@@ -1485,6 +1485,8 @@ float64x2 log1p (float64x2 const &x);
 float64x2 log2p1 (float64x2 const &x);
 float64x2 log10p1(float64x2 const &x);
 float64x2 pow   (float64x2 const &x, float64x2 const &y);
+float64x2 powr  (float64x2 const &x, float64x2 const &y);
+float64x2 rootn (float64x2 const &x, int n);
 
 // Trigonometric
 float64x2 sin   (float64x2 const &x);

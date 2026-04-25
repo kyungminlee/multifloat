@@ -322,7 +322,7 @@ static bool is_full_dd(char const *op) {
       "fmaximum", "fminimum", "fmaximum_num", "fminimum_num",
       "fmaximum_mag", "fminimum_mag", "fmaximum_mag_num", "fminimum_mag_num",
       "exp10", "exp2m1", "exp10m1", "log2p1", "log10p1",
-      "rsqrt", "roundeven", "llogb", "pown",
+      "rsqrt", "roundeven", "llogb", "pown", "powr", "rootn",
       "copysign", "fdim",
       "hypot", "trunc", "round", "scalbn", "min3", "max3",
       "fmadd", "fma_cxx", "lerp",
@@ -1590,6 +1590,20 @@ int main(int argc, char **argv) {
             q1, (q_t)d2, mpfr::pow(m1, to_mp(d2)));
         CHK("pow_dm", mf::pow(mf::float64x2(d1), f2), powq((q_t)d1, q2),
             (q_t)d1, q2, mpfr::pow(to_mp(d1), m2));
+        // C23 powr: pow restricted to x >= 0. Same oracle as pow inside
+        // the strict domain (the gate above already guarantees q1 > 0).
+        CHK("powr", mf::powr(f1, f2), powq(q1, q2), q1, q2, mpfr::pow(m1, m2));
+        // C23 rootn: x^(1/n). Use small odd n so DD precision is meaningful
+        // and the negative-x path is reachable. Reference: x^(1/n) at qp.
+        for (int n : {3, 5, -3, -5}) {
+          q_t inv_n = (q_t)1 / (q_t)n;
+          q_t res_q = powq(q1, inv_n);
+          q_t a_res = res_q < 0 ? -res_q : res_q;
+          if (q_isfinite(res_q) && a_res > (q_t)1e-300q && a_res < (q_t)1e300q) {
+            CHK("rootn", mf::rootn(f1, n), res_q, q1, (q_t)n,
+                mpfr::pow(m1, to_mp((double)n).inv()));
+          }
+        }
 
 #ifdef USE_MPFR
         // pow = exp2(y·log2(x)) decomposition diagnostic. Three stat
