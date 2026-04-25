@@ -12,6 +12,8 @@
 #include <boost/multiprecision/cpp_double_fp.hpp>
 #include <boost/math/special_functions/erf.hpp>
 #include <boost/math/special_functions/gamma.hpp>
+#include <boost/math/special_functions/bessel.hpp>
+#include <boost/math/special_functions/cbrt.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -115,6 +117,19 @@ inline cpp_double_double fma_op(cpp_double_double const &a,
   using std::fma; return fma(a, b, c);
 }
 inline q_t fma_op(q_t a, q_t b, q_t c) { return ::fmaq(a, b, c); }
+
+inline cpp_double_double cbrt_op(cpp_double_double const &x) { return boost::math::cbrt(x); }
+inline q_t                cbrt_op(q_t x) { return ::cbrtq(x); }
+
+// Bessel via Boost.Math (integer order).
+inline cpp_double_double bj0(cpp_double_double const &x) { return boost::math::cyl_bessel_j(0, x); }
+inline q_t                bj0(q_t x) { return ::j0q(x); }
+inline cpp_double_double bj1(cpp_double_double const &x) { return boost::math::cyl_bessel_j(1, x); }
+inline q_t                bj1(q_t x) { return ::j1q(x); }
+inline cpp_double_double by0(cpp_double_double const &x) { return boost::math::cyl_neumann(0, x); }
+inline q_t                by0(q_t x) { return ::y0q(x); }
+inline cpp_double_double by1(cpp_double_double const &x) { return boost::math::cyl_neumann(1, x); }
+inline q_t                by1(q_t x) { return ::y1q(x); }
 
 // erf / erfc / tgamma / lgamma via Boost.Math.
 inline cpp_double_double erf_op  (cpp_double_double const &x) { return boost::math::erf(x); }
@@ -248,6 +263,16 @@ static void bench_rounding() {
   BENCH1(ceil,  REPS_FAST, q1, f1);
 }
 
+static void bench_misc() {
+  BENCH("cbrt", REPS_FAST, fx::cbrt_op(qpos[i]), fx::cbrt_op(fpos[i]), qpos, fpos);
+  BENCH("ldexp", REPS_FAST,
+        ::ldexpq(q1[i], 5),
+        boost::multiprecision::ldexp(f1[i], 5), q1, f1);
+  BENCH("scalbn", REPS_FAST,
+        ::scalbnq(q1[i], 5),
+        boost::multiprecision::scalbn(f1[i], 5), q1, f1);
+}
+
 static void bench_binary() {
   BENCH2(fmin,     REPS_FAST, q1, f1, q2, f2);
   BENCH2(fmax,     REPS_FAST, q1, f1, q2, f2);
@@ -297,6 +322,17 @@ static void bench_inv_hyperbolic() {
   BENCH1(atanh, REPS_TRIG, qbnd, fbnd);
 }
 
+static void bench_bessel() {
+  BENCH("bj0", REPS_VERY_SLOW, fx::bj0(q1[i]), fx::bj0(f1[i]), q1, f1);
+  BENCH("bj1", REPS_VERY_SLOW, fx::bj1(q1[i]), fx::bj1(f1[i]), q1, f1);
+  BENCH("bjn", REPS_VERY_SLOW,
+        ::jnq(3, q1[i]), boost::math::cyl_bessel_j(3, f1[i]), q1, f1);
+  BENCH("by0", REPS_VERY_SLOW, fx::by0(qpos[i]), fx::by0(fpos[i]), qpos, fpos);
+  BENCH("by1", REPS_VERY_SLOW, fx::by1(qpos[i]), fx::by1(fpos[i]), qpos, fpos);
+  BENCH("byn", REPS_VERY_SLOW,
+        ::ynq(3, qpos[i]), boost::math::cyl_neumann(3, fpos[i]), qpos, fpos);
+}
+
 static void bench_erf_gamma() {
   BENCH("erf",    REPS_VERY_SLOW, fx::erf_op(q1[i]),    fx::erf_op(f1[i]),    q1, f1);
   BENCH("erfc",   REPS_VERY_SLOW, fx::erfc_op(q1[i]),   fx::erfc_op(f1[i]),   q1, f1);
@@ -317,6 +353,7 @@ int main() {
 
   bench_arith();
   bench_rounding();
+  bench_misc();
   bench_binary();
   bench_exp_log();
   bench_trig();
@@ -324,6 +361,7 @@ int main() {
   bench_hyperbolic();
   bench_inv_hyperbolic();
   bench_erf_gamma();
+  bench_bessel();
 
   std::printf(" ----------------------------------------------------------------\n");
   std::printf(" sinks (must remain live): qp=%g  boost=%g\n", q_sink, f_sink);

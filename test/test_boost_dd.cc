@@ -13,6 +13,8 @@
 #include <boost/multiprecision/cpp_double_fp.hpp>
 #include <boost/math/special_functions/erf.hpp>
 #include <boost/math/special_functions/gamma.hpp>
+#include <boost/math/special_functions/bessel.hpp>
+#include <boost/math/special_functions/cbrt.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -107,6 +109,9 @@ static bool is_full_dd(char const *op) {
       "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
       "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
       "erf", "erfc", "tgamma", "lgamma",
+      "cbrt", "ldexp", "scalbn", "frexp.frac", "logb", "ilogb",
+      "add_fd", "mul_df",
+      "bj0", "bj1", "bjn", "by0", "by1", "byn",
       nullptr};
   for (int i = 0; kList[i]; ++i)
     if (std::strcmp(kList[i], op) == 0) return true;
@@ -293,6 +298,7 @@ int main(int argc, char **argv) {
   using std::asinh; using std::acosh; using std::atanh;
   using std::floor; using std::ceil; using std::trunc; using std::round;
   using std::fmin; using std::fmax; using std::copysign;
+  using std::ldexp; using std::scalbn; using std::frexp;
   using boost::math::erf; using boost::math::erfc;
   using boost::math::tgamma; using boost::math::lgamma;
 
@@ -325,6 +331,33 @@ int main(int argc, char **argv) {
       check("ceil",  ceil(f1),  ceilq(q1),  q1, (q_t)0);
     }
 
+    // cbrt: every iter, finite-only.
+    if (q_isfinite(q1)) {
+      check("cbrt", boost::math::cbrt(f1), cbrtq(q1), q1, (q_t)0);
+    }
+
+    // ldexp / scalbn / frexp / logb / ilogb: every iter, finite nonzero.
+    if (q_isfinite(q1) && q1 != 0) {
+      int n = (int)((aq1 < 1) ? -10 : 10);
+      check("ldexp",  ldexp(f1, n),  ldexpq(q1, n),  q1, (q_t)0);
+      check("scalbn", scalbn(f1, n), scalbnq(q1, n), q1, (q_t)0);
+      // frexp returns mantissa in [0.5, 1), exponent in int*. Compare mantissa.
+      int e_dd = 0, e_q = 0;
+      cpp_double_double m_dd = frexp(f1, &e_dd);
+      q_t              m_q  = frexpq(q1, &e_q);
+      check("frexp.frac", m_dd, m_q, q1, (q_t)0);
+      // exponent is integer — encode as DD scalar for the check infra.
+      cpp_double_double e_dd_dd = bdd_from_d((double)e_dd);
+      check("frexp.exp", e_dd_dd, (q_t)e_q, q1, (q_t)0);
+      // logb / ilogb.
+      // boost provides logb via std:: ADL and ilogb at namespace boost::multiprecision.
+      using std::logb;
+      check("logb", logb(f1), logbq(q1), q1, (q_t)0);
+      using boost::multiprecision::ilogb;
+      cpp_double_double ilogb_dd = bdd_from_d((double)ilogb(f1));
+      check("ilogb", ilogb_dd, (q_t)ilogbq(q1), q1, (q_t)0);
+    }
+
     // Periodic mixed-mode + binary (every 10th iter).
     if (i % 10 == 0 && both_finite) {
       check("fmin",     fmin(f1, f2),     fminq(q1, q2),     q1, q2);
@@ -339,6 +372,11 @@ int main(int argc, char **argv) {
       // fma: c = third input, use 1.0 for a clean reference.
       cpp_double_double f3 = bdd_from_d(1.0);
       check("fma",      fma(f1, f2, f3),  fmaq(q1, q2, (q_t)1.0q), q1, q2);
+      // Mixed-mode: DD + double, double * DD.
+      double d2 = (double)q2;
+      check("add_fd", f1 + cpp_double_double(d2), q1 + (q_t)d2, q1, (q_t)d2);
+      check("mul_df", cpp_double_double((double)q1) * f2, (q_t)(double)q1 * q2,
+            (q_t)(double)q1, q2);
     }
 
     // Periodic transcendentals (every 100th iter).
@@ -391,6 +429,21 @@ int main(int argc, char **argv) {
       if (q_isfinite(q1) && q1 > (q_t)0.1q && q1 < (q_t)170) {
         check("tgamma", tgamma(f1), tgammaq(q1), q1, (q_t)0);
         check("lgamma", lgamma(f1), lgammaq(q1), q1, (q_t)0);
+      }
+
+      // Bessel j0/j1/jn: any finite argument, modest magnitude. boost.math
+      // accepts integer order via a single overload. Same gate as the
+      // multifloats Bessel tests.
+      if (q_isfinite(q1) && aq1 < (q_t)200) {
+        check("bj0", boost::math::cyl_bessel_j(0, f1),     j0q(q1),    q1, (q_t)0);
+        check("bj1", boost::math::cyl_bessel_j(1, f1),     j1q(q1),    q1, (q_t)0);
+        check("bjn", boost::math::cyl_bessel_j(3, f1),     jnq(3, q1), q1, (q_t)0);
+      }
+      // y_n needs positive argument (singular at 0).
+      if (q_isfinite(q1) && q1 > (q_t)0.01q && q1 < (q_t)200) {
+        check("by0", boost::math::cyl_neumann(0, f1),     y0q(q1),    q1, (q_t)0);
+        check("by1", boost::math::cyl_neumann(1, f1),     y1q(q1),    q1, (q_t)0);
+        check("byn", boost::math::cyl_neumann(3, f1),     ynq(3, q1), q1, (q_t)0);
       }
     }
   }
