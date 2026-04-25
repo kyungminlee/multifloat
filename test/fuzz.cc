@@ -236,6 +236,13 @@ struct StatEntry {
   double sum_rel = 0.0;
 #endif
   long count = 0;
+  // Worst-case sample (the input pair that produced the largest rel_err
+  // recorded in this stat row). For ops with an integer parameter (bjn,
+  // pow_int, etc.) the second slot carries that parameter as a q_t.
+  q_t worst_i1 = 0;
+  q_t worst_i2 = 0;
+  q_t worst_expected = 0;
+  q_t worst_got = 0;
 };
 
 static constexpr int kMaxStats = 256;
@@ -257,22 +264,32 @@ static StatEntry *find_or_create_stat(char const *op) {
 }
 
 #ifdef USE_MPFR
-static void update_stat(char const *op, double rq, double rdd) {
+static void update_stat(char const *op, double rq, double rdd,
+                        q_t i1, q_t i2, q_t expected, q_t got) {
   if (!std::isfinite(rq) || !std::isfinite(rdd)) return;
   StatEntry *s = find_or_create_stat(op);
   if (!s) return;
   if (rq  > s->max_q)  s->max_q  = rq;
-  if (rdd > s->max_dd) s->max_dd = rdd;
+  if (rdd > s->max_dd) {
+    s->max_dd = rdd;
+    s->worst_i1 = i1; s->worst_i2 = i2;
+    s->worst_expected = expected; s->worst_got = got;
+  }
   s->sum_q  += rq;
   s->sum_dd += rdd;
   ++s->count;
 }
 #else
-static void update_stat(char const *op, double rel) {
+static void update_stat(char const *op, double rel,
+                        q_t i1, q_t i2, q_t expected, q_t got) {
   if (!std::isfinite(rel)) return;
   StatEntry *s = find_or_create_stat(op);
   if (!s) return;
-  if (rel > s->max_rel) s->max_rel = rel;
+  if (rel > s->max_rel) {
+    s->max_rel = rel;
+    s->worst_i1 = i1; s->worst_i2 = i2;
+    s->worst_expected = expected; s->worst_got = got;
+  }
   s->sum_rel += rel;
   ++s->count;
 }
@@ -568,10 +585,10 @@ static void check(char const *op, mf::float64x2 const &got, q_t expected,
     if (denom_mp < input_mag_mp) denom_mp = input_mag_mp;
     double rq  = (mpfr::abs(to_mp(expected) - expected_mp) / denom_mp).toDouble();
     double rdd = (mpfr::abs(to_mp(got)      - expected_mp) / denom_mp).toDouble();
-    update_stat(op, rq, rdd);
+    update_stat(op, rq, rdd, i1, i2, expected, got_q);
   }
 #else
-  update_stat(op, rel_err);
+  update_stat(op, rel_err, i1, i2, expected, got_q);
 #endif
 
   if (rel_err > tol) {
@@ -703,6 +720,19 @@ static void print_all_stats() {
               "           dd = rel_err(multifloats DD vs mpreal).\n"
               "  q ≈ 1e-33 is the float128 mantissa floor; dd above q means\n"
               "  the DD kernel — not the float128 reference — is the loss.\n");
+  std::printf("\nWorst-case inputs per op (sample at max_dd). For ops with an\n"
+              "integer parameter (bjn, byn, pow_int, scalbn, …), i2 carries\n"
+              "that parameter; for unary ops i2 is unused.\n");
+  std::printf("  %-16s %14s\n", "op", "max_dd");
+  for (int i = 0; i < g_nstats; ++i) {
+    StatEntry const &s = g_stats[i];
+    if (s.count == 0 || s.max_dd == 0.0) continue;
+    std::printf("  %-16s %14.3e  i1=%s\n",
+                s.name, s.max_dd, qstr(s.worst_i1));
+    std::printf("  %-16s %14s  i2=%s\n",  "", "", qstr(s.worst_i2));
+    std::printf("  %-16s %14s  ref=%s\n", "", "", qstr(s.worst_expected));
+    std::printf("  %-16s %14s  got=%s\n", "", "", qstr(s.worst_got));
+  }
 #else
   std::printf("Per-operation precision report (relative error vs __float128):\n");
   std::printf("  %-16s %10s %14s %14s\n", "op", "n", "max_rel", "mean_rel");
@@ -714,6 +744,19 @@ static void print_all_stats() {
     }
     std::printf("  %-16s %10ld  %14.3e %14.3e\n", s.name, s.count, s.max_rel,
                 s.sum_rel / s.count);
+  }
+  std::printf("\nWorst-case inputs per op (max_rel sample). For ops with an\n"
+              "integer parameter (bjn, byn, pow_int, scalbn, …), i2 carries\n"
+              "that parameter; for unary ops i2 is unused.\n");
+  std::printf("  %-16s %14s\n", "op", "max_rel");
+  for (int i = 0; i < g_nstats; ++i) {
+    StatEntry const &s = g_stats[i];
+    if (s.count == 0 || s.max_rel == 0.0) continue;
+    std::printf("  %-16s %14.3e  i1=%s\n",
+                s.name, s.max_rel, qstr(s.worst_i1));
+    std::printf("  %-16s %14s  i2=%s\n",  "", "", qstr(s.worst_i2));
+    std::printf("  %-16s %14s  ref=%s\n", "", "", qstr(s.worst_expected));
+    std::printf("  %-16s %14s  got=%s\n", "", "", qstr(s.worst_got));
   }
   std::printf("\n");
 #endif

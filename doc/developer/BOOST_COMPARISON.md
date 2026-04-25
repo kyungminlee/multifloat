@@ -60,9 +60,9 @@ near-zero hits can be 4–10×.
 | Trig | sin, cos, tan, asin, acos, atan, atan2 | — | — |
 | Hyperbolic | sinh, cosh, tanh, asinh, acosh, atanh | — | — |
 | Special | erf, erfc, tgamma, lgamma | — | — |
-| Bessel | bj1, by0, by1, byn | **bjn** | bj0 |
+| Bessel | bj1, by0, by1, byn | — | bj0, **bjn (sampling variance — see §Bessel Jn revisit)** |
 
-**Tally: 33 multifloats wins, 1 boost win (bjn), 21 tied/close.**
+**Tally: 33 multifloats wins, 0 boost wins, 22 tied/close.**
 
 **Speed** (boost time / multifloats time, lower = mf faster):
 
@@ -106,14 +106,37 @@ have specialized, boost has no native `eval_fma` and routes through
 fused-rounding precision benefit and doing 2 DD ops where multifloats
 does one combined two_prod-and-renorm.
 
-### Where boost wins
-The only place boost legitimately beats multifloats:
-- **`bjn` precision (19× win)**: integer-order Bessel J. Boost's
-  `bessel_jn` has 4 dispatch regimes (asymptotic / forward
-  recurrence / power-series / CF1+backward). multifloats has 2
-  (forward when n ≤ x, Miller's CF1 when n > x). The regime
-  boundary in multifloats produces accuracy cliffs that 4-regime
-  dispatch avoids.
+### Bessel Jn revisit — the "bjn 19× win" was also sampling variance
+
+Initial reading at seed 42 had mf bjn = 5.06e-28 vs boost = 4.14e-29
+(after extending boost coverage to match multifloats' n ∈ {2,3,5,8}).
+Looked like a clean ~12× boost win in the only Bessel slot left.
+
+A regime-binned probe (`test/probe_bjn.cc`) checked all four jn
+regimes — forward (n ≤ x/2), forward-near (x/2 < n ≤ x), Miller-near
+(x < n ≤ 2x), Miller-far (n > 2x) — across both a deterministic grid
+sweep and a 1M-sample fuzz-style random sweep. Multifloats wins or
+ties boost in **every regime** including near-root (|J_n(x)| < 1e-3).
+
+Sweep across 7 seeds (1M iters each):
+
+| seed | mf | boost | winner |
+|---|---|---|---|
+| 1 | 2.6e-28 | 2.0e-28 | tied |
+| 2 | 2.6e-29 | 1.5e-27 | mf 57× |
+| 3 | 1.3e-29 | 9.0e-29 | mf 7× |
+| 42 | 5.1e-28 | 4.1e-29 | boost 12× |
+| 100 | 3.3e-28 | 2.6e-28 | tied |
+| 1000 | 1.0e-28 | 9.2e-29 | tied |
+| 12345 | 8.8e-28 | 1.3e-28 | boost 7× |
+
+Geometric mean ~1.5e-28 for both — a wash. Same lesson as bj0/bj1:
+max_rel near-zero is dominated by how close the RNG lands to a
+J_n root, and seed-42 happened to land closer for multifloats.
+Across the regime sweep multifloats hits the DD precision floor
+(~1e-32 mean) just like boost.
+
+No legitimate boost precision wins remain in the Bessel column.
 
 ### `abs` / `neg` / `copysign` speed: a measurement artifact, not a
 ### real gap
@@ -187,17 +210,14 @@ The earlier "boost wins by 4×" intuition was sampling variance, not
 a real algorithmic gap. Reverted in commit 7c0785b ancestor.
 
 ## When boost.math precision *does* exceed DD precision
-For `bjn`, boost achieves 2.4e-29 over the same x range where
-multifloats `jn(3, x)` reports 5.1e-28. Both kernels involve
-recurrence relations seeded from `j0(x)` / `j1(x)` (DD floor
-~1e-29 near zeros), so the gap is from boost's better dispatcher,
-not better seeds. Specifically: in the `n ≤ x` regime, multifloats
-forward-recurrence amplifies seed error multiplicatively over `n`
-steps, while boost's CF1 + backward-recurrence (Miller's algorithm
-even for `n ≤ x`) self-stabilizes. Closing this gap would mean
-extending multifloats `jn` to use Miller's regardless of `n/x` for
-the small-`x` near-root window. Open question whether the speed
-penalty is acceptable.
+~~For `bjn`...~~ **Retracted.** This section originally claimed
+boost's 4-regime dispatcher beat multifloats' 2-regime split by 19×.
+After running the regime probe and a 7-seed sweep (see "Bessel Jn
+revisit" above), the gap is sampling variance, not algorithmic.
+Both implementations sit at the same ~1e-28 max_rel floor near
+roots, dominated by input precision rather than recurrence error.
+Multifloats' forward / Miller split is sufficient at DD precision —
+no dispatcher rework warranted.
 
 ## How to reproduce
 

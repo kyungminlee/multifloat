@@ -312,6 +312,9 @@ if(MULTIFLOATS_BUILD_BOOST_COMPARE)
     mf_add_cpp_executable(boost_dd_bench ./test/bench_boost_dd.cc)
     target_link_libraries(boost_dd_bench PRIVATE Boost::multiprecision Boost::math)
 
+    mf_add_cpp_executable(bjn_probe ./test/probe_bjn.cc)
+    target_link_libraries(bjn_probe PRIVATE Boost::multiprecision Boost::math)
+
     if(BUILD_TESTING)
         add_test(NAME fuzz_boost_dd COMMAND boost_dd_fuzz 100000 0x42)
     endif()

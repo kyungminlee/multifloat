@@ -72,6 +72,10 @@ struct StatEntry {
   double max_rel = 0.0;
   double sum_rel = 0.0;
   long count = 0;
+  q_t worst_i1 = 0;
+  q_t worst_i2 = 0;
+  q_t worst_expected = 0;
+  q_t worst_got = 0;
 };
 
 static constexpr int kMaxStats = 256;
@@ -87,11 +91,18 @@ static StatEntry *find_or_create_stat(char const *op) {
   return s;
 }
 
-static void update_stat(char const *op, double rel) {
+static void update_stat(char const *op, double rel,
+                        q_t i1, q_t i2, q_t expected, q_t got) {
   if (!std::isfinite(rel)) return;
   StatEntry *s = find_or_create_stat(op);
   if (!s) return;
-  if (rel > s->max_rel) s->max_rel = rel;
+  if (rel > s->max_rel) {
+    s->max_rel = rel;
+    s->worst_i1 = i1;
+    s->worst_i2 = i2;
+    s->worst_expected = expected;
+    s->worst_got = got;
+  }
   s->sum_rel += rel;
   ++s->count;
 }
@@ -182,7 +193,7 @@ static void check(char const *op, cpp_double_double const &got, q_t expected,
   if (subnormal_range(i1) || subnormal_range(i2) || subnormal_range(expected))
     return;
 
-  update_stat(op, rel_err);
+  update_stat(op, rel_err, i1, i2, expected, got_q);
 
   if (rel_err > tol) {
     q_t huge_edge = (q_t)0x1.fffffffffffffp+1023q * (q_t)0.99q;
@@ -274,6 +285,17 @@ static void print_all_stats() {
     }
     std::printf("  %-16s %10ld  %14.3e %14.3e\n", s.name, s.count, s.max_rel,
                 s.sum_rel / s.count);
+  }
+  std::printf("\nWorst-case inputs per op (max_rel sample):\n");
+  std::printf("  %-16s %14s  %s\n", "op", "max_rel", "i1 / i2 / expected / got");
+  for (int i = 0; i < g_nstats; ++i) {
+    StatEntry const &s = g_stats[i];
+    if (s.count == 0 || s.max_rel == 0.0) continue;
+    std::printf("  %-16s %14.3e  i1=%s\n",
+                s.name, s.max_rel, qstr(s.worst_i1));
+    std::printf("  %-16s %14s  i2=%s\n",  "", "", qstr(s.worst_i2));
+    std::printf("  %-16s %14s  ref=%s\n", "", "", qstr(s.worst_expected));
+    std::printf("  %-16s %14s  got=%s\n", "", "", qstr(s.worst_got));
   }
   std::printf("\n");
 }
@@ -440,13 +462,17 @@ int main(int argc, char **argv) {
       if (q_isfinite(q1) && aq1 < (q_t)200) {
         check("bj0", boost::math::cyl_bessel_j(0, f1),     j0q(q1),    q1, (q_t)0);
         check("bj1", boost::math::cyl_bessel_j(1, f1),     j1q(q1),    q1, (q_t)0);
-        check("bjn", boost::math::cyl_bessel_j(3, f1),     jnq(3, q1), q1, (q_t)0);
+        // Match multifloats bjn fuzz coverage: aggregate n in {2,3,5,8} so the
+        // max_rel rows compare like-for-like.
+        for (int n : {2, 3, 5, 8})
+          check("bjn", boost::math::cyl_bessel_j(n, f1), jnq(n, q1), q1, (q_t)n);
       }
       // y_n needs positive argument (singular at 0).
       if (q_isfinite(q1) && q1 > (q_t)0.01q && q1 < (q_t)200) {
         check("by0", boost::math::cyl_neumann(0, f1),     y0q(q1),    q1, (q_t)0);
         check("by1", boost::math::cyl_neumann(1, f1),     y1q(q1),    q1, (q_t)0);
-        check("byn", boost::math::cyl_neumann(3, f1),     ynq(3, q1), q1, (q_t)0);
+        for (int n : {2, 3, 5, 8})
+          check("byn", boost::math::cyl_neumann(n, f1), ynq(n, q1), q1, (q_t)n);
       }
     }
   }
