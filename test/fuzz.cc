@@ -318,7 +318,10 @@ static void update_stat(char const *op, double rel,
 static bool is_full_dd(char const *op) {
   static char const *kList[] = {
       "add", "sub", "mul", "div", "sqrt", "cbrt", "abs", "neg",
-      "add_fd", "mul_df", "fmin", "fmax", "copysign", "fdim",
+      "add_fd", "mul_df", "fmin", "fmax",
+      "fmaximum", "fminimum", "fmaximum_num", "fminimum_num",
+      "exp10",
+      "copysign", "fdim",
       "hypot", "trunc", "round", "scalbn", "min3", "max3",
       "fmadd", "fma_cxx", "lerp",
       "floor", "ceil", "nearbyint", "rint",
@@ -1240,6 +1243,53 @@ int main(int argc, char **argv) {
           (q_t)d1, q2, to_mp(d1) * m2);
       CHK2(fmin);
       CHK2(fmax);
+      // C23 fmaximum/fminimum (NaN-propagating) and *_num (NaN-quiet)
+      // qp references. libquadmath has no q-suffixed C23 variants, so the
+      // reference is open-coded against q_t. Signed-zero pinning matches
+      // the multifloats DD definitions.
+      {
+        auto qp_fmaximum = [](q_t a, q_t b) -> q_t {
+          if (q_isnan(a) || q_isnan(b)) return (q_t)(0.0/0.0);
+          if (a == 0 && b == 0)
+            return (signbitq(a) && signbitq(b)) ? (q_t)-0.0 : (q_t)+0.0;
+          return a < b ? b : a;
+        };
+        auto qp_fminimum = [](q_t a, q_t b) -> q_t {
+          if (q_isnan(a) || q_isnan(b)) return (q_t)(0.0/0.0);
+          if (a == 0 && b == 0)
+            return (signbitq(a) || signbitq(b)) ? (q_t)-0.0 : (q_t)+0.0;
+          return a < b ? a : b;
+        };
+        auto qp_fmaximum_num = [&](q_t a, q_t b) -> q_t {
+          bool an = q_isnan(a), bn = q_isnan(b);
+          if (an && bn) return (q_t)(0.0/0.0);
+          if (an) return b;
+          if (bn) return a;
+          if (a == 0 && b == 0)
+            return (signbitq(a) && signbitq(b)) ? (q_t)-0.0 : (q_t)+0.0;
+          return a < b ? b : a;
+        };
+        auto qp_fminimum_num = [&](q_t a, q_t b) -> q_t {
+          bool an = q_isnan(a), bn = q_isnan(b);
+          if (an && bn) return (q_t)(0.0/0.0);
+          if (an) return b;
+          if (bn) return a;
+          if (a == 0 && b == 0)
+            return (signbitq(a) || signbitq(b)) ? (q_t)-0.0 : (q_t)+0.0;
+          return a < b ? a : b;
+        };
+        // mpreal has no fmaximum/_num either; reuse our qp reference under
+        // MP_PARAM by lifting qp result through to_mp (lossless, since our
+        // result is one of the inputs or qNaN).
+        CHK("fmaximum",     mf::fmaximum(f1, f2),     qp_fmaximum(q1, q2),     q1, q2,
+            to_mp(qp_fmaximum(q1, q2)));
+        CHK("fminimum",     mf::fminimum(f1, f2),     qp_fminimum(q1, q2),     q1, q2,
+            to_mp(qp_fminimum(q1, q2)));
+        CHK("fmaximum_num", mf::fmaximum_num(f1, f2), qp_fmaximum_num(q1, q2), q1, q2,
+            to_mp(qp_fmaximum_num(q1, q2)));
+        CHK("fminimum_num", mf::fminimum_num(f1, f2), qp_fminimum_num(q1, q2), q1, q2,
+            to_mp(qp_fminimum_num(q1, q2)));
+      }
       CHK2(copysign);
       CHK2(fdim);
       CHK2(hypot);
@@ -1325,6 +1375,13 @@ int main(int argc, char **argv) {
       CHK1_IF(log1p, q_isfinite(q1) && q1 > (q_t)-1);
       CHK1_IF(exp2,  q_isfinite(q1) && q_isfinite(exp2q(q1)));
       CHK1_IF(log2,  q_isfinite(q1) && q1 > (q_t)0);
+      // exp10 oracle: 10^q via libquadmath's powq.
+      {
+        q_t exp10_ref = powq((q_t)10, q1);
+        CHK_IF(q_isfinite(q1) && q_isfinite(exp10_ref),
+               "exp10", mf::exp10(f1), exp10_ref, q1, (q_t)0,
+               mpfr::pow(mpfr::mpreal(10), m1));
+      }
 
       // Trig: keep magnitudes moderate.
       if (q_isfinite(q1) && aq1 < (q_t)1e6q) {

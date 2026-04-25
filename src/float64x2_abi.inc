@@ -52,6 +52,7 @@ float64x2 fmadd(float64x2 a, float64x2 b, float64x2 c) {
 // Exponential / logarithmic
 MF_ABI_UNARY(exp)
 MF_ABI_UNARY(exp2)
+MF_ABI_UNARY(exp10)
 MF_ABI_UNARY(expm1)
 MF_ABI_UNARY(log)
 MF_ABI_UNARY(log2)

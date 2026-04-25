@@ -319,6 +319,68 @@ float64x2 log10(float64x2 const &x) {
   return l2 * float64x2(log10_2_hi, log10_2_lo);
 }
 
+// ---- exp10 (10^x) ----------------------------------------------------------
+// 10^x = exp2(x · log2(10)). The TD log2_10 constant lets the conversion
+// product carry one extra limb of precision into the exp2_from_reduced
+// pipeline, avoiding the ulp_dd·|log2(10)|·|x| error amplification a plain
+// DD-mul would inject.
+//
+// Layout mirrors the `pow` accumulator: build (h, l, e) ≈ x · log2_10 as a
+// triple-double, split off the integer part n_d via Cody-Waite, feed the
+// reduced (T0, T1) into exp2_from_reduced, and apply the same linear T2
+// correction (1 + ln2·T2) that pow uses.
+float64x2 exp10(float64x2 const &x) {
+  if (!std::isfinite(x.limbs[0])) return _exp_nonfinite(x.limbs[0]);
+  // 10^x ≈ inf  for x >  308.25; 10^x ≈ 0   for x < -323.6.
+  // Derive bounds from the exp2 limits (log10(2^max)=exp2_max·log10(2)).
+  if (x.limbs[0] > exp2_max * log10_2_hi) {
+    float64x2 r;
+    r.limbs[0] = std::numeric_limits<double>::infinity();
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  if (x.limbs[0] < exp2_min * log10_2_hi) return float64x2();
+
+  // x · log2_10 in TD form. log2_10 carries three limbs (hi, lo, lo2);
+  // x is DD. Capture the four leading exact products via FMA two_prod
+  // and accumulate into a magnitude-descending TSUM chain.
+  double P1, P1e; two_prod(x.limbs[0], log2_10_hi,  P1, P1e);
+  double P2, P2e; two_prod(x.limbs[0], log2_10_lo,  P2, P2e);
+  double P3, P3e; two_prod(x.limbs[1], log2_10_hi,  P3, P3e);
+  // x.hi·log2_10_lo2 ≲ 2⁻¹⁰⁷·|x|; x.lo·log2_10_lo ~ 2⁻¹⁰⁹·|x|. Both well
+  // below DD ulp; collapsed into PX without further splitting.
+  double PX = x.limbs[0] * log2_10_lo2 + x.limbs[1] * log2_10_lo;
+
+  double h = P1, l = 0.0, c = 0.0, t, u;
+  two_sum(h, P3, h, t); two_sum(l, t, l, u); c += u;
+  two_sum(l, P1e, l, u); c += u;
+  two_sum(l, P2,  l, u); c += u;
+  two_sum(l, P2e, l, u); c += u;
+  two_sum(l, P3e, l, u); c += u;
+  two_sum(l, PX,  l, u); c += u;
+  double e;
+  two_sum(l, c, l, e);
+  fast_two_sum(h, l, h, l);
+
+  // Split arg ≈ h + l + e into n_d (integer) + r with |r| ≤ 0.5, then
+  // build the TD remainder for exp2_from_reduced.
+  double n_d = std::nearbyint(h);
+  double rh, rt;
+  two_sum(h, -n_d, rh, rt);
+  double T0 = rh, T1 = 0.0, T2 = 0.0;
+  tsum3(T0, T1, T2, rt);
+  tsum3(T0, T1, T2, l);
+  tsum3(T0, T1, T2, e);
+  tsum3_finalize(T0, T1, T2);
+
+  float64x2 res = exp2_from_reduced(n_d, T0, T1);
+  if (!std::isfinite(res.limbs[0])) return res;
+  // Linear correction for the discarded T2 limb: 2^(arg+T2) ≈ 2^arg·(1+ln2·T2).
+  constexpr double LN2 = 0x1.62e42fefa39efp-1;
+  double corr = res.limbs[0] * (LN2 * T2);
+  return res + float64x2(corr);
+}
+
 // ---- expm1 / log1p ---------------------------------------------------------
 // Both functions have a narrow cancellation regime near their input zero
 // (exp(x)-1 for small x, log(1+x) for small x). Outside that regime the

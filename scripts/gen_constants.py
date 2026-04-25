@@ -260,6 +260,8 @@ def collect_all():
     scalar_td('log2_e',    1 / log(mpf(2)),        'log2(e)')
     scalar('ln_2',         log(mpf(2)),            'ln(2)')
     scalar('log10_2',      log10(mpf(2)),          'log10(2)')
+    scalar_td('log2_10',   log(mpf(10)) / log(mpf(2)), 'log2(10) = 1/log10(2) — for exp10')
+    scalar('ln_10',        log(mpf(10)),           'ln(10) — for exp10')
     scalar('inv_pi',       1 / pi,                 '1/pi')
     scalar_td('pi_dd',     pi,                     'pi')
     scalar('half_log_2pi', log(2 * pi) / 2,        '(1/2)*log(2*pi)')
