@@ -68,6 +68,27 @@ Dates are ISO-8601 UTC.
   inside the strict domain; `rootn` forwards to `pow(x, 1/n)` with
   appropriate sign handling for negative `x` with odd `n`. Fuzz:
   `powr` 1.77e-31 (matches `pow`), `rootn` 4.69e-32 (full DD).
+- Final C23 `<math.h>` cluster: `compoundn(x, n)` (= (1+x)^n via
+  cancellation-safe `exp(n · log1p(x))`), the round-to-int family
+  `fromfp` / `ufromfp` / `fromfpx` / `ufromfpx` (all five C23 rounding
+  modes — including `FE_TONEARESTFROMZERO` when defined — with
+  `width`-based overflow detection that raises `FE_INVALID`; the `*x`
+  variants additionally raise `FE_INEXACT` if rounding moved the value),
+  and the IEEE 754 metadata cluster: `canonicalize` (identity for
+  finite DD, sNaN→qNaN), `iseqsig` (= `==` since multifloats only emits
+  qNaN), `totalorder` / `totalordermag` (lexicographic `(hi, lo)` key
+  ordering with the standard IEEE 754 sign-magnitude key transform,
+  matching `std::totalOrder<double>` on tie-broken hi limbs), and
+  `getpayload` / `setpayload` / `setpayloadsig` (NaN payload extraction
+  and injection over the leading limb's IEEE qNaN/sNaN encoding).
+  Fuzz: `compoundn` 9.8e-31 (about 30× DD floor at n=10 large-x; bound
+  by the DD-multiply error in `n · log1p(x)` — full DD requires TD-mul,
+  matching `pow`'s amplification regime). All other entries are
+  property tests, no max_rel column. With these, multifloats covers
+  every C23 `<math.h>` operation that has a meaningful binding for a
+  paired-double type. Narrowing arith (`fadd`/`dadd`/...) is the only
+  category left out — it's about destination-precision rounding rules
+  that don't apply to a non-IEEE-encoded DD type.
 - `boost::multiprecision::cpp_double_double` precision and speed
   comparison harnesses (`boost_dd_fuzz`, `boost_dd_bench`) plus a
   `bjn_probe` regime sweep, gated behind

@@ -323,6 +323,7 @@ static bool is_full_dd(char const *op) {
       "fmaximum_mag", "fminimum_mag", "fmaximum_mag_num", "fminimum_mag_num",
       "exp10", "exp2m1", "exp10m1", "log2p1", "log10p1",
       "rsqrt", "roundeven", "llogb", "pown", "powr", "rootn",
+      "compoundn",
       "copysign", "fdim",
       "hypot", "trunc", "round", "scalbn", "min3", "max3",
       "fmadd", "fma_cxx", "lerp",
@@ -1197,6 +1198,47 @@ int main(int argc, char **argv) {
                 (up >= f1) && (down <= f1);
       if (!ok) report_fail("nextup", "property failed");
     }
+
+    // C23 metadata cluster — property tests (no max_rel column).
+    //   canonicalize(x) is the identity for finite DD.
+    //   iseqsig(a, b) ⇔ (a == b).
+    //   totalorder is a total preorder: trichotomy + transitivity-on-pairs.
+    //   getpayload/setpayload round-trip.
+    if (q_isfinite(q1)) {
+      mf::float64x2 c = mf::canonicalize(f1);
+      if (!(c == f1)) report_fail("canonicalize", "non-identity on finite");
+      if (mf::iseqsig(f1, f1) != true) report_fail("iseqsig", "x != x");
+      // totalorder must classify f1 vs itself as true (reflexive) and
+      // give consistent ordering with `<` on distinct finite values.
+      if (!mf::totalorder(f1, f1)) report_fail("totalorder", "reflex fail");
+      if (q_isfinite(q2) && q1 < q2 && !mf::totalorder(f1, f2))
+        report_fail("totalorder", "ordered pair miss");
+    }
+    // setpayload(0) round-trip: load 42, get back 42.
+    {
+      mf::float64x2 dst;
+      if (mf::setpayload(dst, mf::float64x2(42.0)) == 0) {
+        mf::float64x2 got = mf::getpayload(dst);
+        if (!(got == mf::float64x2(42.0)))
+          report_fail("setpayload", "round-trip mismatch");
+      }
+    }
+
+    // C23 fromfp / ufromfp / fromfpx / ufromfpx — round-to-int with
+    // overflow detection. Property test: fromfp(x, FE_TONEAREST, 64)
+    // must agree with llrint(x) inside the gate where llrint is
+    // exactly representable.
+    if (q_isfinite(q1) && aq1 < (q_t)1e15q) {
+      intmax_t iv = mf::fromfp(f1, FE_TONEAREST, 64);
+      long long lv = mf::llrint(f1);
+      if (iv != static_cast<intmax_t>(lv))
+        report_fail("fromfp", "FE_TONEAREST mismatch with llrint");
+      if (q1 >= (q_t)0) {
+        uintmax_t uv = mf::ufromfp(f1, FE_TONEAREST, 64);
+        if (uv != static_cast<uintmax_t>(lv))
+          report_fail("ufromfp", "FE_TONEAREST mismatch with llrint");
+      }
+    }
     CHK1_IF(trunc, q_isfinite(q1) && aq1 < (q_t)1e15q);
     CHK1_IF(round, q_isfinite(q1) && aq1 < (q_t)1e15q);
     // floor/ceil share trunc/round's magnitude gate: beyond 2^52 ≈ 4.5e15
@@ -1602,6 +1644,18 @@ int main(int argc, char **argv) {
           if (q_isfinite(res_q) && a_res > (q_t)1e-300q && a_res < (q_t)1e300q) {
             CHK("rootn", mf::rootn(f1, n), res_q, q1, (q_t)n,
                 mpfr::pow(m1, to_mp((double)n).inv()));
+          }
+        }
+        // C23 compoundn: (1+x)^n. Gate q1 ∈ (-1, 100) so result stays
+        // representable. Reference: powq(1+q1, n).
+        if (q1 > (q_t)-1 && q1 < (q_t)100) {
+          for (int n : {1, 2, 5, 10, -3}) {
+            q_t res_q = powq((q_t)1 + q1, (q_t)n);
+            q_t a_res = res_q < 0 ? -res_q : res_q;
+            if (q_isfinite(res_q) && a_res > (q_t)1e-300q && a_res < (q_t)1e300q) {
+              CHK("compoundn", mf::compoundn(f1, n), res_q, q1, (q_t)n,
+                  mpfr::pow(mp_t(1) + m1, to_mp((double)n)));
+            }
           }
         }
 

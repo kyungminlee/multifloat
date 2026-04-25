@@ -621,6 +621,44 @@ float64x2 pow(float64x2 const &x, float64x2 const &y) {
   return res + float64x2(corr);
 }
 
+// ---- C23 compoundn ---------------------------------------------------------
+// compoundn(x, n) = (1+x)^n, with the DD-precision near-x=0 form
+// exp(n · log1p(x)) so the (1+x) doesn't lose bits to cancellation.
+// Edge cases match the C23 spec:
+//   n = 0                     → 1 (even for NaN x)
+//   x = -1, n > 0             → 0
+//   x = -1, n = 0             → 1
+//   x = -1, n < 0             → +inf
+//   x < -1                    → NaN
+
+float64x2 compoundn(float64x2 const &x, int n) {
+  if (n == 0) return float64x2(1.0);
+  double xh = x.limbs[0];
+  if (std::isnan(xh)) {
+    float64x2 r;
+    r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  if (xh < -1.0) {
+    float64x2 r;
+    r.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  if (xh == -1.0 && x.limbs[1] == 0.0) {
+    float64x2 r;
+    r.limbs[1] = 0.0;
+    if (n > 0) r.limbs[0] = 0.0;
+    else        r.limbs[0] = std::numeric_limits<double>::infinity();
+    return r;
+  }
+  // (1+x)^n = exp(n · log1p(x)). DD precision throughout — log1p handles
+  // x≈0 cancellation, then a DD multiply by n (exact for small |n|),
+  // then exp delivers full DD precision.
+  return exp(float64x2(static_cast<double>(n)) * log1p(x));
+}
+
 // ---- C23 powr / rootn ------------------------------------------------------
 // powr(x, y) is the strict mathematical x^y for x >= 0, distinct from
 // `pow` in the corner cases: powr(±0, 0) = NaN (vs pow returning 1),

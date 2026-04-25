@@ -60,6 +60,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <iosfwd>
@@ -1071,6 +1072,101 @@ inline constexpr float64x2 nearbyint(float64x2 const &x) {
 
 inline constexpr float64x2 rint(float64x2 const &x) { return nearbyint(x); }
 
+// C23 fromfp / ufromfp / fromfpx / ufromfpx: round x to integer per
+// the requested rounding mode and return as intmax_t / uintmax_t IF
+// it fits in `width` bits; otherwise raise FE_INVALID and return
+// IM_MIN / IM_MAX (the *fp variants raise FE_INEXACT in addition,
+// when the rounding actually moved the value).
+//
+// Rounding mode is one of:
+//   FE_TONEAREST          → nearbyint kernel with FE_TONEAREST forced
+//   FE_DOWNWARD           → floor
+//   FE_UPWARD             → ceil
+//   FE_TOWARDZERO         → trunc
+//   FE_TONEARESTFROMZERO  → round (ties away from zero) — C23 added.
+//
+// For DD: each rounding mode has a native kernel; we dispatch on `rnd`,
+// run the kernel, then narrow to integer.
+
+namespace detail {
+
+inline float64x2 round_for_fromfp(float64x2 const &x, int rnd) {
+  switch (rnd) {
+  case FE_DOWNWARD:    return floor(x);
+  case FE_UPWARD:      return ceil(x);
+  case FE_TOWARDZERO:  return trunc(x);
+#ifdef FE_TONEARESTFROMZERO
+  case FE_TONEARESTFROMZERO: return round(x);
+#endif
+  case FE_TONEAREST:
+  default: {
+    int saved = std::fegetround();
+    if (saved != FE_TONEAREST) std::fesetround(FE_TONEAREST);
+    float64x2 r = nearbyint(x);
+    if (saved != FE_TONEAREST) std::fesetround(saved);
+    return r;
+  }
+  }
+}
+
+}  // namespace detail
+
+inline intmax_t fromfp(float64x2 const &x, int rnd, unsigned int width) {
+  if (std::isnan(x.limbs[0]) || std::isinf(x.limbs[0])) {
+    std::feraiseexcept(FE_INVALID);
+    return INTMAX_MIN;
+  }
+  if (width == 0 || width > 63) width = 63;
+  float64x2 r = detail::round_for_fromfp(x, rnd);
+  // Range check against [-2^(width-1), 2^(width-1) - 1]. Compare in DD.
+  double upper_d = std::ldexp(1.0, static_cast<int>(width) - 1);  // 2^(w-1)
+  float64x2 upper = float64x2(upper_d) - float64x2(1.0);
+  float64x2 lower = -float64x2(upper_d);
+  if (r > upper || r < lower) {
+    std::feraiseexcept(FE_INVALID);
+    return INTMAX_MIN;
+  }
+  return static_cast<intmax_t>(r.limbs[0]) +
+         static_cast<intmax_t>(r.limbs[1]);
+}
+
+inline uintmax_t ufromfp(float64x2 const &x, int rnd, unsigned int width) {
+  if (std::isnan(x.limbs[0]) || std::isinf(x.limbs[0])) {
+    std::feraiseexcept(FE_INVALID);
+    return 0;
+  }
+  if (width == 0 || width > 64) width = 64;
+  float64x2 r = detail::round_for_fromfp(x, rnd);
+  if (r < float64x2()) {  // negative — out of unsigned range
+    std::feraiseexcept(FE_INVALID);
+    return 0;
+  }
+  double upper_d = std::ldexp(1.0, static_cast<int>(width));  // 2^w
+  float64x2 upper = float64x2(upper_d) - float64x2(1.0);
+  if (r > upper) {
+    std::feraiseexcept(FE_INVALID);
+    return 0;
+  }
+  return static_cast<uintmax_t>(r.limbs[0]) +
+         static_cast<uintmax_t>(r.limbs[1]);
+}
+
+inline intmax_t fromfpx(float64x2 const &x, int rnd, unsigned int width) {
+  intmax_t out = fromfp(x, rnd, width);
+  // Raise FE_INEXACT if the rounding moved the value (i.e. x wasn't already
+  // an integer). Floating-point comparison against the rounded result.
+  float64x2 r = detail::round_for_fromfp(x, rnd);
+  if (!(r == x)) std::feraiseexcept(FE_INEXACT);
+  return out;
+}
+
+inline uintmax_t ufromfpx(float64x2 const &x, int rnd, unsigned int width) {
+  uintmax_t out = ufromfp(x, rnd, width);
+  float64x2 r = detail::round_for_fromfp(x, rnd);
+  if (!(r == x)) std::feraiseexcept(FE_INEXACT);
+  return out;
+}
+
 // C23 roundeven: round to nearest, ties to even, INDEPENDENT of the
 // current FE rounding mode (unlike nearbyint, which obeys FE_DOWNWARD
 // etc.). For DD: nearbyint already implements round-to-even at the
@@ -1178,6 +1274,111 @@ inline constexpr float64x2 nextafter(float64x2 const &x, float64x2 const &y) {
 
 inline constexpr float64x2 nexttoward(float64x2 const &x, float64x2 const &y) {
   return nextafter(x, y);
+}
+
+// C23 IEEE 754 metadata operations. For multifloats float64x2 these are
+// thin shims over the lead-limb double semantics — the DD type has no
+// payload of its own beyond what the leading limb's IEEE encoding
+// carries, and the lo limb carries no NaN payload at all (any non-NaN
+// canonical DD has a finite normalized lo).
+
+// Always returns the input — DD has no non-canonical encoding for
+// finite values (the lo-limb invariant |lo| <= 0.5 ulp(hi) is always
+// maintained internally). NaN canonicalization is delegated to the
+// underlying double: a sNaN hi becomes a qNaN.
+inline constexpr float64x2 canonicalize(float64x2 const &x) {
+  if (std::isnan(x.limbs[0])) {
+    float64x2 r;
+    r.limbs[0] = x.limbs[0] + 0.0;  // sNaN → qNaN per IEEE 754
+    r.limbs[1] = 0.0;
+    return r;
+  }
+  return x;
+}
+
+// Signaling-equal predicate. multifloats does not distinguish sNaN /
+// qNaN at the public API level (every NaN we emit is qNaN), so this
+// is functionally `a == b`. Provided for C23 conformance.
+inline constexpr bool iseqsig(float64x2 const &a, float64x2 const &b) {
+  return a == b;
+}
+
+// IEEE 754 totalOrder predicate generalized to DD: a lexicographic
+// comparison over (hi, lo) treating ±0 / NaN sign-and-payload like the
+// underlying double does. Captures the same monotonicity guarantees as
+// std::totalOrder<double> on the leading limb, with the lo limb as a
+// secondary key when hi limbs tie.
+inline bool totalorder(float64x2 const &a, float64x2 const &b) {
+  // IEEE-754 totalOrder key transform:
+  //   negative bit pattern → ~bits  (more-negative value → smaller key)
+  //   positive bit pattern → bits ^ 0x80…0  (sets top bit so the key
+  //     beats every negative key under unsigned compare)
+  // Compare as unsigned so the sign-bit semantics line up.
+  auto key = [](double d) -> unsigned long long {
+    unsigned long long b;
+    std::memcpy(&b, &d, sizeof b);
+    long long sb;
+    std::memcpy(&sb, &b, sizeof sb);
+    return (sb < 0) ? ~b : b ^ 0x8000000000000000ULL;
+  };
+  unsigned long long ka = key(a.limbs[0]), kb = key(b.limbs[0]);
+  if (ka != kb) return ka < kb;
+  ka = key(a.limbs[1]); kb = key(b.limbs[1]);
+  return ka <= kb;
+}
+
+inline bool totalordermag(float64x2 const &a, float64x2 const &b) {
+  return totalorder(fabs(a), fabs(b));
+}
+
+// NaN payload extraction / injection. For DD we route through the
+// leading limb's IEEE-754 NaN payload. setpayload returns 0 on
+// success (matching libm convention), 1 on failure (payload too
+// large to fit in the available NaN bits, or x not finite).
+inline float64x2 getpayload(float64x2 const &x) {
+  if (!std::isnan(x.limbs[0])) return float64x2();
+  unsigned long long bits;
+  double hi = x.limbs[0];
+  std::memcpy(&bits, &hi, sizeof bits);
+  // Mask off sign + exponent + quiet bit; remaining 51 bits are the
+  // payload. Convert through unsigned long long → double via the
+  // float64x2 ctor (exact when bits fit in 53-bit mantissa).
+  bits &= 0x0007ffffffffffffULL;
+  return float64x2(static_cast<double>(bits));
+}
+
+inline int setpayload(float64x2 &x, float64x2 const &payload) {
+  // Payload must be a non-negative integer < 2^51 to fit in the qNaN
+  // mantissa bits. Anything else: leave x unchanged, return 1.
+  double ph = payload.limbs[0];
+  if (!(ph >= 0.0) || ph != std::trunc(ph) || ph >= 0x1.0p51) {
+    return 1;
+  }
+  unsigned long long pl = static_cast<unsigned long long>(ph);
+  // qNaN encoding: exponent all-ones + quiet bit set + payload in low 51 bits.
+  unsigned long long bits = 0x7ff8000000000000ULL | (pl & 0x0007ffffffffffffULL);
+  double hi;
+  std::memcpy(&hi, &bits, sizeof hi);
+  x.limbs[0] = hi;
+  x.limbs[1] = 0.0;
+  return 0;
+}
+
+inline int setpayloadsig(float64x2 &x, float64x2 const &payload) {
+  // Signaling NaN encoding: exponent all-ones + quiet bit clear +
+  // payload in low 51 bits with at least one nonzero bit (else it's
+  // an infinity). Caller must supply a nonzero payload.
+  double ph = payload.limbs[0];
+  if (!(ph > 0.0) || ph != std::trunc(ph) || ph >= 0x1.0p51) {
+    return 1;
+  }
+  unsigned long long pl = static_cast<unsigned long long>(ph);
+  unsigned long long bits = 0x7ff0000000000000ULL | (pl & 0x0007ffffffffffffULL);
+  double hi;
+  std::memcpy(&hi, &bits, sizeof hi);
+  x.limbs[0] = hi;
+  x.limbs[1] = 0.0;
+  return 0;
 }
 
 // C23 nextup / nextdown: IEEE 754 next-toward-+inf / -inf, regardless
@@ -1487,6 +1688,7 @@ float64x2 log10p1(float64x2 const &x);
 float64x2 pow   (float64x2 const &x, float64x2 const &y);
 float64x2 powr  (float64x2 const &x, float64x2 const &y);
 float64x2 rootn (float64x2 const &x, int n);
+float64x2 compoundn(float64x2 const &x, int n);
 
 // Trigonometric
 float64x2 sin   (float64x2 const &x);
