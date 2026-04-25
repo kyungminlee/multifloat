@@ -5,21 +5,21 @@
 // `cexpdd → multifloats::exp + multifloats::sincos`) without depending
 // on -flto.
 //
-//   multifloats_math_exp_log.inc     exp / exp2 / expm1 / log /
+//   float64x2_exp_log.inc     exp / exp2 / expm1 / log /
 //                                    log2 / log10 / log1p / pow
-//   multifloats_math_trig.inc        sin / cos / tan / sincos /
+//   float64x2rig.inc        sin / cos / tan / sincos /
 //                                    sinpi / cospi / tanpi +
 //                                    inverse π-scaled helpers
-//   multifloats_math_hyp.inc         sinh / cosh / tanh / sinhcosh
-//   multifloats_math_inv_trig.inc    atan / asin / acos / atan2 +
+//   float64x2_hyp.inc         sinh / cosh / tanh / sinhcosh
+//   float64x2_inv_trig.inc    atan / asin / acos / atan2 +
 //                                    asinh / acosh / atanh
-//   multifloats_math_special.inc     erf / erfc / erfc_scaled /
+//   float64x2_special.inc     erf / erfc / erfc_scaled /
 //                                    tgamma / lgamma
-//   multifloats_math_bessel.inc      J0 / J1 / Y0 / Y1 / Jn / Yn
-//   multifloats_math_matmul.inc      compensated GEMM panels
-//   multifloats_math_abi_scalar.inc  extern "C" scalar wrappers,
+//   float64x2_bessel.inc      J0 / J1 / Y0 / Y1 / Jn / Yn
+//   float64x2_matmul.inc      compensated GEMM panels
+//   float64x2_abi.inc  extern "C" scalar wrappers,
 //                                    matmul entry points, comparisons
-//   multifloats_math_abi_complex.inc extern "C" complex DD kernels
+//   complex64x2_abi.inc extern "C" complex DD kernels
 //
 // Public transcendental kernels live in `namespace multifloats` with
 // matching declarations in multifloats.h. The `extern "C" *dd` shims
@@ -33,7 +33,6 @@
 #include "dd_constants.hh"
 #include <cstdint>
 #include <cstring>
-#include <vector>
 
 // Triple-double primitive bodies (declarations in multifloats_td.hh) and
 // DD polynomial evaluators (horner/neval/deval — previously inline in
@@ -41,8 +40,8 @@
 // same-TU inline bodies they did before.
 namespace multifloats {
 namespace detail {
-#include "multifloats_math_td.inc"
-#include "multifloats_math_poly.inc"
+#include "float64x2_td.inc"
+#include "float64x2_poly.inc"
 } // namespace detail
 } // namespace multifloats
 
@@ -54,43 +53,49 @@ namespace detail {
 // qualifier.
 namespace multifloats {
 using namespace multifloats::detail;  // neval, deval, horner, float64x3, kernels
-#include "multifloats_math_exp_log.inc"
-#include "multifloats_math_trig.inc"
-#include "multifloats_math_hyp.inc"
-#include "multifloats_math_inv_trig.inc"
-#include "multifloats_math_special.inc"
-#include "multifloats_math_bessel.inc"
+#include "float64x2_exp_log.inc"
+#include "float64x2_trig.inc"
+#include "float64x2_hyp.inc"
+#include "float64x2_inv_trig.inc"
+#include "float64x2_special.inc"
+#include "float64x2_bessel.inc"
 } // namespace multifloats
+
+// Anon-namespace helpers `dd_cross_diff` and `dd_x2y2m1` are defined below
+// (around line 140 originally); the std::complex specializations and C-ABI
+// wrappers consume them. The kernels.inc complex log1p also wants
+// dd_x2y2m1, so we forward-declare them at file scope here. The same-anon-ns
+// definition below provides the body; the redeclaration is permitted within
+// a single TU as both refer to the same internal-linkage entity.
+namespace {
+multifloats::float64x2 dd_cross_diff(multifloats::float64x2 a,
+                                     multifloats::float64x2 b,
+                                     multifloats::float64x2 c,
+                                     multifloats::float64x2 d);
+multifloats::float64x2 dd_x2y2m1(multifloats::float64x2 x,
+                                 multifloats::float64x2 y);
+}
 
 // Complex overloads for Kind-D parity (sinpi/cospi/expm1/log2/log10/log1p
 // on std::complex<float64x2>). Pulled in after <complex> is visible via
 // the inclusion of multifloats.h at top.
 namespace multifloats {
 using namespace multifloats::detail;  // sincos_td + TD primitives
-#include "multifloats_math_abi_complex_kernels.inc"
+#include "complex64x2_abi_kernels.inc"
 } // namespace multifloats
 
 // =============================================================================
 // C-ABI entry points — extern "C" functions following math.h naming convention.
 // =============================================================================
 
-// File-scope C ABI helpers and `using` aliases so both the matmul anon-ns
-// block and the extern "C" shim blocks can call them. Kept non-inline / at
-// global namespace so the extern "C" block can reach them by unqualified
-// name (the ABI .inc files live inside extern "C", which is not a namespace
-// but inherits enclosing lookup).
+// Pull the two public types into TU-scope so the anon namespace helpers,
+// the matmul wrappers, and the extern "C" shim blocks below can all name
+// them unqualified. `complex64x2` is a distinct POD (two back-to-back
+// float64x2s); the C-ABI shims in complex64x2_abi.inc marshal it to/from
+// `std::complex<float64x2>` at the kernel boundary so C/C++/Fortran all
+// see the same struct at the ABI layer (LTO type-identity match).
 using multifloats::float64x2;
-using multifloats::detail::float64x3;
-using multifloats::detail::td_add_td;
-using multifloats::detail::td_mul_td;
-using multifloats::detail::td_sub_double;
-using multifloats::detail::td_to_dd;
-using multifloats::detail::td_from_dd;
-
-static inline float64x2 from(float64x2_t x) { float64x2 r; r._limbs[0] = x.hi; r._limbs[1] = x.lo; return r; }
-static inline float64x2_t to(float64x2 const &x) { return {x._limbs[0], x._limbs[1]}; }
-static inline std::complex<float64x2> cc_from(complex64x2_t z) { return {from(z.re), from(z.im)}; }
-static inline complex64x2_t cc_to(std::complex<float64x2> const &z) { return {to(z.real()), to(z.imag())}; }
+using multifloats::complex64x2;
 
 // Anon-namespace helpers shared by the std:: complex specializations and
 // the C-ABI cmul/cdiv wrappers (which keep compensated bodies because the
@@ -103,10 +108,10 @@ namespace {
 
 __attribute__((noinline, cold))
 float64x2 dd_cross_diff(float64x2 a, float64x2 b, float64x2 c, float64x2 d) {
-  double a0 = a._limbs[0], a1 = a._limbs[1];
-  double b0 = b._limbs[0], b1 = b._limbs[1];
-  double c0 = c._limbs[0], c1 = c._limbs[1];
-  double d0 = d._limbs[0], d1 = d._limbs[1];
+  double a0 = a.limbs[0], a1 = a.limbs[1];
+  double b0 = b.limbs[0], b1 = b.limbs[1];
+  double c0 = c.limbs[0], c1 = c.limbs[1];
+  double d0 = d.limbs[0], d1 = d.limbs[1];
   double ab00_h = a0 * b0, ab00_l = std::fma(a0, b0, -ab00_h);
   double cd00_h = c0 * d0, cd00_l = std::fma(c0, d0, -cd00_h);
   double ab01_h = a0 * b1, ab01_l = std::fma(a0, b1, -ab01_h);
@@ -138,8 +143,8 @@ float64x2 dd_cross_diff(float64x2 a, float64x2 b, float64x2 c, float64x2 d) {
 }
 
 inline float64x2 dd_x2y2m1(float64x2 x, float64x2 y) {
-  double x0 = x._limbs[0], x1 = x._limbs[1];
-  double y0 = y._limbs[0], y1 = y._limbs[1];
+  double x0 = x.limbs[0], x1 = x.limbs[1];
+  double y0 = y.limbs[0], y1 = y.limbs[1];
   double xx00_h = x0 * x0, xx00_l = std::fma(x0, x0, -xx00_h);
   double yy00_h = y0 * y0, yy00_l = std::fma(y0, y0, -yy00_h);
   double twox0 = x0 + x0, twoy0 = y0 + y0;          // exact (×2)
@@ -169,24 +174,18 @@ inline float64x2 dd_x2y2m1(float64x2 x, float64x2 y) {
   return float64x2(hi, lo);
 }
 
-#include "multifloats_math_matmul.inc"
+#include "float64x2_matmul.inc"
 } // anonymous namespace
 
-// Public C++ matmul entry points. The panel dispatchers above operate on
-// `float64x2_t` (C-ABI struct) since they were originally the bodies of the
-// extern "C" `matmuldd_*` shims. `multifloats::float64x2` is layout-compatible
-// (asserted in multifloats.h next to the declarations), so we reinterpret
-// pointers once at the boundary and hand off to the same dispatchers. The
-// `matmuldd_*` shims in multifloats_math_abi_scalar.inc are now one-line
-// wrappers calling these in the opposite direction.
+// Public C++ matmul entry points. `float64x2` is a single unified type
+// across C and C++, so the boundary is a direct hand-off — the panel
+// dispatchers above (anon namespace) operate on the same type. The
+// `matmuldd_*` shims in float64x2_abi.inc forward to these one-for-one.
 namespace multifloats {
 
 void matmul_mm(float64x2 const *a, float64x2 const *b, float64x2 *c,
                std::int64_t m, std::int64_t k, std::int64_t n,
                std::int64_t renorm_interval) {
-  auto *ac = reinterpret_cast<float64x2_t const *>(a);
-  auto *bc = reinterpret_cast<float64x2_t const *>(b);
-  auto *cc = reinterpret_cast<float64x2_t *>(c);
   // NR-blocked mm: the MR-row × NR-col tile loads A[:,p] once per p and
   // reuses it across NR output columns, halving A-bandwidth vs a per-
   // column mv dispatch. Row-tail (1..MR-1 rows) and column-tail
@@ -197,29 +196,26 @@ void matmul_mm(float64x2 const *a, float64x2 const *b, float64x2 *c,
   for (; j + NR <= n; j += NR) {
     std::int64_t i = 0;
     for (; i + MR <= m; i += MR) {
-      gemm_panel<MR, NR>(ac + i, bc + j * k, cc + j * m + i,
+      gemm_panel<MR, NR>(a + i, b + j * k, c + j * m + i,
                          m, k, m, k, renorm_interval);
     }
     int tail_m = static_cast<int>(m - i);
     if (tail_m > 0) {
       for (int jj = 0; jj < NR; ++jj) {
-        gaxpy_mv_tail(ac + i, bc + (j + jj) * k, cc + (j + jj) * m + i,
+        gaxpy_mv_tail(a + i, b + (j + jj) * k, c + (j + jj) * m + i,
                       tail_m, m, k, renorm_interval);
       }
     }
   }
   for (; j < n; ++j) {
-    gaxpy_mv_dispatch(ac, bc + j * k, cc + j * m, m, k, m, renorm_interval);
+    gaxpy_mv_dispatch(a, b + j * k, c + j * m, m, k, m, renorm_interval);
   }
 }
 
 void matmul_mv(float64x2 const *a, float64x2 const *x, float64x2 *y,
                std::int64_t m, std::int64_t k,
                std::int64_t renorm_interval) {
-  gaxpy_mv_dispatch(reinterpret_cast<float64x2_t const *>(a),
-                    reinterpret_cast<float64x2_t const *>(x),
-                    reinterpret_cast<float64x2_t *>(y),
-                    m, k, m, renorm_interval);
+  gaxpy_mv_dispatch(a, x, y, m, k, m, renorm_interval);
 }
 
 // vm: y[j] = sum_p x[p] * B[p, j]. Column-major B makes B[:, j]
@@ -227,16 +223,13 @@ void matmul_mv(float64x2 const *a, float64x2 const *x, float64x2 *y,
 void matmul_vm(float64x2 const *x, float64x2 const *b, float64x2 *y,
                std::int64_t k, std::int64_t n,
                std::int64_t renorm_interval) {
-  auto *xc = reinterpret_cast<float64x2_t const *>(x);
-  auto *bc = reinterpret_cast<float64x2_t const *>(b);
-  auto *yc = reinterpret_cast<float64x2_t *>(y);
   const bool simple = (renorm_interval <= 0) || (k <= renorm_interval);
   for (std::int64_t j = 0; j < n; ++j) {
     double s_hi = 0.0, s_lo = 0.0;
-    const float64x2_t *__restrict__ bcol = bc + j * k;
+    const float64x2 *__restrict__ bcol = b + j * k;
     if (simple) {
       for (std::int64_t p = 0; p < k; ++p) {
-        mac_inl(xc[p].hi, xc[p].lo, bcol[p].hi, bcol[p].lo, s_hi, s_lo);
+        mac_inl(x[p].limbs[0], x[p].limbs[1], bcol[p].limbs[0], bcol[p].limbs[1], s_hi, s_lo);
       }
     } else {
       const std::int64_t chunk = renorm_interval;
@@ -245,13 +238,13 @@ void matmul_vm(float64x2 const *x, float64x2 const *b, float64x2 *y,
         std::int64_t pend = p0 + chunk;
         if (pend > k) pend = k;
         for (std::int64_t p = p0; p < pend; ++p) {
-          mac_inl(xc[p].hi, xc[p].lo, bcol[p].hi, bcol[p].lo, s_hi, s_lo);
+          mac_inl(x[p].limbs[0], x[p].limbs[1], bcol[p].limbs[0], bcol[p].limbs[1], s_hi, s_lo);
         }
         p0 = pend;
         if (p0 < k) renorm_inl(s_hi, s_lo);
       }
     }
-    yc[j] = finalize_inl(s_hi, s_lo);
+    y[j] = finalize_inl(s_hi, s_lo);
   }
 }
 
@@ -263,10 +256,17 @@ void matmul_vm(float64x2 const *x, float64x2 const *b, float64x2 *y,
 // Pulled into namespace std so the explicit specialization syntax is in
 // the right enclosing namespace.
 namespace std {
-#include "multifloats_math_complex_std.inc"
+#include "complex64x2_std.inc"
 } // namespace std
 
+// The C-ABI *dd shims live in `namespace multifloats` so their declarations
+// (in multifloats.h) and definitions share the same C++ qualified name.
+// `extern "C"` makes the linker symbol unmangled (`adddd`, not
+// `_ZN11multifloats5adddd...`), matching the Fortran bind(c) and C clients;
+// the namespace scope only affects C++ lookup/ADL.
+namespace multifloats {
 extern "C" {
-#include "multifloats_math_abi_scalar.inc"
-#include "multifloats_math_abi_complex.inc"
+#include "float64x2_abi.inc"
+#include "complex64x2_abi.inc"
 } // extern "C"
+} // namespace multifloats

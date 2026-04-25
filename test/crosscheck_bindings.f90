@@ -1,4 +1,4 @@
-! bind(c) wrappers over the NATIVE float64x2 elemental operators. Used
+! bind(c) wrappers over the NATIVE real64x2 elemental operators. Used
 ! by the cross-language differential fuzz driver (test/crosscheck.cc) to
 ! exercise both the C++ and Fortran implementations of the DD kernels
 ! that are INDEPENDENTLY implemented on each side — add, sub, mul, div,
@@ -15,17 +15,17 @@ module crosscheck_bindings
   ! Import the whole module so the overloaded arithmetic / comparison
   ! operators and the `sqrt` / `abs` generics are visible. An `only:`
   ! list would drop the operator interfaces and the compiler would
-  ! reject `type(float64x2) + type(float64x2)`.
+  ! reject `type(real64x2) + type(real64x2)`.
   use multifloats
   use, intrinsic :: iso_c_binding, only: c_double, c_int, c_long
   implicit none
   private
 
-  ! Layout matches float64x2_t in include/multifloats.h and dd_c in
+  ! Layout matches real64x2 in include/multifloats.h and dd_c in
   ! dd_bindc.f90. Declared locally so this module does not depend on
   ! dd_bindc (separate concern).
   type, bind(c), public :: dd_c
-    real(c_double) :: hi, lo
+    real(c_double) :: limbs(2)
   end type dd_c
 
   public :: fnat_add, fnat_sub, fnat_mul, fnat_div
@@ -61,16 +61,14 @@ contains
 
   pure function c_to_f(c) result(r)
     type(dd_c), intent(in) :: c
-    type(float64x2) :: r
-    r%limbs(1) = c%hi
-    r%limbs(2) = c%lo
+    type(real64x2) :: r
+    r%limbs = c%limbs
   end function
 
   pure function f_to_c(r) result(c)
-    type(float64x2), intent(in) :: r
+    type(real64x2), intent(in) :: r
     type(dd_c) :: c
-    c%hi = r%limbs(1)
-    c%lo = r%limbs(2)
+    c%limbs = r%limbs
   end function
 
   pure function fnat_add(a, b) result(res) bind(c, name='fnat_add')

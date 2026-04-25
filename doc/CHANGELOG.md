@@ -8,7 +8,217 @@ Dates are ISO-8601 UTC.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-25
+
+### Changed
+
+- **Default CMake build is now library-only.** A plain
+  `cmake -S . -B build` produces just `multifloats` and
+  `multifloatsf`. Tests, benchmarks, the `blas-multifloat` smoke
+  target, and the MPFR / Boost comparison harnesses are all opt-in.
+  Use `-DBUILD_TESTING=ON` for the test suite (which also brings in
+  `blas-multifloat`), `-DMULTIFLOATS_BUILD_BENCH=ON` for the
+  microbenchmarks, `-DBUILD_MPFR_TESTS=ON` for the 3-way MPFR
+  precision check, and `-DMULTIFLOATS_BUILD_BOOST_COMPARE=ON` for
+  the `boost::multiprecision::cpp_double_double` comparison
+  (fetches Boost ≥ 1.89 via FetchContent). See README "Build" for
+  the full table. Consumers that previously relied on the
+  default-ON `BUILD_TESTING` (via `include(CTest)`) or on the
+  default-on-top-level `MULTIFLOATS_BUILD_BENCH` need to opt in
+  explicitly.
+
+### Added
+
+- C23 `<math.h>` additions: `fmaximum`, `fminimum`, `fmaximum_num`,
+  `fminimum_num` (C23 NaN-quiet/propagating min/max with signed-zero
+  pinning), and `exp10` (10^x via TD-internal `exp2(x · log2(10))`,
+  full DD precision — fuzz max_rel 4.2e-32, on the DD floor with
+  `exp` / `exp2` / `log10`). Wired through the C ABI as `exp10dd`
+  and the Fortran `dd_exp10_full` delegate. Closes the C99 + C11 +
+  C17 `<math.h>` coverage and adds the C23 min/max + exp10 set.
+- More C23 `<math.h>` additions: `fmaximum_mag` / `fminimum_mag` /
+  `fmaximum_mag_num` / `fminimum_mag_num` (by-magnitude min/max with
+  the same NaN + signed-zero rules as the canonical C23 min/max),
+  `nextup` / `nextdown` (IEEE 754 next-toward-±inf), `roundeven`
+  (ties-to-even rounding independent of the FE rounding mode),
+  `llogb` (long-returning ilogb), `pown` (C23 spelling for the existing
+  `powi` integer-power kernel — same body), and `rsqrt` (1/sqrt at full
+  DD precision via Newton-Raphson with two_prod-captured residual:
+  fuzz max_rel 9.6e-32, ~3× the DD floor). All new fuzz rows run on
+  cpp_fuzz seed 42 1M iterations.
+- C23 cancellation-safe exp/log companions: `exp2m1` (2^x − 1),
+  `exp10m1` (10^x − 1), `log2p1` (log2(1+x)), `log10p1` (log10(1+x)).
+  Each splits at |x| = 0.5 between the cancellation-free direct form
+  (large |x|: `exp2(x) − 1`, `log2(1+x)` etc.) and the precision-safe
+  composition over `expm1`/`log1p` (small |x|: `expm1(x · ln2)`,
+  `log1p(x) · log2(e)` etc.). Fuzz max_rel 4.5–9.5e-32, on the DD
+  floor with the underlying `expm1`/`log1p`. C ABI exports as
+  `exp2m1dd`, `exp10m1dd`, `log2p1dd`, `log10p1dd`; Fortran delegates
+  `dd_exp2m1_full` / `dd_exp10m1_full` / `dd_log2p1_full` /
+  `dd_log10p1_full`. New `inv_ln10` constant in `dd_constants.hh`.
+
+  Note: the fuzz oracles for `exp2m1` / `exp10m1` originally used
+  `exp2q(x) − 1` / `powq(10, x) − 1` and reported ~1% rel-err. The
+  bug was in libquadmath, not multifloats: `exp2q` / `powq` lose
+  ~1% precision when `|x| ≲ 1e-30` because their result floor (one
+  qp ulp ≈ 2e-34 around 1) drops below the dominant Taylor term
+  `x · ln(base)`. Replaced with cancellation-free `expm1q(x · ln(base))`
+  oracles that hold across the small-x range.
+- C23 `powr(x, y)` (strict mathematical power, NaN for `x < 0` or
+  `0^0` or `1^±inf`) and `rootn(x, n)` (n-th root with full odd /
+  even / signed-zero / negative-x dispatch). `powr` forwards to `pow`
+  inside the strict domain; `rootn` forwards to `pow(x, 1/n)` with
+  appropriate sign handling for negative `x` with odd `n`. Fuzz:
+  `powr` 1.77e-31 (matches `pow`), `rootn` 4.69e-32 (full DD).
+- Final C23 `<math.h>` cluster: `compoundn(x, n)` (= (1+x)^n via
+  cancellation-safe `exp(n · log1p(x))`), the round-to-int family
+  `fromfp` / `ufromfp` / `fromfpx` / `ufromfpx` (all five C23 rounding
+  modes — including `FE_TONEARESTFROMZERO` when defined — with
+  `width`-based overflow detection that raises `FE_INVALID`; the `*x`
+  variants additionally raise `FE_INEXACT` if rounding moved the value),
+  and the IEEE 754 metadata cluster: `canonicalize` (identity for
+  finite DD, sNaN→qNaN), `iseqsig` (= `==` since multifloats only emits
+  qNaN), `totalorder` / `totalordermag` (lexicographic `(hi, lo)` key
+  ordering with the standard IEEE 754 sign-magnitude key transform,
+  matching `std::totalOrder<double>` on tie-broken hi limbs), and
+  `getpayload` / `setpayload` / `setpayloadsig` (NaN payload extraction
+  and injection over the leading limb's IEEE qNaN/sNaN encoding).
+  Fuzz: `compoundn` 9.8e-31 (about 30× DD floor at n=10 large-x; bound
+  by the DD-multiply error in `n · log1p(x)` — full DD requires TD-mul,
+  matching `pow`'s amplification regime). All other entries are
+  property tests, no max_rel column. With these, multifloats covers
+  every C23 `<math.h>` operation that has a meaningful binding for a
+  paired-double type. Narrowing arith (`fadd`/`dadd`/...) is the only
+  category left out — it's about destination-precision rounding rules
+  that don't apply to a non-IEEE-encoded DD type.
+- `boost::multiprecision::cpp_double_double` precision and speed
+  comparison harnesses (`boost_dd_fuzz`, `boost_dd_bench`) plus a
+  `bjn_probe` regime sweep, gated behind
+  `-DMULTIFLOATS_BUILD_BOOST_COMPARE=ON`. Documented in
+  `doc/developer/BOOST_COMPARISON.md`.
+- Worst-case input printer in both `cpp_fuzz` and `boost_dd_fuzz`
+  precision reports — alongside `max_rel` / `mean_rel`, each op now
+  prints the `(i1, i2, ref, got)` sample that produced its worst
+  rel-err. Makes stochastic precision anomalies debuggable from a
+  single run rather than requiring a custom probe rebuild.
+- Fuzz coverage for `cbrt`, `fma_cxx`, `lerp`, `modulo`,
+  `remainder`, `remquo`, `fpclassify`, `nextafter`, `nexttoward`,
+  and `nan(tag)`.
+
+### Fixed
+
+- `multifloats::sqrt` Karp–Markstein refinement step now uses
+  `two_prod(c, c)` (FMA-based exact scalar product) instead of a
+  full DD multiply for the residual `x − c²`. ~2.2× faster, max_rel
+  3.5e-32 vs 4.1e-32 prior.
+
+## [0.3.4] — 2026-04-24
+
+### Changed
+
+- Bump CI action versions to the Node-24-native majors:
+  `actions/checkout@v4` → `@v6`,
+  `actions/upload-artifact@v4` → `@v7`,
+  `actions/download-artifact@v4` → `@v8`.
+  Supersedes the v0.3.3 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` env opt-in,
+  which is now redundant and removed. No workflow logic changes; the
+  basic `name`/`path` inputs we use are stable across these majors.
+
+## [0.3.3] — 2026-04-24
+
+### Fixed
+
+- Silence gfortran's `-Wlto-type-mismatch` on the Fortran ↔ C bind(c)
+  boundary (≈1500 warnings per build). The Fortran bridge types
+  `float64x2_t` / `complex64x2_t` are still layout-compatible with
+  `multifloats::float64x2` / `std::complex<multifloats::float64x2>`
+  (pinned by header static_asserts + verified by
+  `precision_abi_equivalence` and `crosscheck_cpp_fortran`); only the
+  type *names* differ, which gfortran's LTO type-checker flags.
+  Scoped `-Wno-lto-type-mismatch` to GNU + LTO builds on the
+  `multifloatsf` target.
+
+### Changed
+
+- CI / release workflows opt in to the Node.js 24 runtime
+  (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`) to silence the
+  `actions/checkout@v4` / `actions/upload-artifact@v4` /
+  `actions/download-artifact@v4` Node 20 deprecation warnings. Safe
+  to drop after GitHub's 2026-06-02 force-default-to-Node-24
+  transition.
+
+## [0.3.2] — 2026-04-24
+
+### Fixed
+
+- Release-CI install failure on every non-GCC matrix entry (Intel
+  oneAPI, LLVM Flang). The dual-variant `.f90` install in v0.3.0/0.3.1
+  expected both `multifloats-quad.f90` and `multifloats-noquad.f90` to
+  exist, but the non-GCC entries used `cmake --build --target
+  multifloats --target multifloatsf`, which bypasses ALL-linked custom
+  targets and only generated the variant the build host's REAL(16)
+  probe had picked. `add_dependencies(multifloatsf
+  multifloatsf_sources)` wires both fypp expansions as a side effect
+  of building the library target.
+
+## [0.3.1] — 2026-04-24
+
+### Added
+
+- **Dual-mode Fortran package distribution**: `find_package(multifloatsf)`
+  now prefers a precompiled compiler-tagged archive + `.mod` when one
+  matches the consumer's Fortran compiler (`multifloatsfTargets-<tag>.cmake`
+  under `<prefix>/lib/cmake/multifloatsf/`), and falls back to the
+  source-build path otherwise. Release tarballs now ship one tagged
+  precompiled variant per build-matrix entry alongside the pre-expanded
+  `.f90` source — consumers whose compiler exactly matches skip the
+  module recompile entirely.
+- `-DMULTIFLOATSF_INSTALL_PRECOMPILED_MOD=ON` wired into all release CI
+  configure steps (`build-lto`, `build-lto-mac`) so the release artifact
+  set carries per-compiler precompiled bundles.
+
+### Changed
+
+- `multifloatsfConfig.cmake` selector reworked from "always source" to
+  "precompiled preferred, source fallback". The `@FC_DETECT_CODE@`
+  placeholder in the template is now expanded at library-configure time
+  from the `_FC_DETECT_CODE` snippet in `cmake/FortranCompiler.cmake`, so
+  producer and consumer compute identical compiler tags.
+
+## [0.3.0] — 2026-04-24
+
 ### Breaking
+
+- **C++ type unification** (commit `6f1c472`): the parallel
+  `float64x2_t` (C POD) and `multifloats::float64x2` (C++ class) types
+  were collapsed into one `struct float64x2 { double limbs[2]; }` used
+  by both languages. `_limbs` → `limbs`; `.hi` / `.lo` field accesses
+  on the old C POD become `.limbs[0]` / `.limbs[1]`. Similarly
+  `complex64x2_t` is gone — C sees `struct complex64x2 { float64x2 re, im; }`,
+  C++ sees `using complex64x2 = std::complex<float64x2>;`. Fortran
+  `bind(c)` interop types (`type dd_c`) switched from `hi, lo` fields
+  to `limbs(2)`. Linker symbol set, calling convention, and on-disk
+  layout are all unchanged; `MULTIFLOATS_ABI_VERSION` stays at 2.
+- **C++ namespace move** (commit `6f1c472`): the public header no
+  longer injects `float64x2` / `complex64x2` into the global namespace
+  via `using multifloats::…`. External C++ consumers must spell the
+  types as `multifloats::float64x2` / `multifloats::complex64x2`, or
+  add their own `using multifloats::float64x2;` at TU scope. The
+  extern "C" `*dd` prototypes now sit inside `namespace multifloats`
+  — function calls resolve via ADL when the argument type is a
+  `multifloats::float64x2` (common case, no user action) or via
+  explicit qualification otherwise.
+- **Fortran module distribution model** (commit `22ea804`): the
+  default install no longer ships a compiler-tagged `.mod` + archive.
+  Instead the pre-expanded `multifloats-quad.f90` and
+  `multifloats-noquad.f90` sources are installed under
+  `<prefix>/share/multifloatsf/src/` and a
+  `multifloatsfConfig.cmake` lets consumers `find_package(multifloatsf)`
+  + compile the module with their own Fortran compiler. Cross-compiler
+  consumers are now viable (gfortran-13 library ↔ gfortran-15
+  consumer, flang ↔ ifx, etc.). Precompiled `.mod` install is retained
+  as an opt-in flag (`-DMULTIFLOATSF_INSTALL_PRECOMPILED_MOD=ON`) for
+  distro packagers.
 
 - **Fortran-surface prefix rename** (commit `44b3a64`, 2026-04-17): the
   remaining `mf_` / `cx_` / `MF_` tokens in the Fortran module were
@@ -48,6 +258,15 @@ Dates are ISO-8601 UTC.
 
 ### Added
 
+- **Fortran source-distribution package** (commit `22ea804`):
+  `cmake/multifloatsfConfig.cmake.in`, both `multifloats-{quad,noquad}.f90`
+  variants, and `test/consumer-fortran/` + `scripts/check_consumer_fortran.sh`
+  as a new `consumer_fortran_smoke` ctest driving install → configure →
+  build → run of a find_package-based consumer.
+- **Layout static_asserts** on `multifloats::float64x2` (commit
+  `6f1c472`): `std::is_standard_layout_v` + `std::is_trivially_copyable_v`,
+  replacing the pre-refactor tautological `sizeof(a)==sizeof(a)`
+  boundary check.
 - C++ I/O: `to_string(float64x2, int precision=32)` and
   `operator<<(std::ostream&, float64x2 const&)` (audit #5).
 - Fortran `sincos` / `sinhcosh` generic subroutines delegating to
@@ -99,6 +318,10 @@ Dates are ISO-8601 UTC.
 
 ### Fixed
 
+- **`isinf(float64x2)`** now scans both limbs (commit `6f1c472`),
+  matching `isnan` / `isfinite`. A non-canonical DD with finite `hi`
+  and infinite `lo` (constructible via the C ABI) previously
+  classified as not-finite, not-inf, not-nan.
 - `catandd` imaginary part lost ~7 decimals when `|b|` is small and
   `|a|` moderate (num/den ≈ 1, cancellation in `0.25·log(num/den)`):
   max_rel dropped from 3.3e-25 to 9.5e-32, mean_rel from 4.4e-28 to

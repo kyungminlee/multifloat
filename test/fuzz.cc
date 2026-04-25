@@ -42,6 +42,8 @@
 #include <random>
 
 namespace mf = multifloats;
+using multifloats::float64x2;
+using multifloats::complex64x2;
 using multifloats_test::q_t;
 using multifloats_test::to_q;
 using multifloats_test::from_q;
@@ -93,9 +95,20 @@ using multifloats_test::mp_isnan;
 
 // mpreal covers fmin/fmax/fmod/copysign but is missing fdim. Fill the gap
 // with a local wrapper so CHK2(fdim) derives mpfr::fdim(m1, m2) the same
-// way as the other scalar binary ops.
+// way as the other scalar binary ops. lerp / modulo are similarly absent
+// from mpreal — wrap them by hand against the same definitions multifloats
+// uses (C++20 lerp endpoint-exact form, Python-style positive-mod modulo).
 namespace mpfr {
 inline mp_t fdim(mp_t const &a, mp_t const &b) { return a > b ? a - b : mp_t(0); }
+inline mp_t lerp(mp_t const &a, mp_t const &b, mp_t const &t) {
+  return a + t * (b - a);
+}
+inline mp_t modulo(mp_t const &a, mp_t const &b) {
+  mp_t r = mpfr::fmod(a, b);
+  if (r == mp_t(0)) return r;
+  bool sa = (r < mp_t(0)), sb = (b < mp_t(0));
+  return (sa != sb) ? (r + b) : r;
+}
 }  // namespace mpfr
 
 #define MP_PARAM(...) , __VA_ARGS__
@@ -223,6 +236,13 @@ struct StatEntry {
   double sum_rel = 0.0;
 #endif
   long count = 0;
+  // Worst-case sample (the input pair that produced the largest rel_err
+  // recorded in this stat row). For ops with an integer parameter (bjn,
+  // pow_int, etc.) the second slot carries that parameter as a q_t.
+  q_t worst_i1 = 0;
+  q_t worst_i2 = 0;
+  q_t worst_expected = 0;
+  q_t worst_got = 0;
 };
 
 static constexpr int kMaxStats = 256;
@@ -244,22 +264,32 @@ static StatEntry *find_or_create_stat(char const *op) {
 }
 
 #ifdef USE_MPFR
-static void update_stat(char const *op, double rq, double rdd) {
+static void update_stat(char const *op, double rq, double rdd,
+                        q_t i1, q_t i2, q_t expected, q_t got) {
   if (!std::isfinite(rq) || !std::isfinite(rdd)) return;
   StatEntry *s = find_or_create_stat(op);
   if (!s) return;
   if (rq  > s->max_q)  s->max_q  = rq;
-  if (rdd > s->max_dd) s->max_dd = rdd;
+  if (rdd > s->max_dd) {
+    s->max_dd = rdd;
+    s->worst_i1 = i1; s->worst_i2 = i2;
+    s->worst_expected = expected; s->worst_got = got;
+  }
   s->sum_q  += rq;
   s->sum_dd += rdd;
   ++s->count;
 }
 #else
-static void update_stat(char const *op, double rel) {
+static void update_stat(char const *op, double rel,
+                        q_t i1, q_t i2, q_t expected, q_t got) {
   if (!std::isfinite(rel)) return;
   StatEntry *s = find_or_create_stat(op);
   if (!s) return;
-  if (rel > s->max_rel) s->max_rel = rel;
+  if (rel > s->max_rel) {
+    s->max_rel = rel;
+    s->worst_i1 = i1; s->worst_i2 = i2;
+    s->worst_expected = expected; s->worst_got = got;
+  }
   s->sum_rel += rel;
   ++s->count;
 }
@@ -272,7 +302,9 @@ static void update_stat(char const *op, double rel) {
 // Full-DD tier: kernels that should deliver ~106 bits of precision end-to-end.
 // exp/log/trig/hyperbolic/pow/tgamma/lgamma hit full DD via the native
 // polynomial kernels. fmod is excluded because its large-quotient subtraction
-// loses precision through catastrophic cancellation once |x/y| grows.
+// loses precision through catastrophic cancellation once |x/y| grows; the
+// remainder/remquo/modulo trio share fmod's kernel and inherit its floor,
+// so they are excluded for the same reason.
 //
 // Complex ops emit "<op>_re" / "<op>_im" stat rows (one per component);
 // matching both here keeps them on the full-DD tier.
@@ -285,9 +317,16 @@ static void update_stat(char const *op, double rel) {
 // function — handled by is_pi_trig below.
 static bool is_full_dd(char const *op) {
   static char const *kList[] = {
-      "add", "sub", "mul", "div", "sqrt", "abs", "neg",
-      "add_fd", "mul_df", "fmin", "fmax", "copysign", "fdim",
-      "hypot", "trunc", "round", "scalbn", "min3", "max3", "fmadd",
+      "add", "sub", "mul", "div", "sqrt", "cbrt", "abs", "neg",
+      "add_fd", "mul_df", "fmin", "fmax",
+      "fmaximum", "fminimum", "fmaximum_num", "fminimum_num",
+      "fmaximum_mag", "fminimum_mag", "fmaximum_mag_num", "fminimum_mag_num",
+      "exp10", "exp2m1", "exp10m1", "log2p1", "log10p1",
+      "rsqrt", "roundeven", "llogb", "pown", "powr", "rootn",
+      "compoundn",
+      "copysign", "fdim",
+      "hypot", "trunc", "round", "scalbn", "min3", "max3",
+      "fmadd", "fma_cxx", "lerp",
       "floor", "ceil", "nearbyint", "rint",
       "lround", "llround", "lrint", "llrint",
       "logb", "ilogb", "ldexp", "scalbln",
@@ -302,6 +341,10 @@ static bool is_full_dd(char const *op) {
       "erf", "erfc", "erfcx",
       "gamma", "lngamma",
       "bj0", "bj1", "bjn", "by0", "by1", "byn", "yn_range",
+      "arr_sum", "arr_prod", "arr_max", "arr_min",
+      "arr_dot", "arr_norm2", "arr_matmul",
+      "arr_matmul_mm", "arr_matmul_vm", "jn_range",
+      "sin_huge", "cos_huge",
       "cadd_re", "cadd_im", "csub_re", "csub_im",
       "cmul_re", "cmul_im", "cdiv_re", "cdiv_im",
       "cabs", "carg", "cconjg_re", "cconjg_im",
@@ -442,14 +485,14 @@ static void report_fail(char const *op, char const *detail) {
 // "cSTEM" (e.g. "csin", "csqrt") — matches libquadmath's cNAMEq naming
 // with the q stripped.
 #define CHK_C1(STEM) \
-    CHK("c" #STEM, ::c##STEM##dd(zd1), c##STEM##q(zq1), \
+    CHK("c" #STEM, c##STEM##dd(zd1), c##STEM##q(zq1), \
         mag, (q_t)0, c##STEM##mp(zm1))
 
-// Complex binary: ::cSTEMdd(zd1, zd2) / cSTEMq(zq1, zq2) / cSTEMmp(zm1, zm2).
+// Complex binary: cSTEMdd(zd1, zd2) / cSTEMq(zq1, zq2) / cSTEMmp(zm1, zm2).
 // The qp leg reads as a function call thanks to the caddq/csubq/cmulq/cdivq
 // inline wrappers above — this parallelizes cleanly with CHK_C1.
 #define CHK_C2(STEM) \
-    CHK("c" #STEM, ::c##STEM##dd(zd1, zd2), c##STEM##q(zq1, zq2), \
+    CHK("c" #STEM, c##STEM##dd(zd1, zd2), c##STEM##q(zq1, zq2), \
         mag, (q_t)0, c##STEM##mp(zm1, zm2))
 
 // Gated-call variants: `CHK1_IF(sin, cond)` expands to the equivalent of
@@ -472,10 +515,10 @@ static void check(char const *op, mf::float64x2 const &got, q_t expected,
   // legitimately leave garbage or a second NaN in the low slot, and
   // downstream consumers all bail out on NaN hi.
   if (q_isnan(expected)) {
-    if (!std::isnan(got._limbs[0])) {
+    if (!std::isnan(got.limbs[0])) {
       char buf[128];
       std::snprintf(buf, sizeof(buf), "expected NaN, got (%a, %a)",
-                    got._limbs[0], got._limbs[1]);
+                    got.limbs[0], got.limbs[1]);
       report_fail(op, buf);
     }
     return;
@@ -484,12 +527,12 @@ static void check(char const *op, mf::float64x2 const &got, q_t expected,
   // is unconstrained — an overflowing kernel can propagate either inf or
   // NaN into lo depending on which two_sum path fired.
   if (!q_isfinite(expected)) {
-    bool ok = std::isinf(got._limbs[0]) &&
-              (std::signbit(got._limbs[0]) == (expected < 0));
+    bool ok = std::isinf(got.limbs[0]) &&
+              (std::signbit(got.limbs[0]) == (expected < 0));
     if (!ok) {
       char buf[128];
       std::snprintf(buf, sizeof(buf), "expected inf, got (%a, %a)",
-                    got._limbs[0], got._limbs[1]);
+                    got.limbs[0], got.limbs[1]);
       report_fail(op, buf);
     }
     return;
@@ -548,10 +591,10 @@ static void check(char const *op, mf::float64x2 const &got, q_t expected,
     if (denom_mp < input_mag_mp) denom_mp = input_mag_mp;
     double rq  = (mpfr::abs(to_mp(expected) - expected_mp) / denom_mp).toDouble();
     double rdd = (mpfr::abs(to_mp(got)      - expected_mp) / denom_mp).toDouble();
-    update_stat(op, rq, rdd);
+    update_stat(op, rq, rdd, i1, i2, expected, got_q);
   }
 #else
-  update_stat(op, rel_err);
+  update_stat(op, rel_err, i1, i2, expected, got_q);
 #endif
 
   if (rel_err > tol) {
@@ -566,7 +609,7 @@ static void check(char const *op, mf::float64x2 const &got, q_t expected,
       std::fprintf(stderr, "  i2       = %s\n", qstr(i2));
       std::fprintf(stderr, "  expected = %s\n", qstr(expected));
       std::fprintf(stderr, "  got      = %s  (limbs %a, %a)\n", qstr(got_q),
-                   got._limbs[0], got._limbs[1]);
+                   got.limbs[0], got.limbs[1]);
       ++g_prints;
     }
   }
@@ -683,6 +726,19 @@ static void print_all_stats() {
               "           dd = rel_err(multifloats DD vs mpreal).\n"
               "  q ≈ 1e-33 is the float128 mantissa floor; dd above q means\n"
               "  the DD kernel — not the float128 reference — is the loss.\n");
+  std::printf("\nWorst-case inputs per op (sample at max_dd). For ops with an\n"
+              "integer parameter (bjn, byn, pow_int, scalbn, …), i2 carries\n"
+              "that parameter; for unary ops i2 is unused.\n");
+  std::printf("  %-16s %14s\n", "op", "max_dd");
+  for (int i = 0; i < g_nstats; ++i) {
+    StatEntry const &s = g_stats[i];
+    if (s.count == 0 || s.max_dd == 0.0) continue;
+    std::printf("  %-16s %14.3e  i1=%s\n",
+                s.name, s.max_dd, qstr(s.worst_i1));
+    std::printf("  %-16s %14s  i2=%s\n",  "", "", qstr(s.worst_i2));
+    std::printf("  %-16s %14s  ref=%s\n", "", "", qstr(s.worst_expected));
+    std::printf("  %-16s %14s  got=%s\n", "", "", qstr(s.worst_got));
+  }
 #else
   std::printf("Per-operation precision report (relative error vs __float128):\n");
   std::printf("  %-16s %10s %14s %14s\n", "op", "n", "max_rel", "mean_rel");
@@ -694,6 +750,19 @@ static void print_all_stats() {
     }
     std::printf("  %-16s %10ld  %14.3e %14.3e\n", s.name, s.count, s.max_rel,
                 s.sum_rel / s.count);
+  }
+  std::printf("\nWorst-case inputs per op (max_rel sample). For ops with an\n"
+              "integer parameter (bjn, byn, pow_int, scalbn, …), i2 carries\n"
+              "that parameter; for unary ops i2 is unused.\n");
+  std::printf("  %-16s %14s\n", "op", "max_rel");
+  for (int i = 0; i < g_nstats; ++i) {
+    StatEntry const &s = g_stats[i];
+    if (s.count == 0 || s.max_rel == 0.0) continue;
+    std::printf("  %-16s %14.3e  i1=%s\n",
+                s.name, s.max_rel, qstr(s.worst_i1));
+    std::printf("  %-16s %14s  i2=%s\n",  "", "", qstr(s.worst_i2));
+    std::printf("  %-16s %14s  ref=%s\n", "", "", qstr(s.worst_expected));
+    std::printf("  %-16s %14s  got=%s\n", "", "", qstr(s.worst_got));
   }
   std::printf("\n");
 #endif
@@ -711,11 +780,11 @@ static void print_all_stats() {
 // complex-input magnitude; i2 is unused in practice and set to (q_t)0 at
 // call sites, but kept in the signature for uniformity with the scalar
 // overload so a single CHK macro drives both.
-static void check(char const *op, complex64x2_t const &got,
+static void check(char const *op, complex64x2 const &got,
                   __complex128 expected, q_t i1, q_t i2
                   MP_PARAM(CMp const &expected_mp)) {
-  mf::float64x2 got_re = mf::float64x2(got.re);
-  mf::float64x2 got_im = mf::float64x2(got.im);
+  mf::float64x2 got_re = got.re;
+  mf::float64x2 got_im = got.im;
   q_t exp_re = crealq(expected);
   q_t exp_im = cimagq(expected);
 
@@ -726,13 +795,10 @@ static void check(char const *op, complex64x2_t const &got,
   CHK(key, got_im, exp_im, i1, i2, expected_mp.im);
 }
 
-// Convert an mf::float64x2 pair to a C-ABI complex64x2_t for dispatching
+// Convert an mf::float64x2 pair to a C-ABI complex64x2 for dispatching
 // through the *dd kernels.
-static inline complex64x2_t to_cdd(mf::float64x2 const &re, mf::float64x2 const &im) {
-  complex64x2_t z;
-  z.re = static_cast<float64x2_t>(re);
-  z.im = static_cast<float64x2_t>(im);
-  return z;
+static inline complex64x2 to_cdd(mf::float64x2 const &re, mf::float64x2 const &im) {
+  return complex64x2{re, im};
 }
 
 // Build a __complex128 from two q_t components.
@@ -768,6 +834,231 @@ static void check_comp(mf::float64x2 const &f1, mf::float64x2 const &f2, q_t q1,
   if ((f1 != f2) != (q1 != q2) && !near) cmp_fail("ne", f1 != f2, q1 != q2);
 }
 
+#ifdef USE_MPFR
+// 8-element array reductions (sum / product / max / min / dot / norm2 /
+// matmul). Sampled every kArrayInterval iterations to keep wall-clock cost
+// low — mpreal is ~100× slower than qp. Mirrors fuzz.fypp's fuzz_arrays.
+//
+// Inputs come from rng.narrow (sign × uniform(0.5) × 10^[-3, 3]); kept
+// modest so dot/matmul don't overflow and so the qp oracle stays clean.
+// The matmul kernel is the same `matmuldd_mv` C ABI symbol Fortran's
+// `matmul` delegates to, with renorm_interval matching DD_FMA_RENORM_INTERVAL.
+static constexpr int kArrayN = 8;
+// Preserve baseline main-rng consumption pattern: kArrayInterval=1000 with
+// the main `rng` (so existing arr_sum/prod/max/min/dot/norm2/matmul columns
+// keep comparability across runs). New array ops (matmul_mm, matmul_vm) that
+// weren't in the baseline use a separate RNG in the outer loop below so
+// they don't perturb scalar fuzz input distribution.
+static constexpr int kArrayInterval = 1000;
+static constexpr int64_t kArrayRenorm = 8;
+
+static void fuzz_arrays(Rng &rng) {
+  q_t qa[kArrayN], qb[kArrayN];
+  mf::float64x2 a[kArrayN], b[kArrayN];
+  mp_t ma[kArrayN], mb[kArrayN];
+  q_t max_a = 0, max_b = 0;
+
+  for (int k = 0; k < kArrayN; ++k) {
+    qa[k] = to_q(from_q(rng.narrow(rng.u(), rng.u())));
+    qb[k] = to_q(from_q(rng.narrow(rng.u(), rng.u())));
+    a[k] = from_q(qa[k]);
+    b[k] = from_q(qb[k]);
+    ma[k] = to_mp(a[k]);
+    mb[k] = to_mp(b[k]);
+    q_t aa = qa[k] < 0 ? -qa[k] : qa[k];
+    q_t ab = qb[k] < 0 ? -qb[k] : qb[k];
+    if (aa > max_a) max_a = aa;
+    if (ab > max_b) max_b = ab;
+  }
+
+  // arr_sum
+  {
+    mf::float64x2 acc_dd = a[0];
+    q_t acc_q = qa[0];
+    mp_t acc_mp = ma[0];
+    for (int k = 1; k < kArrayN; ++k) {
+      acc_dd = acc_dd + a[k];
+      acc_q = acc_q + qa[k];
+      acc_mp = acc_mp + ma[k];
+    }
+    check("arr_sum", acc_dd, acc_q, max_a, (q_t)0, acc_mp);
+  }
+
+  // arr_prod
+  {
+    mf::float64x2 acc_dd = a[0];
+    q_t acc_q = qa[0];
+    mp_t acc_mp = ma[0];
+    for (int k = 1; k < kArrayN; ++k) {
+      acc_dd = acc_dd * a[k];
+      acc_q = acc_q * qa[k];
+      acc_mp = acc_mp * ma[k];
+    }
+    q_t mag = max_a;
+    for (int k = 1; k < kArrayN; ++k) mag = mag * max_a;
+    check("arr_prod", acc_dd, acc_q, mag, (q_t)0, acc_mp);
+  }
+
+  // arr_max / arr_min — pick winners by qp comparison, copy DD/mp counterparts.
+  {
+    int idx_max = 0, idx_min = 0;
+    for (int k = 1; k < kArrayN; ++k) {
+      if (qa[k] > qa[idx_max]) idx_max = k;
+      if (qa[k] < qa[idx_min]) idx_min = k;
+    }
+    check("arr_max", a[idx_max], qa[idx_max], max_a, (q_t)0, ma[idx_max]);
+    check("arr_min", a[idx_min], qa[idx_min], max_a, (q_t)0, ma[idx_min]);
+  }
+
+  // arr_dot
+  {
+    mf::float64x2 acc_dd = a[0] * b[0];
+    q_t acc_q = qa[0] * qb[0];
+    mp_t acc_mp = ma[0] * mb[0];
+    for (int k = 1; k < kArrayN; ++k) {
+      acc_dd = acc_dd + a[k] * b[k];
+      acc_q = acc_q + qa[k] * qb[k];
+      acc_mp = acc_mp + ma[k] * mb[k];
+    }
+    q_t mag = max_a * max_b * (q_t)kArrayN;
+    check("arr_dot", acc_dd, acc_q, mag, (q_t)0, acc_mp);
+  }
+
+  // arr_norm2 = sqrt(dot(a, a))
+  {
+    mf::float64x2 acc_dd = a[0] * a[0];
+    q_t acc_q = qa[0] * qa[0];
+    mp_t acc_mp = ma[0] * ma[0];
+    for (int k = 1; k < kArrayN; ++k) {
+      acc_dd = acc_dd + a[k] * a[k];
+      acc_q = acc_q + qa[k] * qa[k];
+      acc_mp = acc_mp + ma[k] * ma[k];
+    }
+    mf::float64x2 res_dd = mf::sqrt(acc_dd);
+    q_t res_q = sqrtq(acc_q);
+    mp_t res_mp = mpfr::sqrt(acc_mp);
+    check("arr_norm2", res_dd, res_q, max_a, (q_t)0, res_mp);
+  }
+
+  // arr_matmul: 8x8 column-major matrix * 8-vector → 8-vector. Routes
+  // through the same matmuldd_mv C kernel that Fortran's matmul delegates
+  // to, so this row reflects the same algorithm path.
+  {
+    q_t qm[kArrayN * kArrayN];
+    mf::float64x2 m_arr[kArrayN * kArrayN];
+    mp_t mm_arr[kArrayN * kArrayN];
+    q_t max_m = 0;
+    for (int i = 0; i < kArrayN * kArrayN; ++i) {
+      qm[i] = to_q(from_q(rng.narrow(rng.u(), rng.u())));
+      m_arr[i] = from_q(qm[i]);
+      mm_arr[i] = to_mp(m_arr[i]);
+      q_t am = qm[i] < 0 ? -qm[i] : qm[i];
+      if (am > max_m) max_m = am;
+    }
+    mf::float64x2 y_dd[kArrayN];
+    matmuldd_mv(reinterpret_cast<float64x2 const *>(m_arr),
+                reinterpret_cast<float64x2 const *>(a),
+                reinterpret_cast<float64x2 *>(y_dd),
+                kArrayN, kArrayN, kArrayRenorm);
+    for (int row = 0; row < kArrayN; ++row) {
+      q_t y_q = (q_t)0;
+      mp_t y_mp = mp_t(0);
+      for (int col = 0; col < kArrayN; ++col) {
+        y_q = y_q + qm[col * kArrayN + row] * qa[col];
+        y_mp = y_mp + mm_arr[col * kArrayN + row] * ma[col];
+      }
+      q_t mag = max_m * max_a * (q_t)kArrayN;
+      check("arr_matmul", y_dd[row], y_q, mag, (q_t)0, y_mp);
+    }
+  }
+
+}
+
+// Separate matmul_mm/vm coverage. Uses its own rng so the presence of this
+// function doesn't perturb the main-loop scalar fuzz input distribution
+// (inputs are a, b vectors freshly drawn from `rng`, independent of main).
+static void fuzz_matmul_mm_vm_only(Rng &rng) {
+  q_t qa[kArrayN];
+  mf::float64x2 a[kArrayN];
+  mp_t ma[kArrayN];
+  q_t max_a = 0;
+  for (int k = 0; k < kArrayN; ++k) {
+    qa[k] = to_q(from_q(rng.narrow(rng.u(), rng.u())));
+    a[k] = from_q(qa[k]);
+    ma[k] = to_mp(a[k]);
+    q_t aa = qa[k] < 0 ? -qa[k] : qa[k];
+    if (aa > max_a) max_a = aa;
+  }
+
+  // mm: 8x8 × 8x8 → 8x8.
+  {
+    q_t qm[kArrayN * kArrayN], qn[kArrayN * kArrayN];
+    mf::float64x2 m_arr[kArrayN * kArrayN], n_arr[kArrayN * kArrayN];
+    mp_t mm_arr[kArrayN * kArrayN], mn_arr[kArrayN * kArrayN];
+    q_t max_m = 0, max_n = 0;
+    for (int i = 0; i < kArrayN * kArrayN; ++i) {
+      qm[i] = to_q(from_q(rng.narrow(rng.u(), rng.u())));
+      qn[i] = to_q(from_q(rng.narrow(rng.u(), rng.u())));
+      m_arr[i] = from_q(qm[i]);
+      n_arr[i] = from_q(qn[i]);
+      mm_arr[i] = to_mp(m_arr[i]);
+      mn_arr[i] = to_mp(n_arr[i]);
+      q_t am = qm[i] < 0 ? -qm[i] : qm[i];
+      q_t an = qn[i] < 0 ? -qn[i] : qn[i];
+      if (am > max_m) max_m = am;
+      if (an > max_n) max_n = an;
+    }
+    mf::float64x2 c_dd[kArrayN * kArrayN];
+    matmuldd_mm(reinterpret_cast<float64x2 const *>(m_arr),
+                reinterpret_cast<float64x2 const *>(n_arr),
+                reinterpret_cast<float64x2 *>(c_dd),
+                kArrayN, kArrayN, kArrayN, kArrayRenorm);
+    for (int row = 0; row < kArrayN; ++row) {
+      for (int col = 0; col < kArrayN; ++col) {
+        q_t cq = (q_t)0;
+        mp_t cmp = mp_t(0);
+        for (int p = 0; p < kArrayN; ++p) {
+          cq += qm[p * kArrayN + row] * qn[col * kArrayN + p];
+          cmp += mm_arr[p * kArrayN + row] * mn_arr[col * kArrayN + p];
+        }
+        q_t mag = max_m * max_n * (q_t)kArrayN;
+        check("arr_matmul_mm", c_dd[col * kArrayN + row], cq, mag, (q_t)0, cmp);
+      }
+    }
+  }
+
+  // vm: 8-vector × 8x8 → 8-vector.
+  {
+    q_t qm[kArrayN * kArrayN];
+    mf::float64x2 m_arr[kArrayN * kArrayN];
+    mp_t mm_arr[kArrayN * kArrayN];
+    q_t max_m = 0;
+    for (int i = 0; i < kArrayN * kArrayN; ++i) {
+      qm[i] = to_q(from_q(rng.narrow(rng.u(), rng.u())));
+      m_arr[i] = from_q(qm[i]);
+      mm_arr[i] = to_mp(m_arr[i]);
+      q_t am = qm[i] < 0 ? -qm[i] : qm[i];
+      if (am > max_m) max_m = am;
+    }
+    mf::float64x2 y_dd[kArrayN];
+    matmuldd_vm(reinterpret_cast<float64x2 const *>(a),
+                reinterpret_cast<float64x2 const *>(m_arr),
+                reinterpret_cast<float64x2 *>(y_dd),
+                kArrayN, kArrayN, kArrayRenorm);
+    for (int col = 0; col < kArrayN; ++col) {
+      q_t y_q = (q_t)0;
+      mp_t y_mp = mp_t(0);
+      for (int p = 0; p < kArrayN; ++p) {
+        y_q += qa[p] * qm[col * kArrayN + p];
+        y_mp += ma[p] * mm_arr[col * kArrayN + p];
+      }
+      q_t mag = max_a * max_m * (q_t)kArrayN;
+      check("arr_matmul_vm", y_dd[col], y_q, mag, (q_t)0, y_mp);
+    }
+  }
+}
+#endif  // USE_MPFR
+
 int main(int argc, char **argv) {
 #ifdef USE_MPFR
   // 100× smaller iteration default — mpreal ops are ~100× slower than qp.
@@ -781,6 +1072,19 @@ int main(int argc, char **argv) {
   }
   if (argc > 2) {
     seed = std::strtoull(argv[2], nullptr, 0);
+  }
+
+  // Once-per-run smoke: nan(tag) must produce a DD whose hi limb is NaN
+  // and whose lo limb is finite (canonicalized to 0 by the constructor).
+  {
+    mf::float64x2 nq = mf::nan("");
+    if (!std::isnan(nq.limbs[0]) || std::isnan(nq.limbs[1])) {
+      report_fail("nan", "expected (NaN, finite); got non-canonical pair");
+    }
+    mf::float64x2 nt = mf::nan("42");
+    if (!std::isnan(nt.limbs[0])) {
+      report_fail("nan", "tagged nan(\"42\") did not produce NaN");
+    }
   }
 
   Rng rng(seed);
@@ -825,8 +1129,116 @@ int main(int argc, char **argv) {
     CHK_IF(both_finite, "mul", f1 * f2, q1 * q2, q1, q2, m1 * m2);
     CHK_IF(both_finite && q2 != (q_t)0, "div", f1 / f2, q1 / q2, q1, q2, m1 / m2);
     CHK1_IF(sqrt, q_isfinite(q1) && q1 >= (q_t)0);
+    // C23 rsqrt(x) = 1/sqrt(x). Reference: 1/sqrtq(x) at qp precision.
+    // Gate: x > 0 finite (rsqrt(0) = +inf, rsqrt(<0) = NaN — IEEE specials
+    // are returned by the kernel directly, no rel-err to record).
+    CHK_IF(q_isfinite(q1) && q1 > (q_t)0, "rsqrt",
+           mf::rsqrt(f1), (q_t)1.0q / sqrtq(q1), q1, (q_t)0,
+           mp_t(1) / mpfr::sqrt(m1));
+    // cbrt: defined on all finite reals (including negatives). The qp
+    // reference cbrtq is the analogue of multifloats' Karp/Markstein
+    // refinement, and mpreal exposes cbrt via ADL.
+    CHK1_IF(cbrt, q_isfinite(q1));
     CHK("abs", mf::abs(f1), q1 < 0 ? -q1 : q1, q1, (q_t)0, mpfr::abs(m1));
     CHK("neg", -f1, -q1, q1, (q_t)0, -m1);
+
+    // fpclassify: integer return — both DD and qp inspect the hi-limb
+    // of their representation, so the classification must agree. libquadmath
+    // has no fpclassifyq, so reconstruct the qp class from its primitive
+    // predicates. The subnormal class differs between DD (|hi| < 2^-1022)
+    // and qp (|q| < ~3.4e-4932) — gate it out so subnormals never reach
+    // here as a false fail.
+    {
+      int dd_cls = mf::fpclassify(f1);
+      int qp_cls;
+      if (q_isnan(q1)) qp_cls = FP_NAN;
+      else if (!q_isfinite(q1)) qp_cls = FP_INFINITE;
+      else if (q1 == (q_t)0) qp_cls = FP_ZERO;
+      else qp_cls = FP_NORMAL;  // qp subnormals don't appear in our distribution
+      // DD says SUBNORMAL when |hi| < 2^-1022 — those samples skip this check.
+      if (dd_cls != FP_SUBNORMAL && dd_cls != qp_cls) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf),
+                      "dd_cls=%d qp_cls=%d  (q1=%s)", dd_cls, qp_cls, qstr(q1));
+        report_fail("fpclassify", buf);
+      }
+    }
+
+    // nextafter / nexttoward: deterministic invariants rather than max_rel
+    // (DD's step ≈ ulp(hi)·2⁻⁵³ doesn't match qp's 113-bit step). We assert
+    // the four properties: identity at equal inputs, strict ordering toward
+    // the target, monotonicity in y, and one-step round-trip.
+    if (q_isfinite(q1) && q_isfinite(q2) && q1 != q2) {
+      mf::float64x2 nA = mf::nextafter(f1, f2);
+      mf::float64x2 nT = mf::nexttoward(f1, f2);
+      bool ok =
+          mf::nextafter(f1, f1) == f1 &&
+          nA == nT &&
+          ((q1 < q2) ? (nA > f1 && nA <= f2)
+                     : (nA < f1 && nA >= f2)) &&
+          mf::nextafter(nA, f1) == f1;
+      if (!ok) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "q1=%s q2=%s nA=(%a, %a)", qstr(q1), qstr(q2),
+                      nA.limbs[0], nA.limbs[1]);
+        report_fail("nextafter", buf);
+      }
+    }
+
+    // C23 nextup / nextdown: equivalence to nextafter(x, ±inf). Property
+    // test (no max_rel) — DD step doesn't match qp step.
+    if (q_isfinite(q1)) {
+      mf::float64x2 up   = mf::nextup(f1);
+      mf::float64x2 down = mf::nextdown(f1);
+      mf::float64x2 inf_p( std::numeric_limits<double>::infinity());
+      mf::float64x2 inf_m(-std::numeric_limits<double>::infinity());
+      bool ok = (up   == mf::nextafter(f1, inf_p)) &&
+                (down == mf::nextafter(f1, inf_m)) &&
+                (up >= f1) && (down <= f1);
+      if (!ok) report_fail("nextup", "property failed");
+    }
+
+    // C23 metadata cluster — property tests (no max_rel column).
+    //   canonicalize(x) is the identity for finite DD.
+    //   iseqsig(a, b) ⇔ (a == b).
+    //   totalorder is a total preorder: trichotomy + transitivity-on-pairs.
+    //   getpayload/setpayload round-trip.
+    if (q_isfinite(q1)) {
+      mf::float64x2 c = mf::canonicalize(f1);
+      if (!(c == f1)) report_fail("canonicalize", "non-identity on finite");
+      if (mf::iseqsig(f1, f1) != true) report_fail("iseqsig", "x != x");
+      // totalorder must classify f1 vs itself as true (reflexive) and
+      // give consistent ordering with `<` on distinct finite values.
+      if (!mf::totalorder(f1, f1)) report_fail("totalorder", "reflex fail");
+      if (q_isfinite(q2) && q1 < q2 && !mf::totalorder(f1, f2))
+        report_fail("totalorder", "ordered pair miss");
+    }
+    // setpayload(0) round-trip: load 42, get back 42.
+    {
+      mf::float64x2 dst;
+      if (mf::setpayload(dst, mf::float64x2(42.0)) == 0) {
+        mf::float64x2 got = mf::getpayload(dst);
+        if (!(got == mf::float64x2(42.0)))
+          report_fail("setpayload", "round-trip mismatch");
+      }
+    }
+
+    // C23 fromfp / ufromfp / fromfpx / ufromfpx — round-to-int with
+    // overflow detection. Property test: fromfp(x, FE_TONEAREST, 64)
+    // must agree with llrint(x) inside the gate where llrint is
+    // exactly representable.
+    if (q_isfinite(q1) && aq1 < (q_t)1e15q) {
+      intmax_t iv = mf::fromfp(f1, FE_TONEAREST, 64);
+      long long lv = mf::llrint(f1);
+      if (iv != static_cast<intmax_t>(lv))
+        report_fail("fromfp", "FE_TONEAREST mismatch with llrint");
+      if (q1 >= (q_t)0) {
+        uintmax_t uv = mf::ufromfp(f1, FE_TONEAREST, 64);
+        if (uv != static_cast<uintmax_t>(lv))
+          report_fail("ufromfp", "FE_TONEAREST mismatch with llrint");
+      }
+    }
     CHK1_IF(trunc, q_isfinite(q1) && aq1 < (q_t)1e15q);
     CHK1_IF(round, q_isfinite(q1) && aq1 < (q_t)1e15q);
     // floor/ceil share trunc/round's magnitude gate: beyond 2^52 ≈ 4.5e15
@@ -844,6 +1256,12 @@ int main(int argc, char **argv) {
            to_mp(nearbyintq(q1)));
     CHK_IF(q_isfinite(q1) && aq1 < (q_t)1e15q, "rint",
            mf::rint(f1), rintq(q1), q1, (q_t)0, to_mp(rintq(q1)));
+    // C23 roundeven: ties-to-even regardless of FE rounding mode. qp
+    // oracle: nearbyint with current rounding mode (the harness runs
+    // under the default FE_TONEAREST so they match).
+    CHK_IF(q_isfinite(q1) && aq1 < (q_t)1e15q, "roundeven",
+           mf::roundeven(f1), nearbyintq(q1), q1, (q_t)0,
+           to_mp(nearbyintq(q1)));
 
     // Integer-rounding ops (return long / long long). Gate at 2^50 ≈ 1e15
     // so the cast (long) → double in the adapter is exact (long has up to
@@ -852,8 +1270,8 @@ int main(int argc, char **argv) {
     if (q_isfinite(q1) && aq1 < (q_t)1e15q) {
       auto dd_of_llong = [](long long v) {
         mf::float64x2 r;
-        r._limbs[0] = (double)v;
-        r._limbs[1] = 0.0;
+        r.limbs[0] = (double)v;
+        r.limbs[1] = 0.0;
         return r;
       };
       CHK("lround",  dd_of_llong(mf::lround(f1)),
@@ -876,9 +1294,17 @@ int main(int argc, char **argv) {
            mf::logb(f1), logbq(q1), q1, (q_t)0, to_mp(logbq(q1)));
     if (q_isfinite(q1) && q1 != (q_t)0) {
       mf::float64x2 ilogb_dd;
-      ilogb_dd._limbs[0] = (double)mf::ilogb(f1);
-      ilogb_dd._limbs[1] = 0.0;
+      ilogb_dd.limbs[0] = (double)mf::ilogb(f1);
+      ilogb_dd.limbs[1] = 0.0;
       CHK("ilogb", ilogb_dd, (q_t)ilogbq(q1), q1, (q_t)0,
+          mp_t((long long)ilogbq(q1)));
+      // C23 llogb: long version of ilogb. Same value range, just wider
+      // return type — DD inputs span exponents in roughly [-1074, 1023]
+      // so all fit in int already; the column is a presence test.
+      mf::float64x2 llogb_dd;
+      llogb_dd.limbs[0] = (double)mf::llogb(f1);
+      llogb_dd.limbs[1] = 0.0;
+      CHK("llogb", llogb_dd, (q_t)ilogbq(q1), q1, (q_t)0,
           mp_t((long long)ilogbq(q1)));
     }
 
@@ -894,6 +1320,96 @@ int main(int argc, char **argv) {
           (q_t)d1, q2, to_mp(d1) * m2);
       CHK2(fmin);
       CHK2(fmax);
+      // C23 fmaximum/fminimum (NaN-propagating) and *_num (NaN-quiet)
+      // qp references. libquadmath has no q-suffixed C23 variants, so the
+      // reference is open-coded against q_t. Signed-zero pinning matches
+      // the multifloats DD definitions.
+      {
+        auto qp_fmaximum = [](q_t a, q_t b) -> q_t {
+          if (q_isnan(a) || q_isnan(b)) return (q_t)(0.0/0.0);
+          if (a == 0 && b == 0)
+            return (signbitq(a) && signbitq(b)) ? (q_t)-0.0 : (q_t)+0.0;
+          return a < b ? b : a;
+        };
+        auto qp_fminimum = [](q_t a, q_t b) -> q_t {
+          if (q_isnan(a) || q_isnan(b)) return (q_t)(0.0/0.0);
+          if (a == 0 && b == 0)
+            return (signbitq(a) || signbitq(b)) ? (q_t)-0.0 : (q_t)+0.0;
+          return a < b ? a : b;
+        };
+        auto qp_fmaximum_num = [&](q_t a, q_t b) -> q_t {
+          bool an = q_isnan(a), bn = q_isnan(b);
+          if (an && bn) return (q_t)(0.0/0.0);
+          if (an) return b;
+          if (bn) return a;
+          if (a == 0 && b == 0)
+            return (signbitq(a) && signbitq(b)) ? (q_t)-0.0 : (q_t)+0.0;
+          return a < b ? b : a;
+        };
+        auto qp_fminimum_num = [&](q_t a, q_t b) -> q_t {
+          bool an = q_isnan(a), bn = q_isnan(b);
+          if (an && bn) return (q_t)(0.0/0.0);
+          if (an) return b;
+          if (bn) return a;
+          if (a == 0 && b == 0)
+            return (signbitq(a) || signbitq(b)) ? (q_t)-0.0 : (q_t)+0.0;
+          return a < b ? a : b;
+        };
+        // mpreal has no fmaximum/_num either; reuse our qp reference under
+        // MP_PARAM by lifting qp result through to_mp (lossless, since our
+        // result is one of the inputs or qNaN).
+        CHK("fmaximum",     mf::fmaximum(f1, f2),     qp_fmaximum(q1, q2),     q1, q2,
+            to_mp(qp_fmaximum(q1, q2)));
+        CHK("fminimum",     mf::fminimum(f1, f2),     qp_fminimum(q1, q2),     q1, q2,
+            to_mp(qp_fminimum(q1, q2)));
+        CHK("fmaximum_num", mf::fmaximum_num(f1, f2), qp_fmaximum_num(q1, q2), q1, q2,
+            to_mp(qp_fmaximum_num(q1, q2)));
+        CHK("fminimum_num", mf::fminimum_num(f1, f2), qp_fminimum_num(q1, q2), q1, q2,
+            to_mp(qp_fminimum_num(q1, q2)));
+
+        // C23 by-magnitude variants. Same NaN / signed-zero rules; the
+        // tie-break on |a|==|b| is the canonical (non-mag) helper.
+        auto qp_mag_max = [&](q_t a, q_t b) -> q_t {
+          if (q_isnan(a) || q_isnan(b)) return (q_t)(0.0/0.0);
+          q_t aa = a < 0 ? -a : a, ab = b < 0 ? -b : b;
+          if (aa > ab) return a;
+          if (aa < ab) return b;
+          return qp_fmaximum(a, b);
+        };
+        auto qp_mag_min = [&](q_t a, q_t b) -> q_t {
+          if (q_isnan(a) || q_isnan(b)) return (q_t)(0.0/0.0);
+          q_t aa = a < 0 ? -a : a, ab = b < 0 ? -b : b;
+          if (aa < ab) return a;
+          if (aa > ab) return b;
+          return qp_fminimum(a, b);
+        };
+        auto qp_mag_max_num = [&](q_t a, q_t b) -> q_t {
+          bool an = q_isnan(a), bn = q_isnan(b);
+          if (an && bn) return (q_t)(0.0/0.0);
+          if (an) return b; if (bn) return a;
+          q_t aa = a < 0 ? -a : a, ab = b < 0 ? -b : b;
+          if (aa > ab) return a;
+          if (aa < ab) return b;
+          return qp_fmaximum(a, b);
+        };
+        auto qp_mag_min_num = [&](q_t a, q_t b) -> q_t {
+          bool an = q_isnan(a), bn = q_isnan(b);
+          if (an && bn) return (q_t)(0.0/0.0);
+          if (an) return b; if (bn) return a;
+          q_t aa = a < 0 ? -a : a, ab = b < 0 ? -b : b;
+          if (aa < ab) return a;
+          if (aa > ab) return b;
+          return qp_fminimum(a, b);
+        };
+        CHK("fmaximum_mag",     mf::fmaximum_mag(f1, f2),     qp_mag_max(q1, q2),     q1, q2,
+            to_mp(qp_mag_max(q1, q2)));
+        CHK("fminimum_mag",     mf::fminimum_mag(f1, f2),     qp_mag_min(q1, q2),     q1, q2,
+            to_mp(qp_mag_min(q1, q2)));
+        CHK("fmaximum_mag_num", mf::fmaximum_mag_num(f1, f2), qp_mag_max_num(q1, q2), q1, q2,
+            to_mp(qp_mag_max_num(q1, q2)));
+        CHK("fminimum_mag_num", mf::fminimum_mag_num(f1, f2), qp_mag_min_num(q1, q2), q1, q2,
+            to_mp(qp_mag_min_num(q1, q2)));
+      }
       CHK2(copysign);
       CHK2(fdim);
       CHK2(hypot);
@@ -904,11 +1420,70 @@ int main(int argc, char **argv) {
       // fmadd(a, b, c) = a·b + c. Use d1 as the third input (DD-
       // representable) so the qp reference is exactly fmaq(q1, q2, d1).
       CHK("fmadd",
-          mf::float64x2(::fmadd(
-              static_cast<float64x2_t>(f1),
-              static_cast<float64x2_t>(f2),
-              static_cast<float64x2_t>(mf::float64x2(d1)))),
+          mf::float64x2(fmadd(
+              static_cast<float64x2>(f1),
+              static_cast<float64x2>(f2),
+              static_cast<float64x2>(mf::float64x2(d1)))),
           fmaq(q1, q2, (q_t)d1), q1, q2, mpfr::fma(m1, m2, to_mp(d1)));
+      // The C++-named `multifloats::fma` overload routes through the same
+      // DD x*y+z path and must match fmadd to within the same tolerance.
+      // Pinning the public name catches a future refactor that diverges
+      // the C ABI symbol from the C++ overload.
+      CHK("fma_cxx",
+          mf::fma(f1, f2, mf::float64x2(d1)),
+          fmaq(q1, q2, (q_t)d1), q1, q2, mpfr::fma(m1, m2, to_mp(d1)));
+
+      // lerp: C++20 endpoint-exact a + t*(b - a). Use d1 ∈ [-1, 1]-ish
+      // as the interpolant (DD-representable scalar t) so the qp
+      // reference parses cleanly as `q1 + (q_t)d1 * (q2 - q1)`.
+      // Endpoint exactness is implicit — sweeping t == 0 / t == 1
+      // explicitly would need its own branch and is covered by the
+      // C++20 contract reading test/test.cc.
+      CHK("lerp",
+          mf::lerp(f1, f2, mf::float64x2(d1)),
+          q1 + (q_t)d1 * (q2 - q1),
+          q1, q2, mpfr::lerp(m1, m2, to_mp(d1)));
+
+      // modulo: same gate as fmod (`q2 != 0 && |q1| < 1e20 && |q2| > 1e-20`).
+      // Definition: fmod-style remainder but sign-corrected so the result
+      // takes y's sign — Python's `%` semantics, not C's. The mpfr wrapper
+      // above mirrors exactly the multifloats branch.
+      // Hoist the qp reference so the comma-rich Python-mod expression
+      // doesn't tangle with the CHK macro's argument splitting.
+      q_t modulo_ref = fmodq(q1, q2);
+      if (modulo_ref != (q_t)0 &&
+          (signbitq(modulo_ref) != 0) != (signbitq(q2) != 0)) {
+        modulo_ref = modulo_ref + q2;
+      }
+      CHK_IF(q2 != (q_t)0 && aq1 < (q_t)1e20q && aq2 > (q_t)1e-20q,
+             "modulo",
+             mf::modulo(f1, f2),
+             modulo_ref,
+             q1, q2, mpfr::modulo(m1, m2));
+
+      // remainder / remquo: IEEE-754 round-half-to-even remainder.
+      // Stricter input gate than fmod because the round(x/y) step's
+      // amplification fails for very small |y|.
+      CHK2_IF(remainder, q2 != (q_t)0 && aq1 < (q_t)1e20q && aq2 > (q_t)1e-20q);
+      if (q2 != (q_t)0 && aq1 < (q_t)1e20q && aq2 > (q_t)1e-20q) {
+        int dd_quo = 0;
+        mf::float64x2 dd_rem = mf::remquo(f1, f2, &dd_quo);
+        // mpreal lacks remquo; compose by hand at MP precision.
+        CHK("remquo",
+            dd_rem, remainderq(q1, q2),
+            q1, q2, m1 - mpfr::round(m1 / m2) * m2);
+        // Quotient sanity: the round-to-nearest of x/y must agree
+        // (gated to small magnitudes so the int cast doesn't overflow).
+        if (aq1 / aq2 < (q_t)1e9q) {
+          int qp_quo = (int)std::round((double)(q1 / q2));
+          if (dd_quo != qp_quo) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf),
+                          "dd_quo=%d qp_quo=%d", dd_quo, qp_quo);
+            report_fail("remquo.q", buf);
+          }
+        }
+      }
     }
 
     // Periodic (every 100): transcendentals.
@@ -920,6 +1495,45 @@ int main(int argc, char **argv) {
       CHK1_IF(log1p, q_isfinite(q1) && q1 > (q_t)-1);
       CHK1_IF(exp2,  q_isfinite(q1) && q_isfinite(exp2q(q1)));
       CHK1_IF(log2,  q_isfinite(q1) && q1 > (q_t)0);
+      // exp10 oracle: 10^q via libquadmath's powq.
+      {
+        q_t exp10_ref = powq((q_t)10, q1);
+        CHK_IF(q_isfinite(q1) && q_isfinite(exp10_ref),
+               "exp10", mf::exp10(f1), exp10_ref, q1, (q_t)0,
+               mpfr::pow(mpfr::mpreal(10), m1));
+        // C23 exp2m1 / exp10m1 — 2^x − 1, 10^x − 1. We can't use
+        // `exp2q(x) - 1` / `powq(10, x) - 1` as oracles because
+        // libquadmath's exp2q / powq lose ~1% relative precision when
+        // |x| ≲ 1e-30 (the result is correct to qp ulp absolutely, but
+        // reaches its small-x floor of ~1e-34 — the dominant Taylor term
+        // x·ln(base) below that floor is plain wrong). Use the
+        // cancellation-free identities `expm1q(x · ln(base))` instead;
+        // libquadmath's expm1q is precise across the small-x range.
+        q_t ln2_q  = (q_t)0.6931471805599453094172321214581765680755q;
+        q_t ln10_q = (q_t)2.3025850929940456840179914546843642076011q;
+        q_t exp2m1_ref  = expm1q(q1 * ln2_q);
+        q_t exp10m1_ref = expm1q(q1 * ln10_q);
+        CHK_IF(q_isfinite(q1) && q_isfinite(exp2q(q1)),
+               "exp2m1", mf::exp2m1(f1), exp2m1_ref, q1, (q_t)0,
+               mpfr::exp2(m1) - mp_t(1));
+        CHK_IF(q_isfinite(q1) && q_isfinite(exp10_ref),
+               "exp10m1", mf::exp10m1(f1), exp10m1_ref, q1, (q_t)0,
+               mpfr::pow(mpfr::mpreal(10), m1) - mp_t(1));
+        // log2p1 / log10p1: log2(1+x), log10(1+x). For |x| small, the
+        // identity `log1pq(x) · log2(e)` (resp. `… · log10(e)`) is the
+        // precision-safe form; libquadmath's log2q(1+x) and log10q(1+x)
+        // hit the same near-1 ulp floor that motivates log1p existing.
+        q_t log2_e_q  = (q_t)1.4426950408889634073599246810018921374267q;
+        q_t log10_e_q = (q_t)0.4342944819032518276511289189166050822944q;
+        q_t log2p1_ref  = log1pq(q1) * log2_e_q;
+        q_t log10p1_ref = log1pq(q1) * log10_e_q;
+        CHK_IF(q_isfinite(q1) && q1 > (q_t)-1,
+               "log2p1", mf::log2p1(f1), log2p1_ref, q1, (q_t)0,
+               mpfr::log2(mp_t(1) + m1));
+        CHK_IF(q_isfinite(q1) && q1 > (q_t)-1,
+               "log10p1", mf::log10p1(f1), log10p1_ref, q1, (q_t)0,
+               mpfr::log10(mp_t(1) + m1));
+      }
 
       // Trig: keep magnitudes moderate.
       if (q_isfinite(q1) && aq1 < (q_t)1e6q) {
@@ -928,13 +1542,39 @@ int main(int argc, char **argv) {
         CHK1_IF(tan, fabsq(cosq(q1)) > (q_t)1e-12q);
 
         // Fused sincos: one range-reduction feeds both outputs.
-        float64x2_t sc_s, sc_c;
-        ::sincosdd(static_cast<float64x2_t>(f1), &sc_s, &sc_c);
+        float64x2 sc_s, sc_c;
+        sincosdd(static_cast<float64x2>(f1), &sc_s, &sc_c);
         CHK("sincos_s", mf::float64x2(sc_s), sinq(q1),
             q1, (q_t)0, mpfr::sin(m1));
         CHK("sincos_c", mf::float64x2(sc_c), cosq(q1),
             q1, (q_t)0, mpfr::cos(m1));
       }
+
+      // Trig at huge arguments: |x| in [1e6, 1e15]. The Cody-Waite + π/8
+      // split range reduction is supposed to hold full DD precision up
+      // to ~2^55 ≈ 3.6e16. Without this bucket, the random distribution
+      // (10^±30 magnitude) almost never lands in this regime, and the
+      // |x|<1e6 gate above explicitly excludes it from the headline trig
+      // stat. Sample every 4 iterations to amortize cost without
+      // dominating the run.
+#ifdef USE_MPFR
+      if ((i & 3) == 0 && q_isfinite(q1) && aq1 > (q_t)1e-3q && aq1 < (q_t)1) {
+        // Synthesize q_huge = q1 * 2^scale, scale ∈ {20, 30, 40, 50},
+        // covering 10^6 .. 10^15. Multiply is exact (power of two).
+        int scales[4] = {20, 30, 40, 50};
+        int scale = scales[(unsigned)(i >> 2) & 3];
+        q_t q_huge = scalbnq(q1, scale);
+        if (fabsq(q_huge) < (q_t)1e15q) {
+          mf::float64x2 f_huge =
+              mf::scalbn(f1, scale);  // exact in DD too
+          mp_t m_huge = scalbn(m1, scale);
+          CHK("sin_huge", mf::sin(f_huge), sinq(q_huge),
+              q_huge, (q_t)0, mpfr::sin(m_huge));
+          CHK("cos_huge", mf::cos(f_huge), cosq(q_huge),
+              q_huge, (q_t)0, mpfr::cos(m_huge));
+        }
+      }
+#endif
       CHK1_IF(asin, q_isfinite(q1) && aq1 <= (q_t)1);
       CHK1_IF(acos, q_isfinite(q1) && aq1 <= (q_t)1);
       CHK1_IF(atan, q_isfinite(q1));
@@ -945,8 +1585,8 @@ int main(int argc, char **argv) {
         CHK1(tanh);
 
         // Fused sinhcosh.
-        float64x2_t hc_s, hc_c;
-        ::sinhcoshdd(static_cast<float64x2_t>(f1), &hc_s, &hc_c);
+        float64x2 hc_s, hc_c;
+        sinhcoshdd(static_cast<float64x2>(f1), &hc_s, &hc_c);
         CHK("sinhcosh_s", mf::float64x2(hc_s), sinhq(q1),
             q1, (q_t)0, mpfr::sinh(m1));
         CHK("sinhcosh_c", mf::float64x2(hc_c), coshq(q1),
@@ -977,8 +1617,8 @@ int main(int argc, char **argv) {
       // amplification, so full-DD tolerance holds here (unlike forward
       // sin/cos/tanpi — see is_pi_trig).
       CHK("atan2pi",
-          mf::float64x2(::atan2pidd(
-              static_cast<float64x2_t>(f1), static_cast<float64x2_t>(f2))),
+          mf::float64x2(atan2pidd(
+              static_cast<float64x2>(f1), static_cast<float64x2>(f2))),
           atan2q(q1, q2) / (q_t)M_PIq,
           q1, q2,
           mpfr::atan2(m1, m2) / mpfr::const_pi(multifloats_test::kMpfrPrec));
@@ -992,10 +1632,97 @@ int main(int argc, char **argv) {
             q1, (q_t)d2, mpfr::pow(m1, to_mp(d2)));
         CHK("pow_dm", mf::pow(mf::float64x2(d1), f2), powq((q_t)d1, q2),
             (q_t)d1, q2, mpfr::pow(to_mp(d1), m2));
+        // C23 powr: pow restricted to x >= 0. Same oracle as pow inside
+        // the strict domain (the gate above already guarantees q1 > 0).
+        CHK("powr", mf::powr(f1, f2), powq(q1, q2), q1, q2, mpfr::pow(m1, m2));
+        // C23 rootn: x^(1/n). Use small odd n so DD precision is meaningful
+        // and the negative-x path is reachable. Reference: x^(1/n) at qp.
+        for (int n : {3, 5, -3, -5}) {
+          q_t inv_n = (q_t)1 / (q_t)n;
+          q_t res_q = powq(q1, inv_n);
+          q_t a_res = res_q < 0 ? -res_q : res_q;
+          if (q_isfinite(res_q) && a_res > (q_t)1e-300q && a_res < (q_t)1e300q) {
+            CHK("rootn", mf::rootn(f1, n), res_q, q1, (q_t)n,
+                mpfr::pow(m1, mp_t(1) / to_mp((double)n)));
+          }
+        }
+        // C23 compoundn: (1+x)^n. Gate q1 ∈ (-1, 100) so result stays
+        // representable. Reference: powq(1+q1, n).
+        if (q1 > (q_t)-1 && q1 < (q_t)100) {
+          for (int n : {1, 2, 5, 10, -3}) {
+            q_t res_q = powq((q_t)1 + q1, (q_t)n);
+            q_t a_res = res_q < 0 ? -res_q : res_q;
+            if (q_isfinite(res_q) && a_res > (q_t)1e-300q && a_res < (q_t)1e300q) {
+              CHK("compoundn", mf::compoundn(f1, n), res_q, q1, (q_t)n,
+                  mpfr::pow(mp_t(1) + m1, to_mp((double)n)));
+            }
+          }
+        }
+
+#ifdef USE_MPFR
+        // pow = exp2(y·log2(x)) decomposition diagnostic. Three stat
+        // rows isolate each stage so we can see which one dominates the
+        // observed `pow` ulp floor:
+        //   pow_diag_log2  — mf::log2 vs mpfr::log2 (the A leg alone)
+        //   pow_diag_exp2  — mf::exp2 on a DD-rounded exact y·log2(x)
+        //                    (the C leg alone)
+        //   pow_diag_nomul — same DD-rounded input through exp2, vs
+        //                    mpfr::pow(x,y) directly (A+C with a
+        //                    correctly-rounded mul intermediate)
+        // If pow's max_rel ≫ pow_diag_nomul, the multiply is the
+        // bottleneck. If pow ≈ nomul, the mul is fine and the A+C
+        // kernels set the ceiling.
+        CHK("pow_diag_log2", mf::log2(f1), log2q(q1),
+            q1, (q_t)0, mpfr::log2(m1));
+
+        // Correctly-rounded-to-DD version of y · log2(x): compute at
+        // 200-bit, then split into (hi, lo) via round-to-nearest.
+        mp_t P_exact = mpfr::log2(m1) * m2;
+        if (mp_isfinite(P_exact)) {
+          double P_hi = P_exact.toDouble();
+          double P_lo = 0.0;
+          if (std::isfinite(P_hi)) {
+            P_lo = (P_exact - mp_t(P_hi)).toDouble();
+          }
+          mf::float64x2 P_dd;
+          P_dd.limbs[0] = P_hi;
+          P_dd.limbs[1] = P_lo;
+          q_t P_q = to_q(P_dd);
+          CHK("pow_diag_exp2", mf::exp2(P_dd), exp2q(P_q),
+              P_q, (q_t)0, mpfr::exp2(to_mp(P_q)));
+          CHK("pow_diag_nomul", mf::exp2(P_dd), powq(q1, q2),
+              q1, q2, mpfr::pow(m1, m2));
+        }
+#endif
       }
-      CHK_IF(q_isfinite(q1) && aq1 < (q_t)1e10q, "pow_int",
-             mf::pow(f1, mf::float64x2(3.0)), powq(q1, (q_t)3),
-             q1, (q_t)3, mpfr::pow(m1, to_mp(3.0)));
+      // Vary the integer exponent across iterations so we exercise the
+      // repeated-squaring path with a mix of positive/negative/odd/even
+      // exponents (was hard-coded at n=3, missing the integer-fast-path
+      // and negative-base regressions). Skip n=0 (trivially 1). Restrict
+      // |q1|^|n| to stay within normal double range — denormal results
+      // cliff DD precision below the 1e-26 full-DD tolerance bound.
+      {
+        static const int kPowInts[] = {1, 2, 3, 5, 7, 10, 17, 30,
+                                       -1, -2, -3, -5, -10, -17};
+        int n = kPowInts[(unsigned)i % (sizeof(kPowInts)/sizeof(int))];
+        if (q_isfinite(q1) && aq1 > (q_t)1e-9q && aq1 < (q_t)1e9q) {
+          q_t res_q = powq(q1, (q_t)n);
+          // Skip when the math result is denormal/Inf — DD can't carry full
+          // 1e-26 relative error there (subnormal cliff).
+          q_t a_res = res_q < 0 ? -res_q : res_q;
+          if (q_isfinite(res_q) && a_res > (q_t)1e-300q && a_res < (q_t)1e300q) {
+            CHK("pow_int",
+                mf::pow(f1, mf::float64x2((double)n)), res_q,
+                q1, (q_t)n, mpfr::pow(m1, to_mp((double)n)));
+            // C23 pown: same kernel as powi, separate row so coverage
+            // shows the C23 spelling lives in the header. Forwards to
+            // powi at compile time.
+            CHK("pown",
+                mf::pown(f1, n), res_q,
+                q1, (q_t)n, mpfr::pow(m1, to_mp((double)n)));
+          }
+        }
+      }
 
       // scalbn(x, 5) = x · 2^5; the ·32 is exact at any precision.
       CHK_IF(q_isfinite(q1), "scalbn", mf::scalbn(f1, 5), scalbnq(q1, 5),
@@ -1018,8 +1745,8 @@ int main(int argc, char **argv) {
         q_t fr_q = frexpq(q1, &e_q);
         CHK("frexp.frac", fr_mf, fr_q, q1, (q_t)0, to_mp(fr_q));
         mf::float64x2 eint_mf;
-        eint_mf._limbs[0] = (double)e_mf;
-        eint_mf._limbs[1] = 0.0;
+        eint_mf.limbs[0] = (double)e_mf;
+        eint_mf.limbs[1] = 0.0;
         CHK("frexp.exp", eint_mf, (q_t)e_q, q1, (q_t)0,
             mp_t((long long)e_q));
       }
@@ -1063,37 +1790,47 @@ int main(int argc, char **argv) {
       // where the two implementations can disagree by more than the kernel
       // error alone.
       if (q_isfinite(q1) && aq1 < (q_t)200) {
-        CHK("bj0", mf::float64x2(::j0dd(static_cast<float64x2_t>(f1))),
+        CHK("bj0", mf::float64x2(j0dd(static_cast<float64x2>(f1))),
             j0q(q1), q1, (q_t)0, mpfr::besselj0(m1));
-        CHK("bj1", mf::float64x2(::j1dd(static_cast<float64x2_t>(f1))),
+        CHK("bj1", mf::float64x2(j1dd(static_cast<float64x2>(f1))),
             j1q(q1), q1, (q_t)0, mpfr::besselj1(m1));
 
         static constexpr int kBesselOrders[] = {2, 3, 5, 8};
         for (int n : kBesselOrders) {
           CHK("bjn",
-              mf::float64x2(::jndd(n, static_cast<float64x2_t>(f1))),
+              mf::float64x2(jndd(n, static_cast<float64x2>(f1))),
               jnq(n, q1), q1, (q_t)n, mpfr::besseljn((long)n, m1));
           CHK_IF(q1 > (q_t)0, "byn",
-                 mf::float64x2(::yndd(n, static_cast<float64x2_t>(f1))),
+                 mf::float64x2(yndd(n, static_cast<float64x2>(f1))),
                  ynq(n, q1), q1, (q_t)n, mpfr::besselyn((long)n, m1));
         }
 
         if (q1 > (q_t)0) {
-          CHK("by0", mf::float64x2(::y0dd(static_cast<float64x2_t>(f1))),
+          CHK("by0", mf::float64x2(y0dd(static_cast<float64x2>(f1))),
               y0q(q1), q1, (q_t)0, mpfr::bessely0(m1));
-          CHK("by1", mf::float64x2(::y1dd(static_cast<float64x2_t>(f1))),
+          CHK("by1", mf::float64x2(y1dd(static_cast<float64x2>(f1))),
               y1q(q1), q1, (q_t)0, mpfr::bessely1(m1));
 
           // yndd_range: single forward-recurrence sweep filling out[0..5].
           // Each output is compared individually against ynq(n, x). One
           // label "yn_range" covers all six so the stat row aggregates
           // error across the entire range sweep.
-          float64x2_t yn_out[6];
-          ::yndd_range(0, 5, static_cast<float64x2_t>(f1), yn_out);
+          float64x2 yn_out[6];
+          yndd_range(0, 5, static_cast<float64x2>(f1), yn_out);
           for (int n = 0; n <= 5; ++n)
             CHK("yn_range",
                 mf::float64x2(yn_out[n]), ynq(n, q1),
                 q1, (q_t)n, mpfr::besselyn((long)n, m1));
+
+          // jndd_range: same idea but for J. The kernel internally loops
+          // over jndd, so this exercises the n=0..5 sweep path that was
+          // previously only hit one n at a time via CHK("bjn", ...).
+          float64x2 jn_out[6];
+          jndd_range(0, 5, static_cast<float64x2>(f1), jn_out);
+          for (int n = 0; n <= 5; ++n)
+            CHK("jn_range",
+                mf::float64x2(jn_out[n]), jnq(n, q1),
+                q1, (q_t)n, mpfr::besseljn((long)n, m1));
         }
       }
 
@@ -1109,30 +1846,30 @@ int main(int argc, char **argv) {
         // sinpi fails near integer x (sin(π·n)=0); cospi fails near
         // half-integer (cos(π·(n+1/2))=0). Gate each on its own magnitude.
         CHK_IF(fabsq(sp) > (q_t)1e-10q, "sinpi",
-               mf::float64x2(::sinpidd(static_cast<float64x2_t>(f1))),
+               mf::float64x2(sinpidd(static_cast<float64x2>(f1))),
                sp, q1, (q_t)0,
                mpfr::sin(mpfr::const_pi(multifloats_test::kMpfrPrec) * m1));
         CHK_IF(fabsq(cp) > (q_t)1e-10q, "cospi",
-               mf::float64x2(::cospidd(static_cast<float64x2_t>(f1))),
+               mf::float64x2(cospidd(static_cast<float64x2>(f1))),
                cp, q1, (q_t)0,
                mpfr::cos(mpfr::const_pi(multifloats_test::kMpfrPrec) * m1));
         CHK_IF(fabsq(cp) > (q_t)1e-10q && fabsq(sp) > (q_t)1e-10q, "tanpi",
-               mf::float64x2(::tanpidd(static_cast<float64x2_t>(f1))),
+               mf::float64x2(tanpidd(static_cast<float64x2>(f1))),
                sp / cp, q1, (q_t)0,
                mpfr::tan(mpfr::const_pi(multifloats_test::kMpfrPrec) * m1));
       }
       if (q_isfinite(q1) && aq1 <= (q_t)1) {
         CHK("asinpi",
-            mf::float64x2(::asinpidd(static_cast<float64x2_t>(f1))),
+            mf::float64x2(asinpidd(static_cast<float64x2>(f1))),
             asinq(q1) / (q_t)M_PIq, q1, (q_t)0,
             mpfr::asin(m1) / mpfr::const_pi(multifloats_test::kMpfrPrec));
         CHK("acospi",
-            mf::float64x2(::acospidd(static_cast<float64x2_t>(f1))),
+            mf::float64x2(acospidd(static_cast<float64x2>(f1))),
             acosq(q1) / (q_t)M_PIq, q1, (q_t)0,
             mpfr::acos(m1) / mpfr::const_pi(multifloats_test::kMpfrPrec));
       }
       CHK_IF(q_isfinite(q1), "atanpi",
-             mf::float64x2(::atanpidd(static_cast<float64x2_t>(f1))),
+             mf::float64x2(atanpidd(static_cast<float64x2>(f1))),
              atanq(q1) / (q_t)M_PIq, q1, (q_t)0,
              mpfr::atan(m1) / mpfr::const_pi(multifloats_test::kMpfrPrec));
 
@@ -1151,8 +1888,8 @@ int main(int argc, char **argv) {
           mf::float64x2 fr2 = from_q(zr2), fi2 = from_q(zi2);
           q_t qr1 = to_q(fr1), qi1 = to_q(fi1);
           q_t qr2 = to_q(fr2), qi2 = to_q(fi2);
-          complex64x2_t zd1 = to_cdd(fr1, fi1);
-          complex64x2_t zd2 = to_cdd(fr2, fi2);
+          complex64x2 zd1 = to_cdd(fr1, fi1);
+          complex64x2 zd2 = to_cdd(fr2, fi2);
           __complex128 zq1 = to_cq(qr1, qi1);
           __complex128 zq2 = to_cq(qr2, qi2);
           MP_STMT(CMp zm1 = {to_mp(fr1), to_mp(fi1)});
@@ -1168,9 +1905,9 @@ int main(int argc, char **argv) {
           CHK_C2(mul);
           CHK_C2_IF(div, mag2 > (q_t)0);
           CHK("cabs",
-              mf::float64x2(::cabsdd(zd1)), cabsq(zq1),
+              mf::float64x2(cabsdd(zd1)), cabsq(zq1),
               mag, (q_t)0, cabsmp(zm1));
-          CHK("cconjg", ::conjdd(zd1), conjq(zq1), mag, (q_t)0,
+          CHK("cconjg", conjdd(zd1), conjq(zq1), mag, (q_t)0,
               cconjgmp(zm1));
 
           CHK_C1(sqrt);
@@ -1183,7 +1920,7 @@ int main(int argc, char **argv) {
           // CHK's variadic tail.
           if (mag1 > (q_t)1e-5q) {
             __complex128 one_c; __real__ one_c = (q_t)1; __imag__ one_c = (q_t)0;
-            CHK("cexpm1", ::cexpm1dd(zd1), cexpq(zq1) - one_c, mag, (q_t)0,
+            CHK("cexpm1", cexpm1dd(zd1), cexpq(zq1) - one_c, mag, (q_t)0,
                 CMp{cexpmp(zm1).re - 1, cexpmp(zm1).im});
           }
 
@@ -1206,8 +1943,8 @@ int main(int argc, char **argv) {
                                          clogmp(zm1).im / mpfr::log(mp_t(2))});
             MP_STMT(CMp clog10_oracle = {clogmp(zm1).re / mpfr::log(mp_t(10)),
                                          clogmp(zm1).im / mpfr::log(mp_t(10))});
-            CHK("clog2",  ::clog2dd(zd1),  lg2,  mag, (q_t)0, clog2_oracle);
-            CHK("clog10", ::clog10dd(zd1), lg10, mag, (q_t)0, clog10_oracle);
+            CHK("clog2",  clog2dd(zd1),  lg2,  mag, (q_t)0, clog2_oracle);
+            CHK("clog10", clog10dd(zd1), lg10, mag, (q_t)0, clog10_oracle);
           }
 
           // clog1p: oracle = clogq(1 + z). Gate |1+z| to avoid oracle
@@ -1216,14 +1953,14 @@ int main(int argc, char **argv) {
             __complex128 one_c; __real__ one_c = (q_t)1; __imag__ one_c = (q_t)0;
             __complex128 one_plus_z = one_c + zq1;
             CHK_IF(cabsq(one_plus_z) > (q_t)1e-5q,
-                   "clog1p", ::clog1pdd(zd1), clogq(one_plus_z), mag, (q_t)0,
+                   "clog1p", clog1pdd(zd1), clogq(one_plus_z), mag, (q_t)0,
                    clogmp({zm1.re + 1, zm1.im}));
           }
 
           // cpow: keep base and exponent modest — pow amplifies input
           // precision, so a wide exponent would swamp the tolerance.
           CHK_IF(mag1 > (q_t)1e-2q && mag1 < (q_t)1e2q && mag2 < (q_t)10,
-                 "cpow", ::cpowdd(zd1, zd2), cpowq(zq1, zq2), mag, (q_t)0,
+                 "cpow", cpowdd(zd1, zd2), cpowq(zq1, zq2), mag, (q_t)0,
                  cexpmp(cmulmp(zm2, clogmp(zm1))));
 
           // csinpi / ccospi: forward π-scaled complex trig. Same π
@@ -1233,9 +1970,9 @@ int main(int argc, char **argv) {
             __complex128 pi_c; __real__ pi_c = (q_t)M_PIq; __imag__ pi_c = (q_t)0;
             __complex128 pi_z = pi_c * zq1;
             MP_STMT(mp_t mpi = mpfr::const_pi(multifloats_test::kMpfrPrec));
-            CHK("csinpi", ::csinpidd(zd1), csinq(pi_z), mag, (q_t)0,
+            CHK("csinpi", csinpidd(zd1), csinq(pi_z), mag, (q_t)0,
                 csinmp({mpi * zm1.re, mpi * zm1.im}));
-            CHK("ccospi", ::ccospidd(zd1), ccosq(pi_z), mag, (q_t)0,
+            CHK("ccospi", ccospidd(zd1), ccosq(pi_z), mag, (q_t)0,
                 ccosmp({mpi * zm1.re, mpi * zm1.im}));
           }
 
@@ -1243,13 +1980,13 @@ int main(int argc, char **argv) {
           // from a plain copy happens on infinite inputs (which the
           // narrow generator doesn't produce). Still worth testing to
           // pin the finite path.
-          CHK("cproj", ::cprojdd(zd1), cprojq(zq1), mag, (q_t)0, zm1);
+          CHK("cproj", cprojdd(zd1), cprojq(zq1), mag, (q_t)0, zm1);
 
           // carg: complex → real scalar phase. Near ±π on the branch cut
           // (negative real axis) DD and qp agree as long as imag-limbs
           // sign matches, which they do for DD-representable inputs.
           CHK("carg",
-              mf::float64x2(::cargdd(zd1)), cargq(zq1), mag, (q_t)0,
+              mf::float64x2(cargdd(zd1)), cargq(zq1), mag, (q_t)0,
               cargmp(zm1));
 
           CHK_C1(sin);
@@ -1273,6 +2010,17 @@ int main(int argc, char **argv) {
         }
       }
     }
+
+#ifdef USE_MPFR
+    // Main-loop array fuzz uses the main rng (baseline-equivalent).
+    if (i % kArrayInterval == 0) fuzz_arrays(rng);
+    // New matmul_mm/vm coverage uses an independent rng so its presence
+    // doesn't perturb the scalar fuzz input distribution.
+    if (i % kArrayInterval == 0) {
+      static Rng extra_rng(0xa110ca7eULL);
+      fuzz_matmul_mm_vm_only(extra_rng);
+    }
+#endif
 
     if (i % 100000 == 0) {
       std::printf("  ... completed %ld iterations (failures so far: %ld)\n", i,

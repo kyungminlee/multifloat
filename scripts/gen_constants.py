@@ -260,6 +260,9 @@ def collect_all():
     scalar_td('log2_e',    1 / log(mpf(2)),        'log2(e)')
     scalar('ln_2',         log(mpf(2)),            'ln(2)')
     scalar('log10_2',      log10(mpf(2)),          'log10(2)')
+    scalar_td('log2_10',   log(mpf(10)) / log(mpf(2)), 'log2(10) = 1/log10(2) — for exp10')
+    scalar('ln_10',        log(mpf(10)),           'ln(10) — for exp10')
+    scalar('inv_ln10',     mpf(1) / log(mpf(10)),  '1/ln(10) = log10(e) — for log10p1')
     scalar('inv_pi',       1 / pi,                 '1/pi')
     scalar_td('pi_dd',     pi,                     'pi')
     scalar('half_log_2pi', log(2 * pi) / 2,        '(1/2)*log(2*pi)')
@@ -850,7 +853,7 @@ def collect_all():
             'in-house Taylor',
             'sinh / asinh / atanh Taylor series for small |x|')
     # --- hyperbolic ---
-    array('sinh_taylor', gen_sinh_taylor(9),
+    array('sinh_taylor', gen_sinh_taylor(13),
           'sinh(x)/x Taylor: c[k] = 1/(2k+1)!')
     array('asinh_taylor', gen_asinh_taylor(15),
           'asinh(x)/x Taylor: c[k] = (-1)^k(2k)!/(4^k(k!)^2(2k+1))')

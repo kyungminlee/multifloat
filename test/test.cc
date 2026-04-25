@@ -19,6 +19,8 @@
 #include <vector>
 
 namespace mf = multifloats;
+using multifloats::float64x2;
+using multifloats::complex64x2;
 using multifloats_test::q_t;
 using multifloats_test::to_q;
 using multifloats_test::from_q;
@@ -79,17 +81,17 @@ static void check_q(char const *op, mf::float64x2 const &got, q_t expected, doub
     ++g_failures;
     std::fprintf(stderr, "FAIL [%s] rel_err=%g > tol=%g\n", op, rel, tol);
     if (a) {
-      std::fprintf(stderr, "  a        = (%a, %a)\n", a->_limbs[0],
-                   a->_limbs[1]);
+      std::fprintf(stderr, "  a        = (%a, %a)\n", a->limbs[0],
+                   a->limbs[1]);
     }
     if (b) {
-      std::fprintf(stderr, "  b        = (%a, %a)\n", b->_limbs[0],
-                   b->_limbs[1]);
+      std::fprintf(stderr, "  b        = (%a, %a)\n", b->limbs[0],
+                   b->limbs[1]);
     }
     std::fprintf(stderr, "  expected = %s\n", qstr(expected));
     std::fprintf(stderr, "  got      = %s\n", qstr(got_q));
-    std::fprintf(stderr, "  got_limbs= (%a, %a)\n", got._limbs[0],
-                 got._limbs[1]);
+    std::fprintf(stderr, "  gotlimbs= (%a, %a)\n", got.limbs[0],
+                 got.limbs[1]);
   }
 }
 
@@ -155,18 +157,18 @@ static std::vector<mf::float64x2> sample_inputs() {
 
 static void test_construction_and_conversion() {
   mf::float64x2 z;
-  REQUIRE(z._limbs[0] == 0.0);
-  REQUIRE(z._limbs[1] == 0.0);
+  REQUIRE(z.limbs[0] == 0.0);
+  REQUIRE(z.limbs[1] == 0.0);
 
   mf::float64x2 one(1.0);
-  REQUIRE(one._limbs[0] == 1.0);
-  REQUIRE(one._limbs[1] == 0.0);
+  REQUIRE(one.limbs[0] == 1.0);
+  REQUIRE(one.limbs[1] == 0.0);
   REQUIRE(static_cast<double>(one) == 1.0);
   REQUIRE(to_q(one) == (q_t)1);
 
   mf::float64x2 negz(-0.0);
   REQUIRE(static_cast<double>(negz) == 0.0);
-  REQUIRE(std::signbit(negz._limbs[0]));
+  REQUIRE(std::signbit(negz.limbs[0]));
 }
 
 static void test_equality_and_ordering() {
@@ -242,7 +244,7 @@ static void test_division(Stats &stats) {
   auto inputs = sample_inputs();
   for (mf::float64x2 const &a : inputs) {
     for (mf::float64x2 const &b : inputs) {
-      if (b._limbs[0] == 0.0) {
+      if (b.limbs[0] == 0.0) {
         continue;
       }
       q_t expected = to_q(a) / to_q(b);
@@ -266,14 +268,82 @@ static void test_bessel_jn_miller_precision(Stats &stats) {
       {10, 1.0}, {15, 2.0}, {20, 1.0}, {25, 5.0}, {40, 10.0},
   };
   for (Case c : cases) {
-    float64x2_t xdd = {c.x, 0.0};
-    float64x2_t got = jndd(c.n, xdd);
+    float64x2 xdd = {c.x, 0.0};
+    float64x2 got = jndd(c.n, xdd);
     mf::float64x2 g;
-    g._limbs[0] = got.hi;
-    g._limbs[1] = got.lo;
+    g.limbs[0] = got.limbs[0];
+    g.limbs[1] = got.limbs[1];
     q_t expected = jnq(c.n, (q_t)c.x);
     // 2e-31 ≈ 2^-102, a few ulps of DD.
     check_q("bessel_jn_miller", g, expected, 2e-31, stats);
+  }
+}
+
+// Spot-test J0/J1/Y0/Y1 just to either side of their leading roots. Random
+// fuzz almost never lands within ulp-distance of these, but they are the
+// regions where catastrophic cancellation is most punishing — the Hankel
+// asymptotic involves cos/sin of (x − π/4) that hit zero at the roots,
+// and the J/Y mix relies on those being computed accurately. A relative
+// tolerance is appropriate even where the value is small, because the
+// expected magnitude is what we're measuring against. Tolerance scales
+// the dp_tol by 1e-15 because the asymptotic uses sin/cos at large args.
+static void test_bessel_near_roots(Stats &stats) {
+  struct Case { char const *fn; double x; q_t (*ref)(q_t); };
+  // Roots from DLMF 10.21:
+  //   j0 zeros: 2.4048255576957727686..., 5.5200781102863106496..., 8.6537279129110122170...
+  //   j1 zeros: 3.8317059702075123156..., 7.0155866698156187535..., 10.1734681350627079834...
+  //   y0 zeros: 0.8935769662791675215..., 3.9576784193148578684..., 7.0860510603017726976...
+  //   y1 zeros: 2.1971413260310170351..., 5.4296810407941351327..., 8.5960058683311689265...
+  // Test slightly off-root (±1e-6) so the value is small but not zero.
+  double const dx = 1e-6;
+  // Lambda wrappers because the libm-flavored Bessel functions take int + q_t
+  // and we want a uniform `q_t (*)(q_t)` signature for the table.
+  auto bj0 = [](q_t x) { return j0q(x); };
+  auto bj1 = [](q_t x) { return j1q(x); };
+  auto by0 = [](q_t x) { return y0q(x); };
+  auto by1 = [](q_t x) { return y1q(x); };
+  Case const cases[] = {
+      {"bj0_near_root", 2.4048255576957727686 + dx, bj0},
+      {"bj0_near_root", 2.4048255576957727686 - dx, bj0},
+      {"bj0_near_root", 5.5200781102863106496 + dx, bj0},
+      {"bj1_near_root", 3.8317059702075123156 + dx, bj1},
+      {"bj1_near_root", 7.0155866698156187535 - dx, bj1},
+      {"by0_near_root", 0.8935769662791675215 + dx, by0},
+      {"by0_near_root", 3.9576784193148578684 - dx, by0},
+      {"by1_near_root", 2.1971413260310170351 + dx, by1},
+  };
+  for (Case const &c : cases) {
+    mf::float64x2 xdd(c.x);
+    q_t expected = c.ref((q_t)c.x);
+    if (std::strcmp(c.fn, "bj0_near_root") == 0) {
+      mf::float64x2 g(j0dd(static_cast<float64x2>(xdd)));
+      // Relative tolerance is loose because the value at root + 1e-6 is
+      // tiny (~5e-7); 1 DD ulp of magnitude 1 reads as ~5e-26 of magnitude
+      // 5e-7. Absolute error stays ~0.1 DD ulp here. Set tol = 1e-25 to
+      // catch a >2× regression while accepting near-root cancellation.
+      check_q(c.fn, g, expected, 1e-25, stats);
+    } else if (std::strcmp(c.fn, "bj1_near_root") == 0) {
+      mf::float64x2 g(j1dd(static_cast<float64x2>(xdd)));
+      // Relative tolerance is loose because the value at root + 1e-6 is
+      // tiny (~5e-7); 1 DD ulp of magnitude 1 reads as ~5e-26 of magnitude
+      // 5e-7. Absolute error stays ~0.1 DD ulp here. Set tol = 1e-25 to
+      // catch a >2× regression while accepting near-root cancellation.
+      check_q(c.fn, g, expected, 1e-25, stats);
+    } else if (std::strcmp(c.fn, "by0_near_root") == 0) {
+      mf::float64x2 g(y0dd(static_cast<float64x2>(xdd)));
+      // Relative tolerance is loose because the value at root + 1e-6 is
+      // tiny (~5e-7); 1 DD ulp of magnitude 1 reads as ~5e-26 of magnitude
+      // 5e-7. Absolute error stays ~0.1 DD ulp here. Set tol = 1e-25 to
+      // catch a >2× regression while accepting near-root cancellation.
+      check_q(c.fn, g, expected, 1e-25, stats);
+    } else {
+      mf::float64x2 g(y1dd(static_cast<float64x2>(xdd)));
+      // Relative tolerance is loose because the value at root + 1e-6 is
+      // tiny (~5e-7); 1 DD ulp of magnitude 1 reads as ~5e-26 of magnitude
+      // 5e-7. Absolute error stays ~0.1 DD ulp here. Set tol = 1e-25 to
+      // catch a >2× regression while accepting near-root cancellation.
+      check_q(c.fn, g, expected, 1e-25, stats);
+    }
   }
 }
 
@@ -283,30 +353,27 @@ static void test_bessel_jn_miller_precision(Stats &stats) {
 // change (the audit's false-positive finding) doesn't silently violate C99.
 static void test_csqrt_zero_branch() {
   auto make_z = [](double rh, double rl, double ih, double il) {
-    complex64x2_t z;
-    z.re.hi = rh; z.re.lo = rl;
-    z.im.hi = ih; z.im.lo = il;
-    return z;
+    return complex64x2{float64x2{rh, rl}, float64x2{ih, il}};
   };
   double const pz = +0.0, nz = -0.0;
 
-  complex64x2_t r;
+  complex64x2 r;
   // csqrt(+0 + 0i) = +0 + 0i.
   r = csqrtdd(make_z(pz, 0.0, pz, 0.0));
-  REQUIRE(!std::signbit(r.re.hi));
-  REQUIRE(!std::signbit(r.im.hi));
+  REQUIRE(!std::signbit(r.re.limbs[0]));
+  REQUIRE(!std::signbit(r.im.limbs[0]));
   // csqrt(-0 + 0i) = +0 + 0i (NOT -0 + 0i).
   r = csqrtdd(make_z(nz, 0.0, pz, 0.0));
-  REQUIRE(!std::signbit(r.re.hi));
-  REQUIRE(!std::signbit(r.im.hi));
+  REQUIRE(!std::signbit(r.re.limbs[0]));
+  REQUIRE(!std::signbit(r.im.limbs[0]));
   // csqrt(-0 - 0i) = +0 - 0i (conjugate symmetry).
   r = csqrtdd(make_z(nz, 0.0, nz, 0.0));
-  REQUIRE(!std::signbit(r.re.hi));
-  REQUIRE(std::signbit(r.im.hi));
+  REQUIRE(!std::signbit(r.re.limbs[0]));
+  REQUIRE(std::signbit(r.im.limbs[0]));
   // csqrt(+0 - 0i) = +0 - 0i.
   r = csqrtdd(make_z(pz, 0.0, nz, 0.0));
-  REQUIRE(!std::signbit(r.re.hi));
-  REQUIRE(std::signbit(r.im.hi));
+  REQUIRE(!std::signbit(r.re.limbs[0]));
+  REQUIRE(std::signbit(r.im.limbs[0]));
 }
 
 // atan2 on zero-hi DDs must consult lo for the sign. If y = (+0, -subnormal)
@@ -316,8 +383,8 @@ static void test_csqrt_zero_branch() {
 static void test_atan2_signed_zero() {
   auto make_dd = [](double hi, double lo) {
     mf::float64x2 r;
-    r._limbs[0] = hi;
-    r._limbs[1] = lo;
+    r.limbs[0] = hi;
+    r.limbs[1] = lo;
     return r;
   };
   double const pos_sub = 1e-320;
@@ -328,11 +395,11 @@ static void test_atan2_signed_zero() {
   mf::float64x2 x_pos = make_dd(0.0, pos_sub);
 
   // y<0, x>0 → answer in (−π/2, 0), specifically ≈ −π/4 for equal magnitudes.
-  REQUIRE(mf::atan2(y_neg, x_pos)._limbs[0] < 0.0);
+  REQUIRE(mf::atan2(y_neg, x_pos).limbs[0] < 0.0);
   // y>0, x<0 → answer in (π/2, π), specifically ≈ 3π/4.
-  REQUIRE(mf::atan2(y_pos, x_neg)._limbs[0] > 1.5);
+  REQUIRE(mf::atan2(y_pos, x_neg).limbs[0] > 1.5);
   // y<0, x<0 → answer in (−π, −π/2), specifically ≈ −3π/4.
-  REQUIRE(mf::atan2(y_neg, x_neg)._limbs[0] < -1.5);
+  REQUIRE(mf::atan2(y_neg, x_neg).limbs[0] < -1.5);
 
   // Pure signed-zero quadrant — both limbs zero, sign carried by hi's
   // signbit. IEEE atan2(±0, ±0) returns ±0 or ±π at full precision.
@@ -342,10 +409,10 @@ static void test_atan2_signed_zero() {
   mf::float64x2 nz = make_dd(-0.0, 0.0);
   // atan2(+0, +0) = +0
   mf::float64x2 r_pp = mf::atan2(pz, pz);
-  REQUIRE(r_pp._limbs[0] == 0.0 && !std::signbit(r_pp._limbs[0]));
+  REQUIRE(r_pp.limbs[0] == 0.0 && !std::signbit(r_pp.limbs[0]));
   // atan2(-0, +0) = -0
   mf::float64x2 r_np = mf::atan2(nz, pz);
-  REQUIRE(r_np._limbs[0] == 0.0 && std::signbit(r_np._limbs[0]));
+  REQUIRE(r_np.limbs[0] == 0.0 && std::signbit(r_np.limbs[0]));
   // atan2(+0, -0) = +π at DD precision
   mf::float64x2 r_pn = mf::atan2(pz, nz);
   q_t pi_q = M_PIq;
@@ -363,7 +430,7 @@ static void test_io_to_string_and_stream() {
   // Signed zero, nan, inf: exact textual match.
   REQUIRE(mf::to_string(mf::float64x2(0.0)) == "0e+00");
   mf::float64x2 nz;
-  nz._limbs[0] = -0.0;
+  nz.limbs[0] = -0.0;
   REQUIRE(mf::to_string(nz) == "-0e+00");
   REQUIRE(mf::to_string(mf::float64x2(
               std::numeric_limits<double>::infinity())) == "inf");
@@ -376,8 +443,8 @@ static void test_io_to_string_and_stream() {
   // back via __float128 strtoflt128, and require the relative error to be
   // below 1e-31 (one DD ulp floor).
   mf::float64x2 pi;
-  pi._limbs[0] = 3.141592653589793;
-  pi._limbs[1] = 1.2246467991473532e-16;  // DD π
+  pi.limbs[0] = 3.141592653589793;
+  pi.limbs[1] = 1.2246467991473532e-16;  // DD π
   std::string s = mf::to_string(pi, 32);
   q_t parsed = strtoflt128(s.c_str(), nullptr);
   q_t pi_q = to_q(pi);
@@ -412,8 +479,8 @@ static void test_io_to_string_and_stream() {
 
   // Rounding at the boundary: 0.999999... with 3 digits → "1.00e+00".
   mf::float64x2 almost_one;
-  almost_one._limbs[0] = 0.9999999999999999;
-  almost_one._limbs[1] = 0.0;
+  almost_one.limbs[0] = 0.9999999999999999;
+  almost_one.limbs[1] = 0.0;
   std::string r = mf::to_string(almost_one, 3);
   REQUIRE(r == "1.00e+00");
 
@@ -492,7 +559,7 @@ static void test_log_root_edges(Stats &stats) {
   }
   // log1p(0) must be exactly 0.
   mf::float64x2 lp0 = mf::log1p(mf::float64x2(0.0));
-  REQUIRE(lp0._limbs[0] == 0.0 && lp0._limbs[1] == 0.0);
+  REQUIRE(lp0.limbs[0] == 0.0 && lp0.limbs[1] == 0.0);
 
   // expm1: small-|x| path (|x|<0.5 uses Taylor) must keep full DD.
   for (q_t v : tiny_vals) {
@@ -502,7 +569,7 @@ static void test_log_root_edges(Stats &stats) {
   }
   // expm1(0) must be exactly 0.
   mf::float64x2 em0 = mf::expm1(mf::float64x2(0.0));
-  REQUIRE(em0._limbs[0] == 0.0 && em0._limbs[1] == 0.0);
+  REQUIRE(em0.limbs[0] == 0.0 && em0.limbs[1] == 0.0);
   // expm1(1): |x|>=0.5 routes through `exp(x) - 1`, inheriting the
   // exp kernel's precision (~1e-30 worst case, not Taylor-full-DD).
   mf_q("expm1(1)", mf::expm1(mf::float64x2(1.0)), M_Eq - 1, (q_t)1e-29);
@@ -524,7 +591,61 @@ static void test_log_root_edges(Stats &stats) {
   }
   // Sign preservation and signed-zero propagation.
   mf::float64x2 cb_nz = mf::cbrt(mf::float64x2(-0.0));
-  REQUIRE(cb_nz._limbs[0] == 0.0);
+  REQUIRE(cb_nz.limbs[0] == 0.0);
+  REQUIRE(std::signbit(cb_nz.limbs[0]) == 1);  // cbrt(-0) = -0 per IEEE
+  // ±Inf must propagate cleanly (no NaN poisoning from the residual step).
+  double dinf = std::numeric_limits<double>::infinity();
+  mf::float64x2 cb_pinf = mf::cbrt(mf::float64x2(dinf));
+  REQUIRE(cb_pinf.limbs[0] == dinf);
+  mf::float64x2 cb_ninf = mf::cbrt(mf::float64x2(-dinf));
+  REQUIRE(cb_ninf.limbs[0] == -dinf);
+}
+
+// Annex G special-value checks for the complex transcendentals fixed in
+// the audit pass: cexp special values per G.6.3.1, and ctanh's overflow
+// guard for |Re(z)| ≳ 710 (matching ctan's existing guard).
+static void test_complex_annex_g_specials() {
+  using cq_t = __complex128;
+  using mf::float64x2;
+  double dinf = std::numeric_limits<double>::infinity();
+  double dnan = std::numeric_limits<double>::quiet_NaN();
+
+  // cexp(+inf + i·0) = +inf + i·0 (was +inf + i·NaN before fix).
+  {
+    auto r = std::exp(std::complex<float64x2>(float64x2(dinf), float64x2(0.0)));
+    REQUIRE(r.real().limbs[0] == dinf);
+    REQUIRE(r.imag().limbs[0] == 0.0);
+  }
+  // cexp(-inf + i·0) = +0 + i·0.
+  {
+    auto r = std::exp(std::complex<float64x2>(float64x2(-dinf), float64x2(0.0)));
+    REQUIRE(r.real().limbs[0] == 0.0);
+    REQUIRE(r.imag().limbs[0] == 0.0);
+  }
+  // cexp(NaN + i·0) = NaN + i·0.
+  {
+    auto r = std::exp(std::complex<float64x2>(float64x2(dnan), float64x2(0.0)));
+    REQUIRE(std::isnan(r.real().limbs[0]));
+    REQUIRE(r.imag().limbs[0] == 0.0);
+  }
+  // cexp(finite + i·inf) = NaN + i·NaN.
+  {
+    auto r = std::exp(std::complex<float64x2>(float64x2(1.0), float64x2(dinf)));
+    REQUIRE(std::isnan(r.real().limbs[0]));
+    REQUIRE(std::isnan(r.imag().limbs[0]));
+  }
+  // ctanh(+large + i·1) → finite (was NaN before fix). Limit is sign(Re).
+  {
+    auto r = std::tanh(std::complex<float64x2>(float64x2(800.0), float64x2(1.0)));
+    REQUIRE(std::isfinite(r.real().limbs[0]));
+    REQUIRE(r.real().limbs[0] == 1.0);
+    REQUIRE(std::isfinite(r.imag().limbs[0]));
+  }
+  // ctanh(-large + i·1) = -1 + 0i.
+  {
+    auto r = std::tanh(std::complex<float64x2>(float64x2(-800.0), float64x2(1.0)));
+    REQUIRE(r.real().limbs[0] == -1.0);
+  }
 }
 
 // C99 Annex G branch-cut behavior for complex log, sqrt, asin, acos on
@@ -546,15 +667,12 @@ static void test_complex_branch_cuts(Stats &stats) {
   // which collapses (-0, +0) → (+0, +0) and loses signed zero. Bypass
   // it by laying the dp limbs down directly via to_cmf_dp.
   auto to_cmf_dp = [](double re_hi, double im_hi) {
-    complex64x2_t z;
-    z.re.hi = re_hi; z.re.lo = 0.0;
-    z.im.hi = im_hi; z.im.lo = 0.0;
-    return z;
+    return complex64x2{float64x2{re_hi, 0.0}, float64x2{im_hi, 0.0}};
   };
-  auto check_c = [&stats](char const *name, complex64x2_t got, cq_t ref,
+  auto check_c = [&stats](char const *name, complex64x2 got, cq_t ref,
                           q_t tol) {
-    q_t got_re = (q_t)got.re.hi + (q_t)got.re.lo;
-    q_t got_im = (q_t)got.im.hi + (q_t)got.im.lo;
+    q_t got_re = (q_t)got.re.limbs[0] + (q_t)got.re.limbs[1];
+    q_t got_im = (q_t)got.im.limbs[0] + (q_t)got.im.limbs[1];
     q_t ref_re = crealq(ref);
     q_t ref_im = cimagq(ref);
     q_t mag = cabsq(ref); if (mag < 1) mag = 1;
@@ -589,26 +707,26 @@ static void test_complex_branch_cuts(Stats &stats) {
 
   // clog on the negative real axis: sign of imag input selects ±π.
   for (double x : {-1.0, -2.5, -1e-10, -1e10}) {
-    complex64x2_t zp = to_cmf_dp(x, pz);
-    complex64x2_t zn = to_cmf_dp(x, nz);
+    complex64x2 zp = to_cmf_dp(x, pz);
+    complex64x2 zn = to_cmf_dp(x, nz);
     cq_t ref_p = (cq_t)x; __imag__ ref_p = pz;
     cq_t ref_n = (cq_t)x; __imag__ ref_n = nz;
     check_c("clog(-x, +0)", clogdd(zp), clogq(ref_p), tol);
     check_c("clog(-x, -0)", clogdd(zn), clogq(ref_n), tol);
-    check_sign("clog(-x, +0) imag>0", clogdd(zp).im.hi, +1);
-    check_sign("clog(-x, -0) imag<0", clogdd(zn).im.hi, -1);
+    check_sign("clog(-x, +0) imag>0", clogdd(zp).im.limbs[0], +1);
+    check_sign("clog(-x, -0) imag<0", clogdd(zn).im.limbs[0], -1);
   }
 
   // csqrt on the negative real axis: imag takes the sign of imag input.
   for (double x : {-1.0, -4.0, -1e-10, -1e10}) {
-    complex64x2_t zp = to_cmf_dp(x, pz);
-    complex64x2_t zn = to_cmf_dp(x, nz);
+    complex64x2 zp = to_cmf_dp(x, pz);
+    complex64x2 zn = to_cmf_dp(x, nz);
     cq_t ref_p = (cq_t)x; __imag__ ref_p = pz;
     cq_t ref_n = (cq_t)x; __imag__ ref_n = nz;
     check_c("csqrt(-x, +0)", csqrtdd(zp), csqrtq(ref_p), tol);
     check_c("csqrt(-x, -0)", csqrtdd(zn), csqrtq(ref_n), tol);
-    check_sign("csqrt(-x, +0) imag>0", csqrtdd(zp).im.hi, +1);
-    check_sign("csqrt(-x, -0) imag<0", csqrtdd(zn).im.hi, -1);
+    check_sign("csqrt(-x, +0) imag>0", csqrtdd(zp).im.limbs[0], +1);
+    check_sign("csqrt(-x, -0) imag<0", csqrtdd(zn).im.limbs[0], -1);
   }
 
   // casin / cacos on the real axis with |Re z| > 1 have branch cuts at
@@ -617,8 +735,8 @@ static void test_complex_branch_cuts(Stats &stats) {
   //   casin(x − 0i) for x > 1 = π/2 − i·log(x+√(x²−1))
   //   cacos(z) = π/2 − casin(z), so imag sign is the OPPOSITE of input.
   for (double x : {2.0, 5.0, -2.0, -5.0}) {
-    complex64x2_t zp = to_cmf_dp(x, pz);
-    complex64x2_t zn = to_cmf_dp(x, nz);
+    complex64x2 zp = to_cmf_dp(x, pz);
+    complex64x2 zn = to_cmf_dp(x, nz);
     cq_t ref_p = (cq_t)x; __imag__ ref_p = pz;
     cq_t ref_n = (cq_t)x; __imag__ ref_n = nz;
     check_c("casin(|x|>1,+0)", casindd(zp), casinq(ref_p), (q_t)1e-28);
@@ -630,11 +748,11 @@ static void test_complex_branch_cuts(Stats &stats) {
   // catanh branch-point singularities at z = ±1 + 0i (C99 G.6.2.4).
   //   catanh(+1 + 0i) = +∞ + 0i
   //   catanh(−1 + 0i) = −∞ + 0i
-  complex64x2_t r_p = catanhdd(to_cmf_dp(+1.0, pz));
-  complex64x2_t r_n = catanhdd(to_cmf_dp(-1.0, pz));
-  REQUIRE(std::isinf(r_p.re.hi) && r_p.re.hi > 0);
-  REQUIRE(std::isinf(r_n.re.hi) && r_n.re.hi < 0);
-  REQUIRE(r_p.im.hi == 0.0 && r_n.im.hi == 0.0);
+  complex64x2 r_p = catanhdd(to_cmf_dp(+1.0, pz));
+  complex64x2 r_n = catanhdd(to_cmf_dp(-1.0, pz));
+  REQUIRE(std::isinf(r_p.re.limbs[0]) && r_p.re.limbs[0] > 0);
+  REQUIRE(std::isinf(r_n.re.limbs[0]) && r_n.re.limbs[0] < 0);
+  REQUIRE(r_p.im.limbs[0] == 0.0 && r_n.im.limbs[0] == 0.0);
 }
 
 // Huge-argument trig range-reduction sanity. sin(2π·k) is 0 exactly for
@@ -701,15 +819,15 @@ static void test_huge_argument_trig(Stats &stats) {
   // π-scaled form keeps the multiply by π implicit, so integer inputs
   // must yield exact zero (sin) / ±1 (cos) regardless of magnitude.
   for (int k = 1; k <= 20; ++k) {
-    float64x2_t xk = {(double)k, 0.0};
-    float64x2_t sp = sinpidd(xk);
-    REQUIRE(sp.hi == 0.0 && sp.lo == 0.0);
+    float64x2 xk = {(double)k, 0.0};
+    float64x2 sp = sinpidd(xk);
+    REQUIRE(sp.limbs[0] == 0.0 && sp.limbs[1] == 0.0);
   }
   for (int k = -5; k <= 5; ++k) {
-    float64x2_t xk = {(double)k, 0.0};
-    float64x2_t cp = cospidd(xk);
-    REQUIRE(cp.hi == ((k & 1) ? -1.0 : 1.0));
-    REQUIRE(cp.lo == 0.0);
+    float64x2 xk = {(double)k, 0.0};
+    float64x2 cp = cospidd(xk);
+    REQUIRE(cp.limbs[0] == ((k & 1) ? -1.0 : 1.0));
+    REQUIRE(cp.limbs[1] == 0.0);
   }
 }
 
@@ -724,17 +842,17 @@ static void test_huge_argument_trig(Stats &stats) {
 static void test_complex_mul_cancellation() {
   mf::float64x2 const one(1.0), neg_one(-1.0);
   mf::float64x2 eps;
-  eps._limbs[0] = 1e-18;
-  eps._limbs[1] = 0.0;
+  eps.limbs[0] = 1e-18;
+  eps.limbs[1] = 0.0;
 
   std::complex<mf::float64x2> a(one, eps);
   std::complex<mf::float64x2> b(neg_one, eps);
   std::complex<mf::float64x2> prod = a * b;
 
   // Im(a·b) = 1·ε + ε·(−1) = 0 exactly. Both limbs must be +0.
-  REQUIRE(prod.imag()._limbs[0] == 0.0);
-  REQUIRE(prod.imag()._limbs[1] == 0.0);
-  REQUIRE(!std::signbit(prod.imag()._limbs[0]));
+  REQUIRE(prod.imag().limbs[0] == 0.0);
+  REQUIRE(prod.imag().limbs[1] == 0.0);
+  REQUIRE(!std::signbit(prod.imag().limbs[0]));
 
   // Re(a·b) = (1)(−1) − ε·ε = −1 − ε² (full DD precision).
   q_t ref_re = (q_t)(-1.0) - (q_t)1e-18 * (q_t)1e-18;
@@ -753,23 +871,23 @@ static void test_division_nonfinite() {
   mf::float64x2 pinf(inf);
 
   mf::float64x2 nan_result = zero / zero;
-  REQUIRE(std::isnan(nan_result._limbs[0]));
-  REQUIRE(std::isnan(nan_result._limbs[1]));
+  REQUIRE(std::isnan(nan_result.limbs[0]));
+  REQUIRE(std::isnan(nan_result.limbs[1]));
 
   mf::float64x2 inf_result = one / zero;
-  REQUIRE(std::isinf(inf_result._limbs[0]));
-  REQUIRE(std::isinf(inf_result._limbs[1]));
-  REQUIRE(inf_result._limbs[0] > 0 && inf_result._limbs[1] > 0);
+  REQUIRE(std::isinf(inf_result.limbs[0]));
+  REQUIRE(std::isinf(inf_result.limbs[1]));
+  REQUIRE(inf_result.limbs[0] > 0 && inf_result.limbs[1] > 0);
 
   mf::float64x2 neg_inf = (mf::float64x2(-1.0)) / zero;
-  REQUIRE(std::isinf(neg_inf._limbs[0]));
-  REQUIRE(std::isinf(neg_inf._limbs[1]));
-  REQUIRE(neg_inf._limbs[0] < 0 && neg_inf._limbs[1] < 0);
+  REQUIRE(std::isinf(neg_inf.limbs[0]));
+  REQUIRE(std::isinf(neg_inf.limbs[1]));
+  REQUIRE(neg_inf.limbs[0] < 0 && neg_inf.limbs[1] < 0);
 
   // Finite / Inf is legitimately 0; default-init of lo=0 is correct.
   mf::float64x2 zero_result = one / pinf;
-  REQUIRE(zero_result._limbs[0] == 0.0);
-  REQUIRE(zero_result._limbs[1] == 0.0);
+  REQUIRE(zero_result.limbs[0] == 0.0);
+  REQUIRE(zero_result.limbs[1] == 0.0);
 }
 
 // =============================================================================
@@ -799,8 +917,8 @@ static void test_copysign(Stats &stats) {
   for (mf::float64x2 const &x : inputs) {
     for (mf::float64x2 const &y : inputs) {
       q_t qx = to_q(x);
-      bool xs = std::signbit(x._limbs[0]);
-      bool ys = std::signbit(y._limbs[0]);
+      bool xs = std::signbit(x.limbs[0]);
+      bool ys = std::signbit(y.limbs[0]);
       q_t qexp = (xs == ys) ? qx : -qx;
       // Match the wrapper's exact bit-pattern semantics on the limb.
       check_q("copysign", mf::copysign(x, y), qexp, 0.0, stats);
@@ -834,14 +952,14 @@ static void test_classification() {
   // Non-canonical DDs where hi is (signed) zero: the value lives in lo,
   // so signbit/abs must consult lo rather than blindly trusting hi.
   mf::float64x2 tiny_neg;
-  tiny_neg._limbs[0] = 0.0;
-  tiny_neg._limbs[1] = -1e-300;
+  tiny_neg.limbs[0] = 0.0;
+  tiny_neg.limbs[1] = -1e-300;
   REQUIRE(mf::signbit(tiny_neg));
   REQUIRE(!mf::signbit(mf::abs(tiny_neg)));
 
   mf::float64x2 tiny_pos;
-  tiny_pos._limbs[0] = -0.0;
-  tiny_pos._limbs[1] = 1e-300;
+  tiny_pos.limbs[0] = -0.0;
+  tiny_pos.limbs[1] = 1e-300;
   REQUIRE(!mf::signbit(tiny_pos));
   REQUIRE(!mf::signbit(mf::abs(tiny_pos)));
 }
@@ -861,7 +979,7 @@ static void test_ldexp_scalbn_ilogb(Stats &stats) {
     }
     // mf::ilogb is documented as delegating to the leading limb (matches
     // Julia/Fortran exponent semantics).
-    REQUIRE(mf::ilogb(x) == std::ilogb(x._limbs[0]));
+    REQUIRE(mf::ilogb(x) == std::ilogb(x.limbs[0]));
   }
 }
 
@@ -914,8 +1032,8 @@ static void test_lerp(Stats &stats) {
 
   // NaN propagation.
   mf::float64x2 nan_val;
-  nan_val._limbs[0] = std::numeric_limits<double>::quiet_NaN();
-  nan_val._limbs[1] = 0.0;
+  nan_val.limbs[0] = std::numeric_limits<double>::quiet_NaN();
+  nan_val.limbs[1] = 0.0;
   REQUIRE(mf::isnan(mf::lerp(nan_val, mf::float64x2(1.0), mf::float64x2(0.5))));
   REQUIRE(mf::isnan(mf::lerp(mf::float64x2(0.0), nan_val, mf::float64x2(0.5))));
   REQUIRE(mf::isnan(mf::lerp(mf::float64x2(0.0), mf::float64x2(1.0), nan_val)));
@@ -1027,8 +1145,8 @@ static void test_nextafter_symmetry() {
 // / cprojq / conjq / crealq / cimagq.
 static void test_complex_accessors(Stats &stats) {
   using cq_t = __complex128;
-  auto to_cq = [](float64x2_t a) {
-    return (q_t)a.hi + (q_t)a.lo;
+  auto to_cq = [](float64x2 a) {
+    return (q_t)a.limbs[0] + (q_t)a.limbs[1];
   };
 
   // Diverse representative points: axes, all four quadrants, tiny and
@@ -1047,9 +1165,9 @@ static void test_complex_accessors(Stats &stats) {
   for (Case c : cases) {
     mf::float64x2 re = from_q(c.re);
     mf::float64x2 im = from_q(c.im);
-    complex64x2_t z = {
-        {re._limbs[0], re._limbs[1]},
-        {im._limbs[0], im._limbs[1]},
+    complex64x2 z = {
+        {re.limbs[0], re.limbs[1]},
+        {im.limbs[0], im.limbs[1]},
     };
 
     cq_t cq;
@@ -1058,33 +1176,33 @@ static void test_complex_accessors(Stats &stats) {
     // cabs: |z|
     {
       mf::float64x2 got;
-      float64x2_t r = cabsdd(z);
-      got._limbs[0] = r.hi;
-      got._limbs[1] = r.lo;
+      float64x2 r = cabsdd(z);
+      got.limbs[0] = r.limbs[0];
+      got.limbs[1] = r.limbs[1];
       check_q("cabs", got, cabsq(cq), 1e-30, stats);
     }
     // carg: atan2(im, re); libquadmath's cargq takes __complex128.
     {
       mf::float64x2 got;
-      float64x2_t r = cargdd(z);
-      got._limbs[0] = r.hi;
-      got._limbs[1] = r.lo;
+      float64x2 r = cargdd(z);
+      got.limbs[0] = r.limbs[0];
+      got.limbs[1] = r.limbs[1];
       check_q("carg", got, cargq(cq), 1e-30, stats);
     }
     // creal / cimag: exact field accessors — must be bitwise equal.
     {
-      float64x2_t rre = crealdd(z);
-      float64x2_t rim = cimagdd(z);
-      REQUIRE(rre.hi == z.re.hi && rre.lo == z.re.lo);
-      REQUIRE(rim.hi == z.im.hi && rim.lo == z.im.lo);
+      float64x2 rre = crealdd(z);
+      float64x2 rim = cimagdd(z);
+      REQUIRE(rre.limbs[0] == z.re.limbs[0] && rre.limbs[1] == z.re.limbs[1]);
+      REQUIRE(rim.limbs[0] == z.im.limbs[0] && rim.limbs[1] == z.im.limbs[1]);
     }
     // conj: (re, -im) bitwise (signs of both limbs flipped).
     {
-      complex64x2_t c2 = conjdd(z);
-      REQUIRE(c2.re.hi == z.re.hi && c2.re.lo == z.re.lo);
+      complex64x2 c2 = conjdd(z);
+      REQUIRE(c2.re.limbs[0] == z.re.limbs[0] && c2.re.limbs[1] == z.re.limbs[1]);
       // Signed zero: conj should flip +0 ↔ -0 on the imag part.
       REQUIRE(to_cq(c2.im) == -to_cq(z.im) ||
-              (z.im.hi == 0.0 && z.im.lo == 0.0));
+              (z.im.limbs[0] == 0.0 && z.im.limbs[1] == 0.0));
     }
   }
 
@@ -1107,20 +1225,20 @@ static void test_complex_accessors(Stats &stats) {
       {nan, nan, nan, nan},     // all-nan: identity (no inf).
   };
   for (InfCase ic : inf_cases) {
-    complex64x2_t z = {{ic.re, 0.0}, {ic.im, 0.0}};
-    complex64x2_t r = cprojdd(z);
+    complex64x2 z = {{ic.re, 0.0}, {ic.im, 0.0}};
+    complex64x2 r = cprojdd(z);
     if (std::isnan(ic.expect_re)) {
-      REQUIRE(std::isnan(r.re.hi));
+      REQUIRE(std::isnan(r.re.limbs[0]));
     } else {
-      REQUIRE(r.re.hi == ic.expect_re);
+      REQUIRE(r.re.limbs[0] == ic.expect_re);
       // Signed-zero on imag is the whole point of cproj: verify bit-exact.
       if (ic.expect_im == 0.0) {
-        REQUIRE(r.im.hi == 0.0);
-        REQUIRE(std::signbit(r.im.hi) == std::signbit(ic.expect_im));
+        REQUIRE(r.im.limbs[0] == 0.0);
+        REQUIRE(std::signbit(r.im.limbs[0]) == std::signbit(ic.expect_im));
       } else if (std::isnan(ic.expect_im)) {
-        REQUIRE(std::isnan(r.im.hi));
+        REQUIRE(std::isnan(r.im.limbs[0]));
       } else {
-        REQUIRE(r.im.hi == ic.expect_im);
+        REQUIRE(r.im.limbs[0] == ic.expect_im);
       }
     }
   }
@@ -1139,15 +1257,12 @@ static void test_complex_new_transcendentals(Stats &stats) {
   using cq_t = __complex128;
   auto to_cmf = [](q_t re, q_t im) {
     mf::float64x2 r = from_q(re), i = from_q(im);
-    complex64x2_t z;
-    z.re.hi = r._limbs[0]; z.re.lo = r._limbs[1];
-    z.im.hi = i._limbs[0]; z.im.lo = i._limbs[1];
-    return z;
+    return complex64x2{r, i};
   };
-  auto check_c = [&stats](char const *name, complex64x2_t got, cq_t ref,
+  auto check_c = [&stats](char const *name, complex64x2 got, cq_t ref,
                           q_t tol) {
-    q_t re_got = (q_t)got.re.hi + (q_t)got.re.lo;
-    q_t im_got = (q_t)got.im.hi + (q_t)got.im.lo;
+    q_t re_got = (q_t)got.re.limbs[0] + (q_t)got.re.limbs[1];
+    q_t im_got = (q_t)got.im.limbs[0] + (q_t)got.im.limbs[1];
     q_t ref_mag = cabsq(ref);
     q_t scale = ref_mag > 1 ? ref_mag : (q_t)1;
     q_t err = fabsq(re_got - crealq(ref)) + fabsq(im_got - cimagq(ref));
@@ -1178,19 +1293,19 @@ static void test_complex_new_transcendentals(Stats &stats) {
   };
 
   for (Case c : cases) {
-    complex64x2_t z = to_cmf(c.re, c.im);
+    complex64x2 z = to_cmf(c.re, c.im);
     cq_t zq;
     __real__ zq = c.re;
     __imag__ zq = c.im;
 
     // cexpm1(z) vs cexpq(z) - 1. Tolerance 1e-28 — two fused sincos plus
     // half-angle, so ~2-3× the cexp worst case.
-    complex64x2_t em1 = cexpm1dd(z);
+    complex64x2 em1 = cexpm1dd(z);
     cq_t ref_em1 = cexpq(zq) - 1;
     check_c("cexpm1", em1, ref_em1, (q_t)1e-28);
 
     // clog1p(z) vs clogq(1 + z). Tolerance 1e-29 — log1p + atan2.
-    complex64x2_t l1p = clog1pdd(z);
+    complex64x2 l1p = clog1pdd(z);
     cq_t one_plus_z = zq;
     __real__ one_plus_z = (q_t)1 + crealq(zq);
     cq_t ref_l1p = clogq(one_plus_z);
@@ -1202,7 +1317,7 @@ static void test_complex_new_transcendentals(Stats &stats) {
 
     // clog2(z) vs clogq(z) / ln 2. Skip z=0 (log(0) = -inf).
     if (c.re != 0 || c.im != 0) {
-      complex64x2_t l2 = clog2dd(z);
+      complex64x2 l2 = clog2dd(z);
       cq_t ref_l2 = clogq(zq) / logq((q_t)2);
       check_c("clog2", l2, ref_l2, (q_t)1e-29);
     }
@@ -1212,15 +1327,15 @@ static void test_complex_new_transcendentals(Stats &stats) {
   // csinpi(n+0i) must be exactly (0, 0) (parity check only — real sinpi
   // already hits this; complex path must not add drift from π·b·sinhcosh).
   for (int n = -3; n <= 3; ++n) {
-    complex64x2_t z = to_cmf((q_t)n, (q_t)0);
-    complex64x2_t s = csinpidd(z);
-    complex64x2_t c = ccospidd(z);
+    complex64x2 z = to_cmf((q_t)n, (q_t)0);
+    complex64x2 s = csinpidd(z);
+    complex64x2 c = ccospidd(z);
     // sin(n·π) = 0 exactly; cos(n·π) = (-1)^n.
-    REQUIRE(s.re.hi == 0.0 && s.re.lo == 0.0);
-    REQUIRE(s.im.hi == 0.0 && s.im.lo == 0.0);
-    REQUIRE(c.re.hi == ((n & 1) ? -1.0 : 1.0));
-    REQUIRE(c.re.lo == 0.0);
-    REQUIRE(c.im.hi == 0.0 && c.im.lo == 0.0);
+    REQUIRE(s.re.limbs[0] == 0.0 && s.re.limbs[1] == 0.0);
+    REQUIRE(s.im.limbs[0] == 0.0 && s.im.limbs[1] == 0.0);
+    REQUIRE(c.re.limbs[0] == ((n & 1) ? -1.0 : 1.0));
+    REQUIRE(c.re.limbs[1] == 0.0);
+    REQUIRE(c.im.limbs[0] == 0.0 && c.im.limbs[1] == 0.0);
   }
 
   // Non-integer z: csinpi / ccospi vs csinq(π·z) / ccosq(π·z). The ref
@@ -1237,12 +1352,12 @@ static void test_complex_new_transcendentals(Stats &stats) {
       { (q_t)-0.1,  (q_t)0.7     },
   };
   for (Case2 c : trig_cases) {
-    complex64x2_t z = to_cmf(c.re, c.im);
+    complex64x2 z = to_cmf(c.re, c.im);
     cq_t piz;
     __real__ piz = pi_q * c.re;
     __imag__ piz = pi_q * c.im;
-    complex64x2_t s = csinpidd(z);
-    complex64x2_t cc = ccospidd(z);
+    complex64x2 s = csinpidd(z);
+    complex64x2 cc = ccospidd(z);
     check_c("csinpi", s, csinq(piz), (q_t)1e-28);
     check_c("ccospi", cc, ccosq(piz), (q_t)1e-28);
   }
@@ -1352,7 +1467,7 @@ static void test_atan_cutover(Stats &stats) {
 // span stays below 113 bits. Normalized TDs from our producers span at
 // most ~159 bits, so for the carefully-chosen inputs below the sum fits.
 static q_t to_q_td(mf::detail::float64x3 const &t) {
-  return (q_t)t._limbs[0] + (q_t)t._limbs[1] + (q_t)t._limbs[2];
+  return (q_t)t.limbs[0] + (q_t)t.limbs[1] + (q_t)t.limbs[2];
 }
 
 // Build a TD that represents `v` to ~159 bits by extracting residues.
@@ -1431,14 +1546,14 @@ static void test_td_primitives(Stats &td_stats) {
     double h = 1.0, m = 0x1p-53, l = 0x1p-106;
     float64x3 r = renorm3(h, m, l);
     expect_exact("renorm3 sum",
-                 (q_t)r._limbs[0] + (q_t)r._limbs[1] + (q_t)r._limbs[2],
+                 (q_t)r.limbs[0] + (q_t)r.limbs[1] + (q_t)r.limbs[2],
                  (q_t)h + (q_t)m + (q_t)l);
     // Canonical ordering: |m| ≤ ulp(h), |l| ≤ ulp(m) (within 1 bit).
-    REQUIRE(std::abs(r._limbs[1]) <=
-            std::ldexp(std::abs(r._limbs[0]), -52));
-    REQUIRE(std::abs(r._limbs[2]) <=
-            std::ldexp(std::abs(r._limbs[1]), -52) ||
-            r._limbs[1] == 0.0);
+    REQUIRE(std::abs(r.limbs[1]) <=
+            std::ldexp(std::abs(r.limbs[0]), -52));
+    REQUIRE(std::abs(r.limbs[2]) <=
+            std::ldexp(std::abs(r.limbs[1]), -52) ||
+            r.limbs[1] == 0.0);
   }
 
   // td_add_double: sum preservation for a TD + exact double.
@@ -1447,9 +1562,9 @@ static void test_td_primitives(Stats &td_stats) {
     double d = 0.5;
     float64x3 r = td_add_double(td, d);
     expect_exact("td_add_double",
-                 (q_t)r._limbs[0] + (q_t)r._limbs[1] + (q_t)r._limbs[2],
-                 (q_t)td._limbs[0] + (q_t)td._limbs[1] +
-                     (q_t)td._limbs[2] + (q_t)d);
+                 (q_t)r.limbs[0] + (q_t)r.limbs[1] + (q_t)r.limbs[2],
+                 (q_t)td.limbs[0] + (q_t)td.limbs[1] +
+                     (q_t)td.limbs[2] + (q_t)d);
   }
   // td_sub_double: the cancellation case that motivates TD internals —
   //   cos(b)·e^a − 1 near the cancellation surface. Here we just verify
@@ -1459,7 +1574,7 @@ static void test_td_primitives(Stats &td_stats) {
     float64x3 td{1.0, 0x1p-80, 0.0};
     float64x3 r = td_sub_double(td, 1.0);
     expect_exact("td_sub_double cancel",
-                 (q_t)r._limbs[0] + (q_t)r._limbs[1] + (q_t)r._limbs[2],
+                 (q_t)r.limbs[0] + (q_t)r.limbs[1] + (q_t)r.limbs[2],
                  (q_t)0x1p-80);
   }
 
@@ -1469,10 +1584,10 @@ static void test_td_primitives(Stats &td_stats) {
     mf::float64x2 dd(0x1p-30, 0x1p-83);
     float64x3 r = td_add_dd(td, dd);
     expect_exact("td_add_dd",
-                 (q_t)r._limbs[0] + (q_t)r._limbs[1] + (q_t)r._limbs[2],
-                 (q_t)td._limbs[0] + (q_t)td._limbs[1] +
-                     (q_t)td._limbs[2] +
-                     (q_t)dd._limbs[0] + (q_t)dd._limbs[1]);
+                 (q_t)r.limbs[0] + (q_t)r.limbs[1] + (q_t)r.limbs[2],
+                 (q_t)td.limbs[0] + (q_t)td.limbs[1] +
+                     (q_t)td.limbs[2] +
+                     (q_t)dd.limbs[0] + (q_t)dd.limbs[1]);
   }
 
   // td_to_dd: round back to DD; the DD pair matches the TD sum to the
@@ -1533,7 +1648,7 @@ static void test_td_primitives(Stats &td_stats) {
     //   the residue, whereas a naive DD mul → (DD·DD − 1) would have
     //   lost it entirely.
     mf::float64x2 diff_dd = td_to_dd(diff);
-    REQUIRE(diff_dd._limbs[0] != 0.0 || diff_dd._limbs[1] != 0.0);
+    REQUIRE(diff_dd.limbs[0] != 0.0 || diff_dd.limbs[1] != 0.0);
   }
 
   // td_from_dd round-trip: DD → TD → DD must be identity on any
@@ -1574,7 +1689,7 @@ int main() {
   test_classification();
   test_nextafter_symmetry();
 
-  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn, lrp, cxa, bjn, cxn, lre, htr, cbr, tdp;
+  Stats add, sub, mul, div, una, abs_fmm, csgn, ldx, atn, lrp, cxa, bjn, bnr, cxn, lre, htr, cbr, tdp;
   test_unary(una);
   test_addition(add);
   test_subtraction(sub);
@@ -1595,7 +1710,9 @@ int main() {
   test_log_root_edges(lre);
   test_huge_argument_trig(htr);
   test_complex_branch_cuts(cbr);
+  test_complex_annex_g_specials();
   test_bessel_jn_miller_precision(bjn);
+  test_bessel_near_roots(bnr);
   test_td_primitives(tdp);
 
   std::printf("[multifloats_test] %d checks, %d failures\n", g_checks,
@@ -1618,6 +1735,7 @@ int main() {
   print_stats("huge arg trig", htr);
   print_stats("cx branch cuts", cbr);
   print_stats("bessel jn (Miller)", bjn);
+  print_stats("bessel near roots", bnr);
   print_stats("td primitives", tdp);
 
   // ----------------------------------------------------------------
