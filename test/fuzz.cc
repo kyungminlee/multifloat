@@ -321,7 +321,8 @@ static bool is_full_dd(char const *op) {
       "add_fd", "mul_df", "fmin", "fmax",
       "fmaximum", "fminimum", "fmaximum_num", "fminimum_num",
       "fmaximum_mag", "fminimum_mag", "fmaximum_mag_num", "fminimum_mag_num",
-      "exp10", "rsqrt", "roundeven", "llogb", "pown",
+      "exp10", "exp2m1", "exp10m1", "log2p1", "log10p1",
+      "rsqrt", "roundeven", "llogb", "pown",
       "copysign", "fdim",
       "hypot", "trunc", "round", "scalbn", "min3", "max3",
       "fmadd", "fma_cxx", "lerp",
@@ -1458,6 +1459,38 @@ int main(int argc, char **argv) {
         CHK_IF(q_isfinite(q1) && q_isfinite(exp10_ref),
                "exp10", mf::exp10(f1), exp10_ref, q1, (q_t)0,
                mpfr::pow(mpfr::mpreal(10), m1));
+        // C23 exp2m1 / exp10m1 — 2^x − 1, 10^x − 1. We can't use
+        // `exp2q(x) - 1` / `powq(10, x) - 1` as oracles because
+        // libquadmath's exp2q / powq lose ~1% relative precision when
+        // |x| ≲ 1e-30 (the result is correct to qp ulp absolutely, but
+        // reaches its small-x floor of ~1e-34 — the dominant Taylor term
+        // x·ln(base) below that floor is plain wrong). Use the
+        // cancellation-free identities `expm1q(x · ln(base))` instead;
+        // libquadmath's expm1q is precise across the small-x range.
+        q_t ln2_q  = (q_t)0.6931471805599453094172321214581765680755q;
+        q_t ln10_q = (q_t)2.3025850929940456840179914546843642076011q;
+        q_t exp2m1_ref  = expm1q(q1 * ln2_q);
+        q_t exp10m1_ref = expm1q(q1 * ln10_q);
+        CHK_IF(q_isfinite(q1) && q_isfinite(exp2q(q1)),
+               "exp2m1", mf::exp2m1(f1), exp2m1_ref, q1, (q_t)0,
+               mpfr::exp2(m1) - mp_t(1));
+        CHK_IF(q_isfinite(q1) && q_isfinite(exp10_ref),
+               "exp10m1", mf::exp10m1(f1), exp10m1_ref, q1, (q_t)0,
+               mpfr::pow(mpfr::mpreal(10), m1) - mp_t(1));
+        // log2p1 / log10p1: log2(1+x), log10(1+x). For |x| small, the
+        // identity `log1pq(x) · log2(e)` (resp. `… · log10(e)`) is the
+        // precision-safe form; libquadmath's log2q(1+x) and log10q(1+x)
+        // hit the same near-1 ulp floor that motivates log1p existing.
+        q_t log2_e_q  = (q_t)1.4426950408889634073599246810018921374267q;
+        q_t log10_e_q = (q_t)0.4342944819032518276511289189166050822944q;
+        q_t log2p1_ref  = log1pq(q1) * log2_e_q;
+        q_t log10p1_ref = log1pq(q1) * log10_e_q;
+        CHK_IF(q_isfinite(q1) && q1 > (q_t)-1,
+               "log2p1", mf::log2p1(f1), log2p1_ref, q1, (q_t)0,
+               mpfr::log2(mp_t(1) + m1));
+        CHK_IF(q_isfinite(q1) && q1 > (q_t)-1,
+               "log10p1", mf::log10p1(f1), log10p1_ref, q1, (q_t)0,
+               mpfr::log10(mp_t(1) + m1));
       }
 
       // Trig: keep magnitudes moderate.

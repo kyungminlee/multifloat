@@ -398,10 +398,14 @@ MULTIFLOATS_API float64x2 expdd(float64x2 a);
 MULTIFLOATS_API float64x2 exp2dd(float64x2 a);
 MULTIFLOATS_API float64x2 exp10dd(float64x2 a);
 MULTIFLOATS_API float64x2 expm1dd(float64x2 a);
+MULTIFLOATS_API float64x2 exp2m1dd(float64x2 a);
+MULTIFLOATS_API float64x2 exp10m1dd(float64x2 a);
 MULTIFLOATS_API float64x2 logdd(float64x2 a);
 MULTIFLOATS_API float64x2 log2dd(float64x2 a);
 MULTIFLOATS_API float64x2 log10dd(float64x2 a);
 MULTIFLOATS_API float64x2 log1pdd(float64x2 a);
+MULTIFLOATS_API float64x2 log2p1dd(float64x2 a);
+MULTIFLOATS_API float64x2 log10p1dd(float64x2 a);
 
 /* Trigonometric */
 MULTIFLOATS_API float64x2 sindd(float64x2 a);
@@ -1472,10 +1476,14 @@ float64x2 exp   (float64x2 const &x);
 float64x2 exp2  (float64x2 const &x);
 float64x2 exp10 (float64x2 const &x);
 float64x2 expm1 (float64x2 const &x);
+float64x2 exp2m1 (float64x2 const &x);
+float64x2 exp10m1(float64x2 const &x);
 float64x2 log   (float64x2 const &x);
 float64x2 log10 (float64x2 const &x);
 float64x2 log2  (float64x2 const &x);
 float64x2 log1p (float64x2 const &x);
+float64x2 log2p1 (float64x2 const &x);
+float64x2 log10p1(float64x2 const &x);
 float64x2 pow   (float64x2 const &x, float64x2 const &y);
 
 // Trigonometric

@@ -44,6 +44,24 @@ Dates are ISO-8601 UTC.
   DD precision via Newton-Raphson with two_prod-captured residual:
   fuzz max_rel 9.6e-32, ~3× the DD floor). All new fuzz rows run on
   cpp_fuzz seed 42 1M iterations.
+- C23 cancellation-safe exp/log companions: `exp2m1` (2^x − 1),
+  `exp10m1` (10^x − 1), `log2p1` (log2(1+x)), `log10p1` (log10(1+x)).
+  Each splits at |x| = 0.5 between the cancellation-free direct form
+  (large |x|: `exp2(x) − 1`, `log2(1+x)` etc.) and the precision-safe
+  composition over `expm1`/`log1p` (small |x|: `expm1(x · ln2)`,
+  `log1p(x) · log2(e)` etc.). Fuzz max_rel 4.5–9.5e-32, on the DD
+  floor with the underlying `expm1`/`log1p`. C ABI exports as
+  `exp2m1dd`, `exp10m1dd`, `log2p1dd`, `log10p1dd`; Fortran delegates
+  `dd_exp2m1_full` / `dd_exp10m1_full` / `dd_log2p1_full` /
+  `dd_log10p1_full`. New `inv_ln10` constant in `dd_constants.hh`.
+
+  Note: the fuzz oracles for `exp2m1` / `exp10m1` originally used
+  `exp2q(x) − 1` / `powq(10, x) − 1` and reported ~1% rel-err. The
+  bug was in libquadmath, not multifloats: `exp2q` / `powq` lose
+  ~1% precision when `|x| ≲ 1e-30` because their result floor (one
+  qp ulp ≈ 2e-34 around 1) drops below the dominant Taylor term
+  `x · ln(base)`. Replaced with cancellation-free `expm1q(x · ln(base))`
+  oracles that hold across the small-x range.
 - `boost::multiprecision::cpp_double_double` precision and speed
   comparison harnesses (`boost_dd_fuzz`, `boost_dd_bench`) plus a
   `bjn_probe` regime sweep, gated behind

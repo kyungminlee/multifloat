@@ -450,6 +450,57 @@ float64x2 log1p(float64x2 const &x) {
   return t * p;
 }
 
+// ---- C23 exp2m1 / exp10m1 / log2p1 / log10p1 -------------------------------
+// Composition wrappers over expm1 / log1p. Each picks up one DD-multiply
+// of error on top of the underlying kernel (the constant scaling is a
+// DD-precision ln2 / ln10 / log2_e / inv_ln10 multiply); for the
+// near-zero cancellation regime that motivates these C23 ops, the
+// underlying expm1 / log1p kernels already deliver full DD precision,
+// so the wrapper sits at ~2 ulp_dd worst case.
+
+float64x2 exp2m1(float64x2 const &x) {
+  if (!std::isfinite(x.limbs[0])) {
+    // expm1 inherits the right non-finite map; route through it.
+    return expm1(x * float64x2(ln_2_hi, ln_2_lo));
+  }
+  // For |x| ≥ 0.5, 2^x − 1 has no cancellation, so the direct form keeps
+  // full DD precision via exp2's TD-internal kernel. For |x| < 0.5 the
+  // subtraction would lose bits — defer to expm1(x·ln2) where the inner
+  // expm1 Taylor handles the cancellation natively. The DD multiply x·ln2
+  // is fine at small |x| (no amplification on the way out).
+  if (std::abs(x.limbs[0]) >= 0.5) {
+    return exp2(x) - float64x2(1.0);
+  }
+  return expm1(x * float64x2(ln_2_hi, ln_2_lo));
+}
+
+float64x2 exp10m1(float64x2 const &x) {
+  if (!std::isfinite(x.limbs[0])) {
+    return expm1(x * float64x2(ln_10_hi, ln_10_lo));
+  }
+  // Same split rationale as exp2m1: large |x| → cancellation-free direct
+  // form via exp10; small |x| → expm1(x·ln10) for bit-exact near-zero
+  // behavior.
+  if (std::abs(x.limbs[0]) >= 0.5) {
+    return exp10(x) - float64x2(1.0);
+  }
+  return expm1(x * float64x2(ln_10_hi, ln_10_lo));
+}
+
+float64x2 log2p1(float64x2 const &x) {
+  // log2(1+x) = log1p(x) / ln(2) = log1p(x) · log2(e).
+  // log2_e is stored as a TD constant (hi, lo, lo2) for the high-precision
+  // exp/log paths; we use the (hi, lo) DD pair here — the lo2 limb buys
+  // <1 ulp_dd at this kernel's already-cancellation-dominated regime.
+  return log1p(x) * float64x2(log2_e_hi, log2_e_lo);
+}
+
+float64x2 log10p1(float64x2 const &x) {
+  // log10(1+x) = log1p(x) / ln(10) = log1p(x) · (1/ln10). The DD
+  // constant inv_ln10 is generated from mpmath in dd_constants.hh.
+  return log1p(x) * float64x2(inv_ln10_hi, inv_ln10_lo);
+}
+
 // ---- pow -------------------------------------------------------------------
 // Composition x^y = 2^(y·log2(x)). A plain DD product y·log2(x) carries
 // relative error ~ulp_dd, which for large |y·log2(x)| becomes an absolute

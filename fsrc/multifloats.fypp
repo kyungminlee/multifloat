@@ -715,10 +715,14 @@ module multifloats
     ('dd_exp10_full',     'exp10dd'),  &
     ('dd_exp_full',       'expdd'),    &
     ('dd_expm1_full',     'expm1dd'),  &
+    ('dd_exp2m1_full',    'exp2m1dd'), &
+    ('dd_exp10m1_full',   'exp10m1dd'),&
     ('dd_log2_full',      'log2dd'),   &
     ('dd_log_full',       'logdd'),    &
     ('dd_log10_full',     'log10dd'),  &
     ('dd_log1p_full',     'log1pdd'),  &
+    ('dd_log2p1_full',    'log2p1dd'), &
+    ('dd_log10p1_full',   'log10p1dd'),&
     ('dd_sin_full',       'sindd'),    &
     ('dd_cos_full',       'cosdd'),    &
     ('dd_tan_full',       'tandd'),    &

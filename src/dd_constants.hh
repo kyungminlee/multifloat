@@ -51,6 +51,10 @@ inline constexpr double log2_10_lo2 = 0x1.fb699b2d8abfcp-107;
 inline constexpr double ln_10_hi = 0x1.26bb1bbb55516p+1;
 inline constexpr double ln_10_lo = -0x1.f48ad494ea3e9p-53;
 
+// 1/ln(10) = log10(e) — for log10p1
+inline constexpr double inv_ln10_hi = 0x1.bcb7b1526e50ep-2;
+inline constexpr double inv_ln10_lo = 0x1.95355baaafad3p-57;
+
 // 1/pi
 inline constexpr double inv_pi_hi = 0x1.45f306dc9c883p-2;
 inline constexpr double inv_pi_lo = -0x1.6b01ec5417056p-56;
