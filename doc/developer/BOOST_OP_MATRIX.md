@@ -34,7 +34,179 @@ Naming notes:
   component and `_c` cos component); the bench measures the joint
   call. Both shown.
 
-## Arithmetic
+## Giant table — every op, both sides, precision + speed
+
+All ops in one place, in category order. The two ratio columns make
+the side-by-side comparison readable at a glance:
+- **prec ratio** = boost max_rel ÷ mf max_rel — `>1` means multifloats
+  is more precise; `<1` means boost is. `1.00x` is a tie.
+- **speed ratio** = boost time ÷ mf time — `>1` means multifloats is
+  faster; `<1` means boost is.
+
+Empty rows from a category are still listed (with `—` cells) when the
+op is meaningful on at least one side, so the table doubles as a
+coverage map.
+
+| category | op | mf max_rel | boost max_rel | prec ratio | mf time [s] | boost time [s] | speed ratio |
+|---|---|---|---|---|---|---|---|
+| Arithmetic | add | 1.828e-32 | 2.733e-32 | 1.50x | 0.0012 | 0.0015 | 1.25x |
+| Arithmetic | sub | 1.834e-32 | 2.713e-32 | 1.48x | 0.0013 | 0.0014 | 1.08x |
+| Arithmetic | mul | 4.886e-32 | 5.682e-32 | 1.16x | 0.0013 | 0.0052 | 4.00x |
+| Arithmetic | div | 7.954e-32 | 7.569e-32 | 0.95x | 0.0017 | 0.0053 | 3.12x |
+| Arithmetic | sqrt | 3.465e-32 | 3.465e-32 | 1.00x | 0.0013 | 0.0021 | 1.62x |
+| Arithmetic | cbrt | 3.992e-31 | 7.050e-32 | 0.18x | — | 0.1474 | — |
+| Arithmetic | fma | 9.372e-31 | 2.382e-31 | 0.25x | 0.0019 | 0.0071 | 3.74x |
+| Arithmetic | abs | 0.000e+00 | 0.000e+00 | tie | 0.0030 | 0.0004 | 0.13x |
+| Arithmetic | neg | 0.000e+00 | 0.000e+00 | tie | 0.0028 | 0.0007 | 0.25x |
+| Arithmetic | add_fd | 1.231e-32 | 2.298e-32 | 1.87x | — | — | — |
+| Arithmetic | mul_df | 2.909e-32 | 2.992e-32 | 1.03x | — | — | — |
+| Min / max / sign / distance | fmin | 0.000e+00 | 0.000e+00 | tie | 0.0008 | 0.0006 | 0.75x |
+| Min / max / sign / distance | fmax | 0.000e+00 | 0.000e+00 | tie | 0.0008 | 0.0006 | 0.75x |
+| Min / max / sign / distance | fdim | 1.756e-32 | 2.443e-32 | 1.39x | 0.0011 | 0.0011 | 1.00x |
+| Min / max / sign / distance | copysign | 0.000e+00 | 0.000e+00 | tie | 0.0014 | 0.0007 | 0.50x |
+| Min / max / sign / distance | hypot | 4.989e-32 | 5.848e-32 | 1.17x | 0.0152 | 0.0223 | 1.47x |
+| Min / max / sign / distance | min3 | 0.000e+00 | — | — | — | — | — |
+| Min / max / sign / distance | max3 | 0.000e+00 | — | — | — | — | — |
+| Modulo / remainder | fmod | 1.564e-23 | 9.925e+09 | 6.3e+32x | 0.0063 | 0.0142 | 2.25x |
+| Modulo / remainder | modulo | 4.554e-23 | — | — | — | — | — |
+| Modulo / remainder | remainder | 1.123e-23 | — | — | — | — | — |
+| Modulo / remainder | remquo | 1.123e-23 | — | — | — | — | — |
+| Rounding | floor | 0.000e+00 | 0.000e+00 | tie | — | 0.0007 | — |
+| Rounding | ceil | 0.000e+00 | 0.000e+00 | tie | — | 0.0016 | — |
+| Rounding | trunc | 0.000e+00 | 0.000e+00 | tie | 0.0013 | 0.0016 | 1.23x |
+| Rounding | round | 0.000e+00 | 0.000e+00 | tie | 0.0017 | 0.0027 | 1.59x |
+| Rounding | nearbyint | 0.000e+00 | — | — | — | — | — |
+| Rounding | rint | 0.000e+00 | — | — | — | — | — |
+| Rounding | lround | 0.000e+00 | — | — | — | — | — |
+| Rounding | llround | 0.000e+00 | — | — | — | — | — |
+| Rounding | lrint | 0.000e+00 | — | — | — | — | — |
+| Rounding | llrint | 0.000e+00 | — | — | — | — | — |
+| Scaling / exponent | ldexp | 0.000e+00 | 0.000e+00 | tie | — | 0.0023 | — |
+| Scaling / exponent | scalbn | 0.000e+00 | 0.000e+00 | tie | — | 0.0023 | — |
+| Scaling / exponent | scalbln | 0.000e+00 | — | — | — | — | — |
+| Scaling / exponent | logb | 0.000e+00 | 0.000e+00 | tie | — | — | — |
+| Scaling / exponent | ilogb | 0.000e+00 | 0.000e+00 | tie | — | — | — |
+| Scaling / exponent | frexp.frac | 0.000e+00 | 0.000e+00 | tie | — | — | — |
+| Scaling / exponent | frexp.exp | 0.000e+00 | 0.000e+00 | tie | — | — | — |
+| Scaling / exponent | modf.frac | 0.000e+00 | — | — | — | — | — |
+| Scaling / exponent | modf.int | 0.000e+00 | — | — | — | — | — |
+| Linear / misc | lerp | 1.773e-31 | — | — | — | — | — |
+| exp / log | exp | 3.933e-32 | 7.569e-30 | 192.45x | 0.0046 | 0.0172 | 3.74x |
+| exp / log | exp2 | 2.982e-32 | 9.609e-30 | 322.23x | 0.0040 | 0.0416 | 10.40x |
+| exp / log | expm1 | 3.773e-32 | 7.569e-30 | 200.61x | 0.0054 | 0.0177 | 3.28x |
+| exp / log | log | 3.024e-32 | 4.201e-30 | 138.92x | 0.0039 | 0.0192 | 4.92x |
+| exp / log | log2 | 2.251e-32 | 4.203e-30 | 186.72x | 0.0037 | 0.0195 | 5.27x |
+| exp / log | log10 | 3.021e-32 | 4.137e-30 | 136.94x | 0.0037 | 0.0215 | 5.81x |
+| exp / log | log1p | 9.251e-32 | 5.871e-31 | 6.35x | 0.0039 | 0.0239 | 6.13x |
+| pow | pow | 2.320e-31 | 1.614e-29 | 69.57x | 0.0102 | 0.0402 | 3.94x |
+| pow | pow_md | 1.736e-31 | — | — | — | — | — |
+| pow | pow_dm | 2.320e-31 | — | — | — | — | — |
+| pow | pow_int | 2.202e-31 | — | — | — | — | — |
+| Trig (radian) | sin | 3.230e-32 | 1.873e-25 | 5.8e+06x | 0.0056 | 0.0353 | 6.30x |
+| Trig (radian) | cos | 5.268e-32 | 1.281e-24 | 2.4e+07x | 0.0059 | 0.0338 | 5.73x |
+| Trig (radian) | tan | 5.644e-32 | 1.281e-24 | 2.3e+07x | 0.0076 | 0.0717 | 9.43x |
+| Trig (radian) | sincos | — | — | — | 0.0082 | — | — |
+| Trig (radian) | sincos_s | 3.230e-32 | — | — | — | — | — |
+| Trig (radian) | sincos_c | 5.268e-32 | — | — | — | — | — |
+| Trig (radian) | asin | 1.657e-32 | 5.134e-32 | 3.10x | 0.0057 | 0.1362 | 23.89x |
+| Trig (radian) | acos | 1.441e-32 | 6.196e-32 | 4.30x | 0.0053 | 0.1337 | 25.23x |
+| Trig (radian) | atan | 2.391e-32 | 4.993e-32 | 2.09x | 0.0048 | 0.2103 | 43.81x |
+| Trig (radian) | atan2 | 3.151e-32 | 6.523e-32 | 2.07x | 0.0057 | 0.2183 | 38.30x |
+| Trig (π-scaled) | sinpi | 6.520e-27 | — | — | 0.0055 | — | — |
+| Trig (π-scaled) | cospi | 8.428e-27 | — | — | 0.0056 | — | — |
+| Trig (π-scaled) | tanpi | 8.434e-27 | — | — | 0.0079 | — | — |
+| Trig (π-scaled) | asinpi | 3.710e-32 | — | — | 0.0054 | — | — |
+| Trig (π-scaled) | acospi | 3.392e-32 | — | — | 0.0053 | — | — |
+| Trig (π-scaled) | atanpi | 3.629e-32 | — | — | 0.0048 | — | — |
+| Trig (π-scaled) | atan2pi | 3.698e-32 | — | — | 0.0055 | — | — |
+| Hyperbolic | sinh | 4.729e-32 | 9.155e-30 | 193.59x | 0.0089 | 0.0195 | 2.19x |
+| Hyperbolic | cosh | 2.509e-32 | 9.155e-30 | 364.89x | 0.0097 | 0.0186 | 1.92x |
+| Hyperbolic | tanh | 5.489e-32 | 3.146e-31 | 5.73x | 0.0068 | 0.0239 | 3.51x |
+| Hyperbolic | sinhcosh | — | — | — | 0.0108 | — | — |
+| Hyperbolic | sinhcosh_s | 4.729e-32 | — | — | — | — | — |
+| Hyperbolic | sinhcosh_c | 2.509e-32 | — | — | — | — | — |
+| Hyperbolic | asinh | 4.443e-32 | 6.794e-31 | 15.29x | 0.0052 | 0.0325 | 6.25x |
+| Hyperbolic | acosh | 2.845e-32 | 3.830e-31 | 13.46x | 0.0050 | 0.0228 | 4.56x |
+| Hyperbolic | atanh | 4.893e-32 | 2.596e-31 | 5.31x | 0.0052 | 0.1279 | 24.60x |
+| Special: erf / gamma | erf | 1.753e-32 | 2.076e-31 | 11.84x | 0.0015 | 0.0051 | 3.40x |
+| Special: erf / gamma | erfc | 3.248e-32 | 7.075e-31 | 21.78x | 0.0014 | 0.0051 | 3.64x |
+| Special: erf / gamma | erfcx | 8.077e-30 | — | — | 0.0010 | — | — |
+| Special: erf / gamma | tgamma | 4.262e-31 | 4.320e-29 | 101.36x | 0.0018 | 0.0111 | 6.17x |
+| Special: erf / gamma | lgamma | 3.634e-31 | 7.123e-30 | 19.60x | 0.0006 | 0.0081 | 13.50x |
+| Bessel | bj0 | 8.522e-29 | 9.366e-29 | 1.10x | 0.0014 | 0.0057 | 4.07x |
+| Bessel | bj1 | 3.685e-29 | 1.383e-28 | 3.75x | 0.0013 | 0.0057 | 4.38x |
+| Bessel | bjn | 5.055e-28 | 4.142e-29 | 0.08x | 0.0055 | 0.0057 | 1.04x |
+| Bessel | by0 | 6.922e-30 | 3.240e-28 | 46.81x | 0.0020 | 0.1042 | 52.10x |
+| Bessel | by1 | 2.001e-29 | 3.321e-29 | 1.66x | 0.0020 | 0.1017 | 50.85x |
+| Bessel | byn | 1.213e-29 | 2.587e-28 | 21.33x | 0.0039 | 0.1030 | 26.41x |
+| Bessel | jn_range | 5.055e-28 | — | — | — | — | — |
+| Bessel | yn_range | 2.001e-29 | — | — | — | — | — |
+| Complex (mf only) | cadd_re | 1.753e-32 | — | — | 0.0031 | — | — |
+| Complex (mf only) | cadd_im | 1.677e-32 | — | — | — | — | — |
+| Complex (mf only) | csub_re | 1.759e-32 | — | — | 0.0028 | — | — |
+| Complex (mf only) | csub_im | 1.738e-32 | — | — | — | — | — |
+| Complex (mf only) | cmul_re | 1.808e-31 | — | — | 0.0092 | — | — |
+| Complex (mf only) | cmul_im | 1.024e-31 | — | — | — | — | — |
+| Complex (mf only) | cdiv_re | 6.673e-31 | — | — | 0.0241 | — | — |
+| Complex (mf only) | cdiv_im | 1.783e-31 | — | — | — | — | — |
+| Complex (mf only) | cconjg_re | 0.000e+00 | — | — | 0.0014 | — | — |
+| Complex (mf only) | cconjg_im | 0.000e+00 | — | — | — | — | — |
+| Complex (mf only) | cproj_re | 0.000e+00 | — | — | 0.0015 | — | — |
+| Complex (mf only) | cproj_im | 0.000e+00 | — | — | — | — | — |
+| Complex (mf only) | csqrt_re | 6.526e-32 | — | — | 0.0036 | — | — |
+| Complex (mf only) | csqrt_im | 6.258e-32 | — | — | — | — | — |
+| Complex (mf only) | cexp_re | 7.364e-32 | — | — | 0.0130 | — | — |
+| Complex (mf only) | cexp_im | 5.676e-32 | — | — | — | — | — |
+| Complex (mf only) | cexpm1_re | 2.296e-28 | — | — | 0.0295 | — | — |
+| Complex (mf only) | cexpm1_im | 5.676e-32 | — | — | — | — | — |
+| Complex (mf only) | clog_re | 5.377e-32 | — | — | 0.0141 | — | — |
+| Complex (mf only) | clog_im | 3.986e-32 | — | — | — | — | — |
+| Complex (mf only) | clog1p_re | 8.215e-29 | — | — | 0.0107 | — | — |
+| Complex (mf only) | clog1p_im | 6.813e-32 | — | — | — | — | — |
+| Complex (mf only) | clog2_re | 4.901e-32 | — | — | 0.0146 | — | — |
+| Complex (mf only) | clog2_im | 4.271e-32 | — | — | — | — | — |
+| Complex (mf only) | clog10_re | 4.725e-32 | — | — | 0.0153 | — | — |
+| Complex (mf only) | clog10_im | 4.594e-32 | — | — | — | — | — |
+| Complex (mf only) | cpow_re | 9.869e-29 | — | — | 0.0029 | — | — |
+| Complex (mf only) | cpow_im | 1.889e-28 | — | — | — | — | — |
+| Complex (mf only) | csin_re | 5.629e-32 | — | — | 0.0190 | — | — |
+| Complex (mf only) | csin_im | 5.560e-32 | — | — | — | — | — |
+| Complex (mf only) | ccos_re | 5.797e-32 | — | — | 0.0192 | — | — |
+| Complex (mf only) | ccos_im | 6.050e-32 | — | — | — | — | — |
+| Complex (mf only) | ctan_re | 9.300e-32 | — | — | 0.0191 | — | — |
+| Complex (mf only) | ctan_im | 1.229e-31 | — | — | — | — | — |
+| Complex (mf only) | csinh_re | 5.854e-32 | — | — | 0.0186 | — | — |
+| Complex (mf only) | csinh_im | 4.927e-32 | — | — | — | — | — |
+| Complex (mf only) | ccosh_re | 6.271e-32 | — | — | 0.0185 | — | — |
+| Complex (mf only) | ccosh_im | 6.074e-32 | — | — | — | — | — |
+| Complex (mf only) | ctanh_re | 1.537e-31 | — | — | 0.0231 | — | — |
+| Complex (mf only) | ctanh_im | 9.307e-32 | — | — | — | — | — |
+| Complex (mf only) | casin_re | 7.222e-32 | — | — | 0.0032 | — | — |
+| Complex (mf only) | casin_im | 7.616e-32 | — | — | — | — | — |
+| Complex (mf only) | cacos_re | 8.068e-32 | — | — | 0.0023 | — | — |
+| Complex (mf only) | cacos_im | 2.235e-31 | — | — | — | — | — |
+| Complex (mf only) | catan_re | 5.089e-32 | — | — | 0.0013 | — | — |
+| Complex (mf only) | catan_im | 9.524e-32 | — | — | — | — | — |
+| Complex (mf only) | casinh_re | 8.544e-32 | — | — | 0.0021 | — | — |
+| Complex (mf only) | casinh_im | 8.529e-32 | — | — | — | — | — |
+| Complex (mf only) | cacosh_re | 2.235e-31 | — | — | 0.0023 | — | — |
+| Complex (mf only) | cacosh_im | 8.068e-32 | — | — | — | — | — |
+| Complex (mf only) | catanh_re | 9.968e-32 | — | — | 0.0013 | — | — |
+| Complex (mf only) | catanh_im | 5.535e-32 | — | — | — | — | — |
+| Complex (mf only) | csinpi_re | 5.828e-30 | — | — | 0.0279 | — | — |
+| Complex (mf only) | csinpi_im | 1.753e-30 | — | — | — | — | — |
+| Complex (mf only) | ccospi_re | 1.764e-30 | — | — | 0.0243 | — | — |
+| Complex (mf only) | ccospi_im | 5.806e-30 | — | — | — | — | — |
+| Complex (mf only) | cabs | 4.883e-32 | — | — | 0.0164 | — | — |
+| Complex (mf only) | carg | 3.986e-32 | — | — | 0.0598 | — | — |
+
+---
+
+## Categorized view
+
+Same data as the giant table, grouped per category for skimming.
+
+### Arithmetic
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -50,7 +222,7 @@ Naming notes:
 | add_fd | 1.231e-32 | 2.298e-32 | — | — |
 | mul_df | 2.909e-32 | 2.992e-32 | — | — |
 
-## Min / max / sign / distance
+### Min / max / sign / distance
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -62,7 +234,7 @@ Naming notes:
 | min3 | 0.000e+00 | — | — | — |
 | max3 | 0.000e+00 | — | — | — |
 
-## Modulo / remainder
+### Modulo / remainder
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -71,7 +243,7 @@ Naming notes:
 | remainder | 1.123e-23 | — | — | — |
 | remquo | 1.123e-23 | — | — | — |
 
-## Rounding
+### Rounding
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -86,7 +258,7 @@ Naming notes:
 | lrint | 0.000e+00 | — | — | — |
 | llrint | 0.000e+00 | — | — | — |
 
-## Scaling / exponent
+### Scaling / exponent
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -100,13 +272,13 @@ Naming notes:
 | modf.frac | 0.000e+00 | — | — | — |
 | modf.int | 0.000e+00 | — | — | — |
 
-## Linear / misc
+### Linear / misc
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
 | lerp | 1.773e-31 | — | — | — |
 
-## exp / log
+### exp / log
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -118,7 +290,7 @@ Naming notes:
 | log10 | 3.021e-32 | 4.137e-30 | 0.0037 | 0.0215 |
 | log1p | 9.251e-32 | 5.871e-31 | 0.0039 | 0.0239 |
 
-## pow
+### pow
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -127,7 +299,7 @@ Naming notes:
 | pow_dm | 2.320e-31 | — | — | — |
 | pow_int | 2.202e-31 | — | — | — |
 
-## Trig (radian)
+### Trig (radian)
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -142,7 +314,7 @@ Naming notes:
 | atan | 2.391e-32 | 4.993e-32 | 0.0048 | 0.2103 |
 | atan2 | 3.151e-32 | 6.523e-32 | 0.0057 | 0.2183 |
 
-## Trig (π-scaled)
+### Trig (π-scaled)
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -154,7 +326,7 @@ Naming notes:
 | atanpi | 3.629e-32 | — | 0.0048 | — |
 | atan2pi | 3.698e-32 | — | 0.0055 | — |
 
-## Hyperbolic
+### Hyperbolic
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -168,7 +340,7 @@ Naming notes:
 | acosh | 2.845e-32 | 3.830e-31 | 0.0050 | 0.0228 |
 | atanh | 4.893e-32 | 2.596e-31 | 0.0052 | 0.1279 |
 
-## Special: erf / gamma
+### Special: erf / gamma
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
@@ -178,7 +350,7 @@ Naming notes:
 | tgamma | 4.262e-31 | 4.320e-29 | 0.0018 | 0.0111 |
 | lgamma | 3.634e-31 | 7.123e-30 | 0.0006 | 0.0081 |
 
-## Bessel
+### Bessel
 
 | op | mf max_rel | boost max_rel | mf time [s] | boost time [s] |
 |---|---|---|---|---|
