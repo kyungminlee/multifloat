@@ -140,7 +140,54 @@ re-attempt without new evidence that overrides the recorded trade-off.
   `fortran_abi_sync` ctest already catches the class of drift a
   reviewer cares about.
 
-## 5. Pitfalls the audit uncovered
+## 5. Open work
+
+### Fuzz coverage gaps
+
+Public APIs in `include/multifloats/float64x2.h` that are *not* exercised
+by `test/fuzz.cc` (verified with the boost-comparison sweep — every op
+covered there but missing from cpp_fuzz is a coverage gap, not a
+deliberate omission). All have non-trivial definitions so a regression
+in any of them would currently slip past CI.
+
+- `cbrt(x)` — Karp/Markstein-style cube root, structurally similar to
+  `sqrt` but with one extra Newton step. The boost-compare harness
+  reports max_rel ~7e-32 against libquadmath, which suggests it's
+  working, but multifloats has no continuous regression gate.
+- `fma(a, b, c)` — the C++ name. The C-ABI symbol `fmadd` *is* fuzzed,
+  and the inline `multifloats::fma` overload routes through the same
+  kernel via a `static_cast<float64x2>` round-trip; a CHK call site
+  on the public name pins the dispatch instead of relying on the
+  identity holding by inspection.
+- `lerp(a, b, t)` — `a + t*(b - a)` with the C++20 monotonicity
+  guarantees. Minimum: a CHK against `mpfr::lerp` or hand-rolled
+  reference; ideally also a regression case at the `(a, b, 0)` and
+  `(a, b, 1)` exact endpoints (any drift here is a real bug).
+- `modulo(x, y)`, `remainder(x, y)`, `remquo(x, y, &q)` — IEEE-754
+  remainder family. Distinct from `fmod` in sign / round-half-even
+  semantics; the existing `fmod` CHK does not cover them.
+- `nextafter(x, y)`, `nexttoward(x, y)` — bit-level next-representable
+  step. Hard to fuzz against quadmath (different format), but the
+  invariants `nextafter(x, x) == x`, `nextafter(x, +inf) > x`, etc.
+  are testable as deterministic property checks.
+- `nan(tag)`, `fpclassify(x)` — bit-level classifiers. Property tests
+  against the stdlib equivalents are sufficient; max_rel doesn't
+  apply.
+
+The fuzz infrastructure already has `is_full_dd` entries for
+`fmadd`, `pow_int`, `min3`, `max3`, `modf.frac`, `modf.int`,
+`scalbln`, `scalbn`, `nearbyint`, `rint`, `lround`, `lrint` and they
+*are* covered by raw `CHK("...", ...)` call sites — only the
+public-API spelling check is missing.
+
+When closing this gap, follow the existing pattern in `test/fuzz.cc`:
+extend the `is_full_dd` list, add a `CHK(...)` site under the
+appropriate periodic guard (`i % 10 == 0` for cheap ops, `i % 100`
+for transcendentals), and gate the inputs at the same range as the
+boost harness already uses (`test/test_boost_dd.cc` is the
+reference for sensible per-op input ranges).
+
+## 6. Pitfalls the audit uncovered
 
 Traps that cost real time during the audit; they do not show up until
 you hit exactly the right input.
