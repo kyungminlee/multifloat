@@ -769,52 +769,52 @@ module multifloats
         end function
 #:endfor
 #:for func in C_DELEGATE_CX_UNARY_FUNCS
-        pure type(complex64x2) function c_dd_cdd_${func}$(a) bind(c, name='c${func}$dd')
+        pure type(complex64x2) function c_c${func}$dd(a) bind(c, name='c${func}$dd')
             import :: complex64x2; type(complex64x2), value, intent(in) :: a
         end function
 #:endfor
 #:for func in C_DELEGATE_CX_BINARY_FUNCS
-        pure type(complex64x2) function c_dd_cdd2_${func}$(a, b) bind(c, name='c${func}$dd')
+        pure type(complex64x2) function c_c${func}$dd(a, b) bind(c, name='c${func}$dd')
             import :: complex64x2; type(complex64x2), value, intent(in) :: a, b
         end function
 #:endfor
         ! Integer-exponent power: exponent comes in as a plain C int, so
         ! the delegate map shape (dd, dd)->dd doesn't fit — declare by hand.
-        pure type(float64x2) function c_dd_powi(a, n) bind(c, name='powidd')
+        pure type(float64x2) function c_powidd(a, n) bind(c, name='powidd')
             import :: float64x2, c_int
             type(float64x2), value, intent(in) :: a
             integer(c_int), value, intent(in) :: n
         end function
         ! Integer-order Bessel (recurrence in C++; seeded by j0dd/j1dd/y0dd/y1dd).
-        pure type(float64x2) function c_dd_jn(n, a) bind(c, name='jndd')
+        pure type(float64x2) function c_jndd(n, a) bind(c, name='jndd')
             import :: float64x2, c_int
             integer(c_int), value, intent(in) :: n
             type(float64x2), value, intent(in) :: a
         end function
-        pure type(float64x2) function c_dd_yn(n, a) bind(c, name='yndd')
+        pure type(float64x2) function c_yndd(n, a) bind(c, name='yndd')
             import :: float64x2, c_int
             integer(c_int), value, intent(in) :: n
             type(float64x2), value, intent(in) :: a
         end function
-        pure subroutine c_dd_jn_range(n1, n2, a, out) bind(c, name='jndd_range')
+        pure subroutine c_jndd_range(n1, n2, a, out) bind(c, name='jndd_range')
             import :: float64x2, c_int
             integer(c_int), value, intent(in) :: n1, n2
             type(float64x2), value, intent(in) :: a
             type(float64x2), intent(out) :: out(*)
         end subroutine
-        pure subroutine c_dd_yn_range(n1, n2, a, out) bind(c, name='yndd_range')
+        pure subroutine c_yndd_range(n1, n2, a, out) bind(c, name='yndd_range')
             import :: float64x2, c_int
             integer(c_int), value, intent(in) :: n1, n2
             type(float64x2), value, intent(in) :: a
             type(float64x2), intent(out) :: out(*)
         end subroutine
         ! Fused sin/cos and sinh/cosh: one range-reduction feeds both outputs.
-        pure subroutine c_dd_sincos(a, s, c) bind(c, name='sincosdd')
+        pure subroutine c_sincosdd(a, s, c) bind(c, name='sincosdd')
             import :: float64x2
             type(float64x2), value, intent(in) :: a
             type(float64x2), intent(out) :: s, c
         end subroutine
-        pure subroutine c_dd_sinhcosh(a, s, c) bind(c, name='sinhcoshdd')
+        pure subroutine c_sinhcoshdd(a, s, c) bind(c, name='sinhcoshdd')
             import :: float64x2
             type(float64x2), value, intent(in) :: a
             type(float64x2), intent(out) :: s, c
@@ -1605,7 +1605,7 @@ $:C_DELEGATE_BINARY(ffull, csym)
             type(complex64x2) :: a, r
             a%re = float64x2(x%re%limbs)
             a%im = float64x2(x%im%limbs)
-            r = c_dd_cdd_${func}$(a)
+            r = c_c${func}$dd(a)
             res%re%limbs = r%re%limbs
             res%im%limbs = r%im%limbs
         end block
@@ -1787,7 +1787,7 @@ $:dd_minmax_body(func, n)
         type(real64x2), intent(in) :: x
         type(real64x2) :: res
         type(float64x2) :: r
-        r = c_dd_jn(int(n, c_int), float64x2(x%limbs))
+        r = c_jndd(int(n, c_int), float64x2(x%limbs))
         res%limbs = r%limbs
     end function
 
@@ -1796,7 +1796,7 @@ $:dd_minmax_body(func, n)
         type(real64x2), intent(in) :: x
         type(real64x2) :: res
         type(float64x2) :: r
-        r = c_dd_yn(int(n, c_int), float64x2(x%limbs))
+        r = c_yndd(int(n, c_int), float64x2(x%limbs))
         res%limbs = r%limbs
     end function
 
@@ -1812,7 +1812,7 @@ $:dd_minmax_body(func, n)
         ! the yn_range shape — Jn forward recurrence is unstable for n > x,
         ! so the C side loops over jndd (Miller's algorithm) per output.
         allocate(buf(nsize))
-        call c_dd_jn_range(int(n1, c_int), int(n2, c_int), &
+        call c_jndd_range(int(n1, c_int), int(n2, c_int), &
                            float64x2(x%limbs), buf)
         do i = 1, nsize
             res(i)%limbs = buf(i)%limbs
@@ -1829,7 +1829,7 @@ $:dd_minmax_body(func, n)
         if (nsize == 0) return
         ! Delegate the single-sweep forward recurrence to C.
         allocate(buf(nsize))
-        call c_dd_yn_range(int(n1, c_int), int(n2, c_int), &
+        call c_yndd_range(int(n1, c_int), int(n2, c_int), &
                            float64x2(x%limbs), buf)
         do i = 1, nsize
             res(i)%limbs = buf(i)%limbs
@@ -2799,7 +2799,7 @@ $:dd_minmax_body(func, n)
         type(real64x2), intent(in) :: x
         type(real64x2), intent(out) :: s, c
         type(float64x2) :: ss, cc
-        call c_dd_sincos(float64x2(x%limbs), ss, cc)
+        call c_sincosdd(float64x2(x%limbs), ss, cc)
         s%limbs = ss%limbs
         c%limbs = cc%limbs
     end subroutine
@@ -2808,7 +2808,7 @@ $:dd_minmax_body(func, n)
         type(real64x2), intent(in) :: x
         type(real64x2), intent(out) :: s, c
         type(float64x2) :: ss, cc
-        call c_dd_sinhcosh(float64x2(x%limbs), ss, cc)
+        call c_sinhcoshdd(float64x2(x%limbs), ss, cc)
         s%limbs = ss%limbs
         c%limbs = cc%limbs
     end subroutine
@@ -2880,7 +2880,7 @@ $:dd_minmax_body(func, n)
             ka%im = float64x2(ca%im%limbs)
             kb%re = float64x2(cb%re%limbs)
             kb%im = float64x2(cb%im%limbs)
-            kr = c_dd_cdd2_${opname}$(ka, kb)
+            kr = c_c${opname}$dd(ka, kb)
             res%re%limbs = kr%re%limbs
             res%im%limbs = kr%im%limbs
         end block
@@ -3018,7 +3018,7 @@ $:cdd_arith_body(opname)
             type(real64x2) :: base
             type(float64x2) :: r
             base = a
-            r = c_dd_powi(float64x2(base%limbs), &
+            r = c_powidd(float64x2(base%limbs), &
                           int(b, c_int))
             res%limbs = r%limbs
         end block
